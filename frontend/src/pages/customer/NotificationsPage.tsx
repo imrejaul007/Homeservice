@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Bell,
@@ -16,15 +16,18 @@ import {
   BellRing,
   Mail,
   Smartphone,
+  Loader2,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import DigestPreferences from '../../components/notifications/DigestPreferences';
+import { Skeleton } from '../../components/common/SkeletonLoader';
 import { useAuthStore } from '../../stores/authStore';
 import { notificationApi, normalizeBackendNotificationType, type Notification } from '../../services/notificationApi';
 import { useSocketEvent } from '../../hooks/useSocket';
 import type { NotificationEvent } from '../../services/socket';
+import { toast } from 'react-hot-toast';
 import { cn } from '../../lib/utils';
 
 type TabType = 'notifications' | 'digest';
@@ -32,13 +35,17 @@ type TabType = 'notifications' | 'digest';
 const NotificationsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const isProvider = user?.role === 'provider';
+  const notificationsPath = isProvider ? '/provider/notifications' : '/customer/notifications';
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const initialTab = searchParams.get('tab') === 'digest' ? 'digest' : 'notifications';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+  const previousNotificationsRef = useRef<Notification[]>([]);
 
   const fetchNotifications = useCallback(async () => {
     setIsLoading(true);
@@ -57,7 +64,7 @@ const NotificationsPage: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated) {
-      navigate('/login', { state: { returnTo: '/customer/notifications' } });
+      navigate('/login', { state: { returnTo: notificationsPath } });
       return;
     }
     fetchNotifications();
@@ -86,42 +93,72 @@ const NotificationsPage: React.FC = () => {
   });
 
   const handleMarkAsRead = async (notificationId: string) => {
+    // Store previous state for rollback
+    previousNotificationsRef.current = notifications;
+    const previousUnreadCount = unreadCount;
+
+    // Optimistic update
+    setNotifications(prev =>
+      prev.map(n =>
+        n.id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
+      )
+    );
+    setUnreadCount(prev => Math.max(0, prev - 1));
+
     try {
       await notificationApi.markAsRead(notificationId);
-      setNotifications(prev =>
-        prev.map(n =>
-          n.id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
-        )
-      );
-      setUnreadCount(prev => Math.max(0, prev - 1));
+      toast.success('Notification marked as read');
     } catch (err: unknown) {
+      // Rollback on failure
+      setNotifications(previousNotificationsRef.current);
+      setUnreadCount(previousUnreadCount);
       const axiosErr = err as { response?: { data?: { message?: string } } };
-      setError(axiosErr.response?.data?.message || 'Failed to mark as read');
+      toast.error(axiosErr.response?.data?.message || 'Failed to mark as read. Please try again.');
     }
   };
 
   const handleMarkAllAsRead = async () => {
+    // Store previous state for rollback
+    const previousNotifications = [...notifications];
+    const previousUnreadCount = unreadCount;
+
+    // Optimistic update
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    setUnreadCount(0);
+
     try {
       await notificationApi.markAllAsRead();
-      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-      setUnreadCount(0);
+      toast.success('All notifications marked as read');
     } catch (err: unknown) {
+      // Rollback on failure
+      setNotifications(previousNotifications);
+      setUnreadCount(previousUnreadCount);
       const axiosErr = err as { response?: { data?: { message?: string } } };
-      setError(axiosErr.response?.data?.message || 'Failed to mark all as read');
+      toast.error(axiosErr.response?.data?.message || 'Failed to mark all as read. Please try again.');
     }
   };
 
   const handleDelete = async (notificationId: string) => {
+    // Store previous state for rollback
+    previousNotificationsRef.current = notifications;
+    const previousUnreadCount = unreadCount;
+    const deletedNotification = notifications.find(n => n.id === notificationId);
+
+    // Optimistic update
+    setNotifications(prev => prev.filter(n => n.id !== notificationId));
+    if (deletedNotification && !deletedNotification.isRead) {
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    }
+
     try {
       await notificationApi.deleteNotification(notificationId);
-      const deleted = notifications.find(n => n.id === notificationId);
-      setNotifications(prev => prev.filter(n => n.id !== notificationId));
-      if (deleted && !deleted.isRead) {
-        setUnreadCount(prev => Math.max(0, prev - 1));
-      }
+      toast.success('Notification deleted');
     } catch (err: unknown) {
+      // Rollback on failure
+      setNotifications(previousNotificationsRef.current);
+      setUnreadCount(previousUnreadCount);
       const axiosErr = err as { response?: { data?: { message?: string } } };
-      setError(axiosErr.response?.data?.message || 'Failed to delete notification');
+      toast.error(axiosErr.response?.data?.message || 'Failed to delete notification. Please try again.');
     }
   };
 
@@ -130,31 +167,79 @@ const NotificationsPage: React.FC = () => {
       handleMarkAsRead(notification.id);
     }
     const data = notification.data || {};
+
+    const actionUrl = data.actionUrl ?? data.url;
+    if (typeof actionUrl === 'string' && actionUrl.startsWith('/')) {
+      navigate(actionUrl);
+      return;
+    }
+
+    const roomId = data.roomId ?? data.chatRoomId;
+    if (roomId) {
+      navigate(isProvider ? '/provider/messages' : '/customer/messages', {
+        state: { roomId: String(roomId) },
+      });
+      return;
+    }
+
+    if (data.disputeId) {
+      navigate(
+        isProvider
+          ? '/provider/operations'
+          : `/customer/my-claims/${String(data.disputeId)}`
+      );
+      return;
+    }
+
     if (data.bookingId) {
-      navigate(`/customer/bookings/${data.bookingId}`);
+      navigate(isProvider ? `/provider/bookings/${data.bookingId}` : `/customer/bookings/${data.bookingId}`);
       return;
     }
     if (data.serviceId) {
-      navigate(`/services/${data.serviceId}`);
+      navigate(isProvider ? '/provider/services' : `/services/${data.serviceId}`);
       return;
     }
-    if (data.providerId) {
+    if (data.customerId && isProvider) {
+      navigate('/provider/messages', { state: { customerId: data.customerId as string } });
+      return;
+    }
+    if (data.providerId && !isProvider) {
       navigate(`/provider/${data.providerId}`);
+      return;
+    }
+    if (
+      notification.type === 'message' ||
+      notification.type === 'message_received' ||
+      (typeof notification.type === 'string' && notification.type.startsWith('message'))
+    ) {
+      navigate(isProvider ? '/provider/messages' : '/customer/messages', {
+        state: data.bookingId
+          ? {
+              bookingId: String(data.bookingId),
+              customerId: data.customerId ? String(data.customerId) : undefined,
+              providerId: data.providerId ? String(data.providerId) : undefined,
+            }
+          : data.providerId && !isProvider
+            ? { providerId: String(data.providerId) }
+            : data.customerId && isProvider
+              ? { customerId: String(data.customerId) }
+              : undefined,
+      });
       return;
     }
     if (
       notification.type === 'booking' ||
       (typeof notification.type === 'string' && notification.type.startsWith('booking_'))
     ) {
-      navigate('/customer/bookings');
+      navigate(isProvider ? '/provider/bookings' : '/customer/bookings');
       return;
     }
     if (notification.type === 'payment') {
-      navigate('/customer/payment-methods');
+      navigate(isProvider ? '/provider/earnings' : '/customer/payment-methods');
       return;
     }
     if (notification.type === 'review') {
-      navigate('/customer/reviews');
+      navigate(isProvider ? '/provider/reviews' : '/customer/reviews');
     }
   };
 
@@ -229,8 +314,45 @@ const NotificationsPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="w-10 h-10 border-2 border-nilin-coral border-t-transparent rounded-full animate-spin" />
+        <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <Breadcrumb />
+        </div>
+        <div className="flex-1">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {/* Header skeleton */}
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <Skeleton className="w-12 h-12 rounded-full" />
+                <div className="space-y-2">
+                  <Skeleton className="h-7 w-40" />
+                  <Skeleton className="h-4 w-24" />
+                </div>
+              </div>
+              <Skeleton className="h-10 w-32 rounded-nilin" />
+            </div>
+
+            {/* Tabs skeleton */}
+            <div className="flex gap-2 mb-6 border-b border-gray-200">
+              <Skeleton className="h-10 w-40" />
+              <Skeleton className="h-10 w-40" />
+            </div>
+
+            {/* Notifications skeleton */}
+            <div className="space-y-2">
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} className="glass-nilin rounded-nilin-lg p-4">
+                  <div className="flex items-start gap-4">
+                    <Skeleton className="w-10 h-10 rounded-full flex-shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-4 w-3/4" />
+                      <Skeleton className="h-3 w-1/2" />
+                    </div>
+                    <Skeleton className="h-3 w-16" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
         <Footer />
       </div>
@@ -272,8 +394,11 @@ const NotificationsPage: React.FC = () => {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-2 mb-6 border-b border-gray-200">
+          <div role="tablist" aria-label="Notification views" className="flex gap-2 mb-6 border-b border-gray-200">
             <button
+              role="tab"
+              aria-selected={activeTab === 'notifications'}
+              tabIndex={activeTab === 'notifications' ? 0 : -1}
               onClick={() => setActiveTab('notifications')}
               className={cn(
                 'flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors',
@@ -286,6 +411,9 @@ const NotificationsPage: React.FC = () => {
               All Notifications
             </button>
             <button
+              role="tab"
+              aria-selected={activeTab === 'digest'}
+              tabIndex={activeTab === 'digest' ? 0 : -1}
               onClick={() => setActiveTab('digest')}
               className={cn(
                 'flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors',
@@ -381,10 +509,16 @@ const NotificationsPage: React.FC = () => {
                                 e.stopPropagation();
                                 handleMarkAsRead(notification.id);
                               }}
-                              className="p-2 rounded-lg hover:bg-nilin-muted transition-colors text-nilin-warmGray hover:text-nilin-charcoal"
+                              disabled={loadingIds.has(notification.id)}
+                              className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-muted transition-colors text-nilin-warmGray hover:text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Mark as read"
+                              aria-label="Mark as read"
                             >
-                              <Check className="w-4 h-4" />
+                              {loadingIds.has(notification.id) ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Check className="w-4 h-4" />
+                              )}
                             </button>
                           )}
                           <button
@@ -392,10 +526,16 @@ const NotificationsPage: React.FC = () => {
                               e.stopPropagation();
                               handleDelete(notification.id);
                             }}
-                            className="p-2 rounded-lg hover:bg-red-50 transition-colors text-nilin-warmGray hover:text-red-500"
+                            disabled={loadingIds.has(notification.id)}
+                            className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-red-50 transition-colors text-nilin-warmGray hover:text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
                             title="Delete"
+                            aria-label="Delete notification"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            {loadingIds.has(notification.id) ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -411,12 +551,20 @@ const NotificationsPage: React.FC = () => {
             <div className="mt-6 text-center">
               <button
                 onClick={async () => {
+                  // Store previous state for rollback
+                  const previousNotifications = [...notifications];
+
+                  // Optimistic update
+                  setNotifications(prev => prev.filter(n => !n.isRead));
+
                   try {
                     await notificationApi.deleteAllRead();
-                    setNotifications(prev => prev.filter(n => !n.isRead));
+                    toast.success('Read notifications cleared');
                   } catch (err: unknown) {
+                    // Rollback on failure
+                    setNotifications(previousNotifications);
                     const axiosErr = err as { response?: { data?: { message?: string } } };
-                    setError(axiosErr.response?.data?.message || 'Failed to clear read notifications');
+                    toast.error(axiosErr.response?.data?.message || 'Failed to clear read notifications. Please try again.');
                   }
                 }}
                 className="text-sm text-nilin-warmGray hover:text-nilin-coral transition-colors"

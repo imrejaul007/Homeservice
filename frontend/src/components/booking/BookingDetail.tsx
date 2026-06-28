@@ -28,6 +28,7 @@ import { formatBookingPrice } from '../../utils/formatting';
 import ExperienceSubmissionForm from '../experience/ExperienceSubmissionForm';
 import { experienceApi } from '../../services/experienceApi';
 import { useToastActions } from '../common/Toast';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 import { CANCELLATION_REASONS } from '../../constants/booking';
 
 interface BookingDetailProps {
@@ -54,6 +55,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
     acceptBooking,
     rejectBooking,
     startBooking,
+    markBookingPaymentCompleted,
     completeBooking,
     cancelBooking,
     isLoading,
@@ -117,7 +119,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
       setNewMessage('');
     } catch (error) {
       console.error('Failed to send message:', error);
-      toast.error('Failed to send message', 'Please try again');
+      toast.error('Failed to send message', { description: 'Please try again' });
     }
   };
 
@@ -142,6 +144,11 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
         case 'complete':
           await completeBooking(currentBooking._id);
           break;
+        case 'mark_payment':
+          await markBookingPaymentCompleted(currentBooking._id, {
+            notes: 'Payment received by provider',
+          });
+          break;
         case 'cancel':
           await cancelBooking(currentBooking._id, {
             reason: CANCELLATION_REASONS.CUSTOMER_REQUEST,
@@ -155,14 +162,15 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
       }
     } catch (error) {
       console.error(`Failed to ${action} booking:`, error);
-      toast.error(`Failed to ${action} booking. Please try again.`);
+      showDeduplicatedError(`Failed to ${action} booking`, 'Please try again.');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const getStatusIcon = (status: Booking['status']) => {
-    switch (status) {
+  const getStatusIcon = (status: Booking['status'] | 'accepted') => {
+    const normalized = status === 'accepted' ? 'confirmed' : status;
+    switch (normalized) {
       case 'pending':
         return <Clock className="h-5 w-5" />;
       case 'confirmed':
@@ -191,6 +199,8 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
         return <AlertCircle className="h-4 w-4" />;
       case 'complete':
         return <CheckCircle className="h-4 w-4" />;
+      case 'mark_payment':
+        return <CreditCard className="h-4 w-4" />;
       case 'cancel':
         return <XCircle className="h-4 w-4" />;
       case 'reschedule':
@@ -230,7 +240,11 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
           actions.push('start');
           break;
         case 'in_progress':
-          actions.push('complete');
+          if (currentBooking.paymentStatus === 'completed') {
+            actions.push('complete');
+          } else {
+            actions.push('mark_payment');
+          }
           break;
       }
     } else {
@@ -309,6 +323,8 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                       return 'bg-gradient-to-r from-nilin-rose to-nilin-coral hover:shadow-nilin-warm text-white';
                     case 'complete':
                       return 'bg-nilin-success hover:bg-nilin-success/90 text-white';
+                    case 'mark_payment':
+                      return 'bg-blue-600 hover:bg-blue-700 text-white';
                     case 'reject':
                     case 'cancel':
                       return 'bg-nilin-error hover:bg-nilin-error/90 text-white';
@@ -336,8 +352,9 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                     ) : (
                       getActionIcon(action)
                     )}
-                    {action.charAt(0).toUpperCase() + action.slice(1)}
-                    {action === 'complete' && ' Service'}
+                    {action === 'mark_payment'
+                      ? 'Mark Payment Received'
+                      : `${action.charAt(0).toUpperCase() + action.slice(1)}${action === 'complete' ? ' Service' : ''}`}
                   </button>
                 );
               })}

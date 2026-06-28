@@ -529,6 +529,11 @@ export class BookingDepositService {
     amount?: number;
     error?: string;
   }> {
+    // CRITICAL FIX: Validate ObjectId format before processing
+    if (!Types.ObjectId.isValid(bookingId)) {
+      return { success: false, error: 'Invalid booking ID format' };
+    }
+
     try {
       const bookingObjectId = typeof bookingId === 'string'
         ? new Types.ObjectId(bookingId)

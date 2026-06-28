@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import AdminPageShell from '../../components/admin/AdminPageShell';
 import {
   TrendingUp,
   TrendingDown,
@@ -9,21 +10,16 @@ import {
   Users,
   DollarSign,
   BarChart3,
-  PieChart,
   AlertCircle,
   Check,
   Loader2,
   RefreshCw,
-  Calendar,
   Clock,
-  Eye,
-  ArrowUpRight,
-  ArrowDownRight,
   Percent,
   Download,
+  ArrowUpRight,
+  ArrowDownRight,
 } from 'lucide-react';
-import NavigationHeader from '../../components/layout/NavigationHeader';
-import Footer from '../../components/layout/Footer';
 import { useAuthStore } from '../../stores/authStore';
 import {
   offerAnalyticsApi,
@@ -60,7 +56,6 @@ const OfferAnalyticsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>({ label: 'Last 30 Days', value: '30d', days: 30 });
   const [activeTab, setActiveTab] = useState<'overview' | 'trends' | 'attention'>('overview');
-  // FIX: Export state
   const [isExporting, setIsExporting] = useState(false);
 
   // Auth check
@@ -106,7 +101,7 @@ const OfferAnalyticsPage: React.FC = () => {
       if (trendsRes.status === 'fulfilled') {
         setTrends(trendsRes.value.data);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch analytics:', err);
       setError(err.response?.data?.message || 'Failed to load analytics');
     } finally {
@@ -202,28 +197,40 @@ const OfferAnalyticsPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-nilin-cream flex flex-col">
-        <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-10 h-10 text-nilin-coral animate-spin" />
-        </div>
-        <Footer />
-      </div>
+      <ErrorBoundary>
+        <AdminPageShell
+          title="Offer Analytics"
+          subtitle="Track performance of your offers and promotions"
+          wideLayout
+        >
+          <div className="flex items-center justify-center min-h-96">
+            <Loader2 className="w-10 h-10 text-nilin-coral animate-spin" />
+          </div>
+        </AdminPageShell>
+      </ErrorBoundary>
     );
   }
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-nilin-cream flex flex-col">
-        <NavigationHeader />
+      <AdminPageShell
+        title="Offer Analytics"
+        subtitle="Track performance of your offers and promotions"
+        wideLayout
+      >
+        {/* Skip Link */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+        >
+          Skip to main content
+        </a>
 
-        <div className="flex-1">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main id="main-content" className="space-y-6">
           {/* Header */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Offer Analytics</h1>
-              <p className="mt-1 text-gray-600">Track performance of your offers and promotions</p>
+              <h1 className="text-3xl font-bold text-gray-900 sr-only">Offer Analytics</h1>
             </div>
             <div className="flex items-center gap-3">
               {/* Date Range Selector */}
@@ -247,13 +254,13 @@ const OfferAnalyticsPage: React.FC = () => {
               </div>
               <button
                 onClick={fetchData}
-                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+                className="w-11 h-11 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
                 title="Refresh"
               >
                 <RefreshCw className="w-5 h-5" />
               </button>
 
-              {/* FIX: Export Button */}
+              {/* Export Button */}
               <button
                 onClick={async () => {
                   setIsExporting(true);
@@ -266,7 +273,7 @@ const OfferAnalyticsPage: React.FC = () => {
                   }
                 }}
                 disabled={isExporting}
-                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+                className="w-11 h-11 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg disabled:opacity-50 transition-colors"
                 title="Export to CSV"
               >
                 {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
@@ -276,15 +283,15 @@ const OfferAnalyticsPage: React.FC = () => {
 
           {/* Error Message */}
           {error && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3">
+            <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3" role="alert">
               <AlertCircle className="w-5 h-5 text-red-500" />
               <span className="text-red-800">{error}</span>
             </div>
           )}
 
           {/* Tabs */}
-          <div className="flex justify-center mb-8">
-            <div className="inline-flex bg-gray-100 rounded-lg p-1">
+          <div className="flex justify-center">
+            <div className="inline-flex bg-gray-100 rounded-lg p-1" role="tablist" aria-label="Analytics view selection">
               {[
                 { key: 'overview', label: 'Overview', icon: BarChart3 },
                 { key: 'trends', label: 'Trends', icon: TrendingUp },
@@ -292,8 +299,11 @@ const OfferAnalyticsPage: React.FC = () => {
               ].map((tab) => (
                 <button
                   key={tab.key}
+                  role="tab"
+                  aria-selected={activeTab === tab.key}
+                  tabIndex={activeTab === tab.key ? 0 : -1}
                   onClick={() => setActiveTab(tab.key as any)}
-                  className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${
+                  className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                     activeTab === tab.key
                       ? 'bg-white text-gray-900 shadow'
                       : 'text-gray-600 hover:text-gray-900'
@@ -600,11 +610,8 @@ const OfferAnalyticsPage: React.FC = () => {
               )}
             </div>
           )}
-        </div>
-      </div>
-
-      <Footer />
-    </div>
+        </main>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

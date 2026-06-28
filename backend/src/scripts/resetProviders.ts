@@ -1,12 +1,25 @@
 /**
  * Reset Providers: Clean all old providers and create fresh Beauty & Wellness providers
  * Run with: npx ts-node src/scripts/resetProviders.ts
+ *
+ * SECURITY: Uses TEST_PROVIDER_PASSWORD from environment or generates random password
+ * WARNING: Never hardcode passwords in production scripts
  */
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 dotenv.config();
+
+// SECURITY FIX: Use environment variable for test password, not hardcoded
+const getTestPassword = (): string => {
+  if (process.env.TEST_PROVIDER_PASSWORD) {
+    return process.env.TEST_PROVIDER_PASSWORD;
+  }
+  // Generate random secure password if not provided
+  return crypto.randomBytes(12).toString('base64').substring(0, 16) + 'A1!';
+};
 
 async function reset() {
   const uri = process.env.MONGODB_URI || process.env.MONGO_URI;
@@ -37,7 +50,10 @@ async function reset() {
   // ============================================================
   console.log('\n=== Step 2: Creating provider users ===');
 
-  const passwordHash = await bcrypt.hash('Provider@123', 10);
+  // SECURITY FIX: Use environment-based password generation
+  const testPassword = getTestPassword();
+  const passwordHash = await bcrypt.hash(testPassword, 10);
+  console.log(`  Using test password (from env or generated): ${testPassword.substring(0, 4)}****`);
 
   const providerUsersData = [
     { firstName: 'Sara', lastName: 'Al Maktoum', email: 'sara@nilin.ae', phone: '+971501234567' },

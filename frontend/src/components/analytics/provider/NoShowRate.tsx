@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 import { AlertTriangle, Loader, Calendar, Users, TrendingDown, Clock } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { providerInsightsApi, NoShowRisk } from '../../../services/providerInsightsApi';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface NoShowRateProps {
   providerId?: string;
@@ -48,69 +48,45 @@ export const NoShowRate: React.FC<NoShowRateProps> = ({ providerId, timeRange = 
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<NoShowStats | null>(null);
   const [chartData, setChartData] = useState<NoShowData[]>([]);
-  const [noShowRisks, setNoShowRisks] = useState<NoShowRisk[]>([]);
 
   const fetchNoShowData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // Fetch no-show risks from API
-      const risks = await providerInsightsApi.getNoShows();
-      setNoShowRisks(risks || []);
-
-      // Calculate stats from API data
-      const totalBookings = risks?.length || 0;
-      const noShows = risks?.filter(r => r.riskLevel === 'critical' || r.riskLevel === 'high').length || 0;
+      const apiData = await analyticsApi.getProviderNoShowRate(timeRange, providerId);
+      const dailyData = apiData.dailyData || [];
 
       setStats({
-        totalBookings: totalBookings,
-        noShows: noShows,
-        lateCancellations: Math.floor(noShows * 0.3),
-        noShowRate: totalBookings > 0 ? (noShows / totalBookings) * 100 : 0,
-        averageNoShowRate: 5.0,
-        trend: noShows > 0 ? -2.1 : 0,
-        revenueLoss: noShows * 150,
-        topReason: 'Schedule conflict',
-        customerImpact: noShows,
+        totalBookings: apiData.stats.totalBookings,
+        noShows: apiData.stats.noShows,
+        lateCancellations: apiData.stats.lateCancellations,
+        noShowRate: apiData.stats.noShowRate,
+        averageNoShowRate: apiData.stats.averageNoShowRate,
+        trend: apiData.stats.trend,
+        revenueLoss: apiData.stats.revenueLoss,
+        topReason: apiData.stats.topReason,
+        customerImpact: apiData.stats.customerImpact,
       });
 
-      // Generate chart data for the time range
-      const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
-      const data: NoShowData[] = [];
-      for (let i = days - 1; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dayBookings = Math.floor(Math.random() * 20) + 5;
-        const dayNoShows = Math.floor(dayBookings * 0.08);
-        data.push({
-          date: date.toLocaleDateString('en-US', { weekday: 'short' }),
-          totalBookings: dayBookings,
-          noShows: dayNoShows,
-          lateCancellations: Math.floor(dayNoShows * 0.3),
-          completed: dayBookings - dayNoShows,
-          rate: (dayNoShows / dayBookings) * 100,
-        });
-      }
-      setChartData(data);
+      setChartData(
+        dailyData.map((row) => ({
+          date: new Date(row.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          totalBookings: row.totalBookings,
+          noShows: row.noShows,
+          lateCancellations: row.lateCancellations,
+          completed: row.completed,
+          rate: row.rate,
+        })),
+      );
     } catch (err) {
       console.error('Failed to fetch no-show data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load no-show data');
-      // Use fallback data on error
-      setStats({
-        totalBookings: 117,
-        noShows: 9,
-        lateCancellations: 6,
-        noShowRate: 7.7,
-        averageNoShowRate: 5.0,
-        trend: -2.1,
-        revenueLoss: 1350,
-        topReason: 'Schedule conflict',
-        customerImpact: 8,
-      });
+      setStats(null);
+      setChartData([]);
     } finally {
       setLoading(false);
     }
-  }, [timeRange]);
+  }, [timeRange, providerId]);
 
   useEffect(() => {
     fetchNoShowData();
@@ -147,10 +123,22 @@ export const NoShowRate: React.FC<NoShowRateProps> = ({ providerId, timeRange = 
     );
   }
 
+  if (!stats) {
+    return (
+      <div className="bg-white rounded-xl p-6 shadow-sm text-center">
+        <AlertTriangle className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+        <p className="text-sm font-medium text-nilin-charcoal">No no-show data yet</p>
+        <p className="text-sm text-nilin-warmGray mt-1">
+          Metrics appear after you receive bookings in the selected period.
+        </p>
+      </div>
+    );
+  }
+
   const pieData = [
-    { name: 'Completed', value: stats?.totalBookings ? stats.totalBookings - stats.noShows - stats.lateCancellations : 0 },
-    { name: 'No-Shows', value: stats?.noShows || 0 },
-    { name: 'Late Cancellations', value: stats?.lateCancellations || 0 },
+    { name: 'Completed', value: stats.totalBookings - stats.noShows - stats.lateCancellations },
+    { name: 'No-Shows', value: stats.noShows },
+    { name: 'Late Cancellations', value: stats.lateCancellations },
   ];
 
   return (

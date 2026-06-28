@@ -171,12 +171,17 @@ const conversationSchema = new Schema<IConversation>(
 // Indexes for Performance
 // =============================================================================
 
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+conversationSchema.index({ isDeleted: 1, status: 1 }); // Soft deleted conversations by status
+conversationSchema.index({ isDeleted: 1, updatedAt: -1 }); // Soft deleted sorted by date
+conversationSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted sorted by creation date
+
 // Primary query patterns
 conversationSchema.index({ userId: 1, updatedAt: -1 });
-conversationSchema.index({ userId: 1, status: 1 });
+// FIX 4: Removed duplicate index { userId: 1, status: 1 } - covered by compound index below
 conversationSchema.index({ createdAt: 1 });
 
-// Compound indexes for common queries
+// Compound indexes for common queries - MORE COMPREHENSIVE than individual indexes
 conversationSchema.index({ userId: 1, status: 1, updatedAt: -1 });
 conversationSchema.index({ status: 1, createdAt: 1 });
 

@@ -1,7 +1,83 @@
+import axios from 'axios';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { searchApi } from '../services/searchApi';
 import type { SearchFilters, Service, Suggestion } from '../types/search';
+
+/**
+ * FIX P1: Sync filter state to URL for persistence across page refresh
+ */
+const syncFiltersToUrl = (filters: Partial<SearchFilters>) => {
+  if (typeof window === 'undefined') return;
+
+  const url = new URL(window.location.href);
+  const params = url.searchParams;
+
+  // Map filter keys to URL param names
+  const paramMapping: Record<string, string> = {
+    q: 'q',
+    category: 'category',
+    subcategory: 'subcategory',
+    minPrice: 'minPrice',
+    maxPrice: 'maxPrice',
+    minRating: 'minRating',
+    sortBy: 'sort',
+    page: 'page',
+    limit: 'limit',
+  };
+
+  // Update URL params for each filter
+  Object.entries(filters).forEach(([key, value]) => {
+    const paramName = paramMapping[key] || key;
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(paramName, String(value));
+    } else {
+      params.delete(paramName);
+    }
+  });
+
+  // Replace URL without navigation
+  window.history.replaceState({}, '', url.toString());
+};
+
+/**
+ * FIX P1: Initialize filters from URL params on load
+ */
+const getFiltersFromUrl = (): Partial<SearchFilters> => {
+  if (typeof window === 'undefined') return {};
+
+  const params = new URLSearchParams(window.location.search);
+  const filters: Partial<SearchFilters> = {};
+
+  const urlParamMapping: Record<string, keyof SearchFilters> = {
+    q: 'q',
+    category: 'category',
+    subcategory: 'subcategory',
+    minPrice: 'minPrice',
+    maxPrice: 'maxPrice',
+    minRating: 'minRating',
+    sort: 'sortBy',
+    page: 'page',
+    limit: 'limit',
+  };
+
+  Object.entries(urlParamMapping).forEach(([param, filterKey]) => {
+    const value = params.get(param);
+    if (value !== null) {
+      // Parse numbers
+      if (filterKey === 'minPrice' || filterKey === 'maxPrice' || filterKey === 'minRating' || filterKey === 'page' || filterKey === 'limit') {
+        const num = parseFloat(value);
+        if (!isNaN(num)) {
+          (filters as any)[filterKey] = num;
+        }
+      } else {
+        (filters as any)[filterKey] = value;
+      }
+    }
+  });
+
+  return filters;
+};
 
 interface SearchState {
   // Search data
@@ -27,6 +103,9 @@ interface SearchState {
   trendingServices: Service[];
   popularServices: Service[];
 
+  // FIX P2: Abort controller for cancelling requests
+  abortController: AbortController | null;
+
   // Actions
   setFilters: (filters: Partial<SearchFilters>) => void;
   clearFilters: () => void;
@@ -42,23 +121,27 @@ interface SearchState {
   setLoading: (loading: boolean) => void;
   invalidateProviderCache: (providerId?: string) => void;
   invalidateServiceCache: (serviceId?: string) => void;
+  cancelCurrentRequest: () => void;
 }
 
+// FIX P1: Initialize filters from URL params if available
+const urlFilters = getFiltersFromUrl();
+
 const initialFilters: SearchFilters = {
-  q: '',
-  category: undefined,
-  subcategory: undefined,
-  minPrice: undefined,
-  maxPrice: undefined,
-  minRating: undefined,
+  q: urlFilters.q ?? '',
+  category: urlFilters.category,
+  subcategory: urlFilters.subcategory,
+  minPrice: urlFilters.minPrice,
+  maxPrice: urlFilters.maxPrice,
+  minRating: urlFilters.minRating,
   lat: undefined,
   lng: undefined,
   radius: 25,
   city: '',
   state: '',
-  sortBy: 'popularity',
-  page: 1,
-  limit: 20,
+  sortBy: urlFilters.sortBy ?? 'popularity',
+  page: urlFilters.page ?? 1,
+  limit: urlFilters.limit ?? 20,
 };
 
 export const useSearchStore = create<SearchState>()(
@@ -78,6 +161,7 @@ export const useSearchStore = create<SearchState>()(
       recentSearches: [],
       trendingServices: [],
       popularServices: [],
+      abortController: null, // FIX P2: Initialize abort controller
 
       // Actions
       setFilters: (newFilters: Partial<SearchFilters>) => {
@@ -88,6 +172,8 @@ export const useSearchStore = create<SearchState>()(
             page: newFilters.page !== undefined ? newFilters.page : 1, // Reset to page 1 unless explicitly set
           },
         }));
+        // FIX P1: Sync filter state to URL for persistence across page refresh
+        syncFiltersToUrl(newFilters);
       },
 
       clearFilters: () => {
@@ -107,10 +193,15 @@ export const useSearchStore = create<SearchState>()(
       },
 
       searchServices: async (filters: SearchFilters) => {
-        set({ isLoading: true, error: null });
+        // FIX P2: Cancel any existing request before starting new one
+        const { cancelCurrentRequest } = get();
+        cancelCurrentRequest();
+
+        const abortController = new AbortController();
+        set({ isLoading: true, error: null, abortController });
 
         try {
-          const response = await searchApi.searchServices(filters);
+          const response = await searchApi.searchServices(filters, abortController.signal);
 
           if (response.success) {
             set({
@@ -120,6 +211,7 @@ export const useSearchStore = create<SearchState>()(
               totalPages: response.data.pagination.pages,
               filters,
               isLoading: false,
+              abortController: null,
             });
 
             // Add to search history if there's a query
@@ -130,10 +222,15 @@ export const useSearchStore = create<SearchState>()(
             throw new Error('Search failed');
           }
         } catch (err: unknown) {
+          // Ignore abort errors
+          if ((err as any)?.name === 'AbortError' || axios.isCancel(err)) {
+            return;
+          }
           const message = err instanceof Error ? err.message : 'Search failed';
           set({
             error: message,
             isLoading: false,
+            abortController: null,
           });
         }
       },
@@ -144,10 +241,12 @@ export const useSearchStore = create<SearchState>()(
           return;
         }
 
+        // FIX P2: Use AbortController to cancel previous suggestion requests
+        const abortController = new AbortController();
         set({ isLoadingSuggestions: true });
 
         try {
-          const response = await searchApi.getSearchSuggestions(query);
+          const response = await searchApi.getSearchSuggestions(query, 5, abortController.signal);
 
           if (response.success) {
             set({
@@ -155,8 +254,12 @@ export const useSearchStore = create<SearchState>()(
               isLoadingSuggestions: false,
             });
           }
-        } catch (error: any) {
-          console.error('Failed to get suggestions:', error);
+        } catch (err: unknown) {
+          // Ignore abort errors
+          if ((err as any)?.name === 'AbortError' || axios.isCancel(err)) {
+            return;
+          }
+          console.error('Failed to get suggestions:', err);
           set({
             suggestions: [],
             isLoadingSuggestions: false,
@@ -269,9 +372,18 @@ export const useSearchStore = create<SearchState>()(
           };
         });
       },
+
+      // FIX P2: Cancel any ongoing request
+      cancelCurrentRequest: () => {
+        const { abortController } = get();
+        if (abortController) {
+          abortController.abort();
+        }
+      },
     }),
     {
       name: 'search-store',
+      version: 1,
       partialize: (state) => ({
         // Only persist certain parts of the state
         searchHistory: state.searchHistory,

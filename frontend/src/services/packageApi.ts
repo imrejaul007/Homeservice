@@ -57,7 +57,7 @@ export const packageApi = {
         total: result.pagination?.total || 0,
         page: result.pagination?.page || 1,
         limit: result.pagination?.limit || 10,
-        totalPages: result.pagination?.pages || 1,
+        totalPages: result.pagination?.totalPages || result.pagination?.pages || 1,
       };
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } }; message?: string };
@@ -117,12 +117,9 @@ export const packageApi = {
     }
   },
 
-  /**
-   * Get packages by category
-   */
   getPackagesByCategory: async (category: string, limit?: number): Promise<ServicePackage[]> => {
     try {
-      const response = await api.get(`/packages/category/${category}`, { params: { limit } });
+      const response = await api.get('/packages', { params: { category, limit } });
       return response.data.data.packages || [];
     } catch (error: unknown) {
       console.error('[packageApi] getPackagesByCategory error:', error);
@@ -130,12 +127,9 @@ export const packageApi = {
     }
   },
 
-  /**
-   * Search packages
-   */
   searchPackages: async (query: string, filters?: PackageFilters): Promise<ServicePackage[]> => {
     try {
-      const response = await api.get('/packages/search', {
+      const response = await api.get('/packages', {
         params: { q: query, ...filters },
       });
       return response.data.data.packages || [];

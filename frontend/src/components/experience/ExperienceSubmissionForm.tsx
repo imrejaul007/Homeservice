@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   X,
   Star,
@@ -15,6 +15,9 @@ import {
 import { cn } from '../../lib/utils';
 import { experienceApi } from '../../services/experienceApi';
 import type { AvailableBooking } from '../../types/experience';
+
+// Rating labels for screen readers
+const RATING_LABELS = ['Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
 
 interface ExperienceSubmissionFormProps {
   isOpen: boolean;
@@ -288,23 +291,23 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-nilin-charcoal/60 backdrop-blur-sm animate-in fade-in duration-200"
+        className="absolute inset-0 bg-nilin-charcoal/60 backdrop-blur-sm animate-backdrop-in"
         onClick={onClose}
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white rounded-2xl shadow-nilin-lg animate-in zoom-in-95 duration-200">
+      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white rounded-2xl shadow-nilin-xl animate-fade-in">
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between p-6 border-b border-nilin-border/50 bg-white rounded-t-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between p-8 border-b border-nilin-border/50 bg-gradient-to-b from-white to-nilin-blush/10 rounded-t-2xl">
           <div>
             <h2 className="text-2xl font-serif text-nilin-charcoal">Share Your Experience</h2>
-            <p className="text-sm text-nilin-warmGray mt-1">
+            <p className="text-sm text-nilin-warmGray mt-1.5">
               Tell us about your NILIN experience
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-full hover:bg-nilin-blush/50 transition-colors"
+            className="w-11 h-11 flex items-center justify-center rounded-full hover:bg-nilin-blush/50 transition-all duration-200 hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
             aria-label="Close"
           >
             <X className="h-5 w-5 text-nilin-warmGray" />
@@ -313,30 +316,30 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
 
         {/* Success State */}
         {showSuccess ? (
-          <div className="p-12 text-center">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-nilin-success/20 flex items-center justify-center">
-              <CheckCircle className="h-8 w-8 text-nilin-success" />
+          <div className="p-16 text-center animate-success-enter">
+            <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-nilin-success/20 flex items-center justify-center shadow-lg animate-success-icon">
+              <CheckCircle className="h-10 w-10 text-nilin-success" />
             </div>
-            <h3 className="text-xl font-medium text-nilin-charcoal mb-2">
+            <h3 className="text-2xl font-medium text-nilin-charcoal mb-3 animate-success-text">
               {experienceId ? 'Experience Updated!' : 'Experience Submitted!'}
             </h3>
-            <p className="text-nilin-warmGray">
+            <p className="text-nilin-warmGray animate-success-subtext">
               Submitted for review — we&apos;ll notify you when it&apos;s published.
             </p>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          <form onSubmit={handleSubmit} className="p-8 space-y-8">
             {/* General Error */}
             {errors.general && (
-              <div className="flex items-start gap-3 p-4 bg-nilin-error/10 border border-nilin-error/20 rounded-xl">
+              <div className="flex items-start gap-3 p-4 bg-nilin-error/10 border border-nilin-error/20 rounded-xl animate-error-appear">
                 <AlertCircle className="h-5 w-5 text-nilin-error flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-nilin-error">{errors.general}</p>
               </div>
             )}
 
             {/* Booking Selection (optional) */}
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+            <div className="space-y-3 animate-field-enter" style={{ animationDelay: '0.05s' }}>
+              <label className="block text-sm font-medium text-nilin-charcoal">
                 Link to a Booking {requireBooking ? <span className="text-nilin-error">*</span> : <span className="text-nilin-warmGray font-normal">(optional)</span>}
               </label>
               <div className="relative">
@@ -345,16 +348,16 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                   onClick={() => !isLoading && !lockBooking && setShowDropdown(!showDropdown)}
                   disabled={isLoading || lockBooking}
                   className={cn(
-                    'w-full flex items-center justify-between px-4 py-3 border rounded-xl transition-all',
+                    'w-full flex items-center justify-between px-5 py-4 border rounded-xl transition-all duration-200',
                     errors.bookingId
                       ? 'border-nilin-error bg-nilin-error/5'
-                      : 'border-nilin-border hover:border-nilin-coral/50',
+                      : 'border-nilin-border hover:border-nilin-coral/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 focus:border-nilin-coral',
                     isLoading && 'opacity-50 cursor-not-allowed'
                   )}
                 >
                   {isLoading ? (
-                    <span className="flex items-center gap-2 text-nilin-warmGray">
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="flex items-center gap-3 text-nilin-warmGray">
+                      <Loader2 className="h-5 w-5 animate-spin" />
                       Loading bookings...
                     </span>
                   ) : selectedBooking ? (
@@ -367,13 +370,13 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                     </span>
                   )}
                   <ChevronDown className={cn(
-                    'h-5 w-5 text-nilin-warmGray transition-transform',
+                    'h-5 w-5 text-nilin-warmGray transition-transform duration-200',
                     showDropdown && 'rotate-180'
                   )} />
                 </button>
 
                 {showDropdown && !lockBooking && (
-                  <div className="absolute z-20 w-full mt-2 bg-white border border-nilin-border rounded-xl shadow-lg overflow-hidden">
+                  <div className="absolute z-20 w-full mt-2 bg-white border border-nilin-border rounded-xl shadow-xl overflow-hidden animate-dropdown-enter">
                     {!requireBooking && (
                       <button
                         type="button"
@@ -382,7 +385,7 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                           setShowDropdown(false);
                         }}
                         className={cn(
-                          'w-full px-4 py-3 text-left hover:bg-nilin-blush/30 transition-colors border-b border-nilin-border/50',
+                          'w-full px-5 py-4 text-left hover:bg-nilin-blush/30 transition-colors duration-150 border-b border-nilin-border/50',
                           !formData.bookingId && 'bg-nilin-blush/50'
                         )}
                       >
@@ -391,7 +394,7 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                       </button>
                     )}
                     {availableBookings.length === 0 ? (
-                      <div className="p-4 text-center text-nilin-warmGray text-sm">
+                      <div className="p-6 text-center text-nilin-warmGray text-sm">
                         No completed bookings available
                       </div>
                     ) : (
@@ -404,7 +407,7 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                             setShowDropdown(false);
                           }}
                           className={cn(
-                            'w-full px-4 py-3 text-left hover:bg-nilin-blush/30 transition-colors',
+                            'w-full px-5 py-4 text-left hover:bg-nilin-blush/30 transition-colors duration-150',
                             formData.bookingId === booking._id && 'bg-nilin-blush/50'
                           )}
                         >
@@ -421,16 +424,16 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                 )}
               </div>
               {errors.bookingId && (
-                <p className="text-xs text-nilin-error mt-1">{errors.bookingId}</p>
+                <p className="text-sm text-nilin-error animate-error-slide">{errors.bookingId}</p>
               )}
             </div>
 
             {/* Star Rating */}
-            <div>
+            <div className="animate-field-enter" style={{ animationDelay: '0.1s' }}>
               <label className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Your Rating <span className="text-nilin-error">*</span>
               </label>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
                 {[1, 2, 3, 4, 5].map((star) => (
                   <button
                     key={star}
@@ -438,33 +441,39 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                     onClick={() => handleInputChange('rating', star)}
                     onMouseEnter={() => setHoverRating(star)}
                     onMouseLeave={() => setHoverRating(0)}
-                    className="p-1 transition-transform hover:scale-110"
+                    className="w-12 h-12 flex items-center justify-center transition-transform duration-200 hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-lg"
                     aria-label={`Rate ${star} stars`}
                   >
                     <Star
                       className={cn(
-                        'h-8 w-8 transition-colors',
+                        'h-8 w-8 transition-all duration-200',
                         star <= (hoverRating || formData.rating)
-                          ? 'text-amber-400 fill-amber-400'
-                          : 'text-gray-300 fill-gray-300'
+                          ? 'text-nilin-coral fill-nilin-coral drop-shadow-star-glow'
+                          : 'text-nilin-border fill-nilin-border/50 hover:text-nilin-coral/50 hover:fill-nilin-coral/50'
                       )}
+                      style={{
+                        transform: star <= hoverRating ? 'scale(1.2)' : 'scale(1)',
+                        filter: star <= hoverRating ? 'drop-shadow(0 0 8px rgba(232, 106, 77, 0.5))' : 'none'
+                      }}
                     />
                   </button>
                 ))}
-                <span className="ml-2 text-sm text-nilin-warmGray">
+                <span className="ml-3 text-base text-nilin-charcoal font-medium min-w-[80px] transition-all duration-200">
                   {formData.rating > 0 && (
-                    ['Poor', 'Fair', 'Good', 'Very Good', 'Excellent'][formData.rating - 1]
+                    <span className="animate-rating-label">
+                      {RATING_LABELS[formData.rating - 1]}
+                    </span>
                   )}
                 </span>
               </div>
               {errors.rating && (
-                <p className="text-xs text-nilin-error mt-1">{errors.rating}</p>
+                <p className="text-xs text-nilin-error mt-1 animate-error-slide">{errors.rating}</p>
               )}
             </div>
 
             {/* Title */}
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+            <div className="animate-field-enter" style={{ animationDelay: '0.15s' }}>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-3">
                 Title <span className="text-nilin-error">*</span>
               </label>
               <input
@@ -474,54 +483,54 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                 placeholder="Give your experience a title"
                 maxLength={100}
                 className={cn(
-                  'w-full px-4 py-3 border rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-nilin-coral/30',
-                  errors.title ? 'border-nilin-error' : 'border-nilin-border focus:border-nilin-coral'
+                  'w-full px-5 py-4 border rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2',
+                  errors.title ? 'border-nilin-error bg-nilin-error/5' : 'border-nilin-border focus:border-nilin-coral'
                 )}
               />
-              <div className="flex justify-between mt-1">
+              <div className="flex justify-between mt-2">
                 {errors.title ? (
-                  <p className="text-xs text-nilin-error">{errors.title}</p>
+                  <p className="text-sm text-nilin-error animate-error-slide">{errors.title}</p>
                 ) : (
                   <span />
                 )}
-                <span className="text-xs text-nilin-warmGray">
+                <span className="text-sm text-nilin-warmGray">
                   {formData.title.length}/100
                 </span>
               </div>
             </div>
 
             {/* Description */}
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+            <div className="animate-field-enter" style={{ animationDelay: '0.2s' }}>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-3">
                 Description <span className="text-nilin-error">*</span>
               </label>
               <textarea
                 value={formData.description}
                 onChange={(e) => handleInputChange('description', e.target.value)}
                 placeholder="Share the details of your experience. What did you like? What made it special?"
-                rows={5}
+                rows={6}
                 maxLength={2000}
                 className={cn(
-                  'w-full px-4 py-3 border rounded-xl transition-all resize-none focus:outline-none focus:ring-2 focus:ring-nilin-coral/30',
-                  errors.description ? 'border-nilin-error' : 'border-nilin-border focus:border-nilin-coral'
+                  'w-full px-5 py-4 border rounded-xl transition-all duration-200 resize-none focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2',
+                  errors.description ? 'border-nilin-error bg-nilin-error/5' : 'border-nilin-border focus:border-nilin-coral'
                 )}
               />
-              <div className="flex justify-between mt-1">
+              <div className="flex justify-between mt-2">
                 {errors.description ? (
-                  <p className="text-xs text-nilin-error">{errors.description}</p>
+                  <p className="text-sm text-nilin-error animate-error-slide">{errors.description}</p>
                 ) : (
                   <span />
                 )}
-                <span className="text-xs text-nilin-warmGray">
+                <span className="text-sm text-nilin-warmGray">
                   {formData.description.length}/2000
                 </span>
               </div>
             </div>
 
             {/* Image Upload */}
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Photos (Optional)
+            <div className="animate-field-enter" style={{ animationDelay: '0.25s' }}>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-3">
+                Photos <span className="text-nilin-warmGray font-normal">(Optional)</span>
               </label>
 
               {/* Drop Zone */}
@@ -531,10 +540,10 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                 onDragLeave={handleDragLeave}
                 onClick={() => fileInputRef.current?.click()}
                 className={cn(
-                  'relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all',
+                  'relative border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-300 bg-gradient-to-br from-nilin-blush/20 to-transparent',
                   isDragging
-                    ? 'border-nilin-coral bg-nilin-coral/5'
-                    : 'border-nilin-border hover:border-nilin-coral/50',
+                    ? 'border-nilin-coral bg-nilin-coral/10 scale-[1.02] shadow-lg shadow-nilin-coral/10'
+                    : 'border-nilin-coral/40 hover:border-nilin-coral/70 hover:bg-nilin-blush/30',
                   errors.images && 'border-nilin-error'
                 )}
               >
@@ -546,38 +555,44 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                   onChange={(e) => handleImageUpload(e.target.files)}
                   className="hidden"
                 />
-                <Upload className="h-10 w-10 mx-auto mb-3 text-nilin-warmGray" />
-                <p className="text-nilin-charcoal font-medium">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-nilin-coral/20 to-nilin-rose/20 flex items-center justify-center">
+                  <Upload className={cn(
+                    'h-8 w-8 text-nilin-coral transition-all duration-300',
+                    isDragging && 'animate-upload-bounce scale-110'
+                  )} />
+                </div>
+                <p className="text-nilin-charcoal font-medium text-lg mb-1">
                   Drag & drop your photos here
                 </p>
-                <p className="text-sm text-nilin-warmGray mt-1">
+                <p className="text-sm text-nilin-warmGray">
                   or click to browse • Max 10 photos
                 </p>
               </div>
 
               {errors.images && (
-                <p className="text-xs text-nilin-error mt-1">{errors.images}</p>
+                <p className="text-sm text-nilin-error mt-2 animate-error-slide">{errors.images}</p>
               )}
 
               {/* Image Previews */}
               {formData.images.length > 0 && (
-                <div className="grid grid-cols-5 gap-3 mt-4">
+                <div className="grid grid-cols-5 gap-4 mt-5">
                   {formData.images.map((image, index) => (
                     <div
                       key={index}
-                      className="relative group aspect-square rounded-lg overflow-hidden bg-nilin-blush/30"
+                      className="relative group aspect-square rounded-xl overflow-hidden bg-nilin-blush/30 animate-image-preview shadow-md"
+                      style={{ animationDelay: `${index * 0.05}s` }}
                     >
                       <img
                         src={typeof image === 'string' ? image : URL.createObjectURL(image)}
                         alt={`Upload ${index + 1}`}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
                       />
                       <button
                         type="button"
                         onClick={() => removeImage(index)}
-                        className="absolute top-1 right-1 p-1 bg-nilin-error rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-nilin-error/90 hover:bg-nilin-error rounded-full opacity-0 group-hover:opacity-100 transition-all duration-200 hover:scale-110 active:scale-95 focus:outline-none focus-visible:opacity-100 shadow-lg"
                       >
-                        <Trash2 className="h-3 w-3 text-white" />
+                        <Trash2 className="h-4 w-4 text-white" />
                       </button>
                     </div>
                   ))}
@@ -586,37 +601,39 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
             </div>
 
             {/* Video URL */}
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Video URL (Optional)
+            <div className="animate-field-enter" style={{ animationDelay: '0.3s' }}>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-3">
+                Video URL <span className="text-nilin-warmGray font-normal">(Optional)</span>
               </label>
               <div className="relative">
-                <Video className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" />
+                <div className="absolute left-5 top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+                  <Video className="h-5 w-5 text-nilin-coral" />
+                </div>
                 <input
                   type="url"
                   value={formData.videoUrl}
                   onChange={(e) => handleInputChange('videoUrl', e.target.value)}
                   placeholder="YouTube or Vimeo URL"
                   className={cn(
-                    'w-full pl-12 pr-4 py-3 border rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-nilin-coral/30',
-                    errors.videoUrl ? 'border-nilin-error' : 'border-nilin-border focus:border-nilin-coral'
+                    'w-full pl-16 pr-5 py-4 border rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2',
+                    errors.videoUrl ? 'border-nilin-error bg-nilin-error/5' : 'border-nilin-border focus:border-nilin-coral'
                   )}
                 />
               </div>
               {errors.videoUrl && (
-                <p className="text-xs text-nilin-error mt-1">{errors.videoUrl}</p>
+                <p className="text-sm text-nilin-error mt-2 animate-error-slide">{errors.videoUrl}</p>
               )}
-              <p className="text-xs text-nilin-warmGray mt-1">
+              <p className="text-sm text-nilin-warmGray mt-2">
                 Share a video of your experience
               </p>
             </div>
 
             {/* Actions */}
-            <div className="flex items-center gap-3 pt-4 border-t border-nilin-border/50">
+            <div className="flex items-center gap-4 pt-6 border-t border-nilin-border/50 animate-field-enter" style={{ animationDelay: '0.35s' }}>
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-4 py-3 border border-nilin-border rounded-xl text-nilin-charcoal hover:bg-nilin-blush/30 transition-colors font-medium"
+                className="flex-1 px-6 py-4 border-2 border-nilin-border rounded-xl text-nilin-charcoal hover:bg-nilin-blush/30 hover:border-nilin-coral/30 transition-all duration-200 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 active:scale-[0.98]"
               >
                 Cancel
               </button>
@@ -624,21 +641,21 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                 type="submit"
                 disabled={!isFormValid() || isSubmitting}
                 className={cn(
-                  'flex-1 px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2',
+                  'flex-1 px-6 py-4 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-3 shadow-lg',
                   isFormValid() && !isSubmitting
-                    ? 'bg-gradient-to-r from-nilin-rose to-nilin-coral text-white hover:shadow-nilin-warm btn-3d'
+                    ? 'bg-gradient-to-r from-nilin-rose via-nilin-coral to-nilin-rose text-white hover:shadow-xl hover:shadow-nilin-coral/30 hover:scale-[1.02] active:scale-[0.98]'
                     : 'bg-nilin-warmGray/50 text-white cursor-not-allowed'
                 )}
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="h-5 w-5 animate-spin" />
-                    Submitting...
+                    <span>Submitting...</span>
                   </>
                 ) : (
                   <>
                     <CheckCircle className="h-5 w-5" />
-                    Submit Experience
+                    <span>Submit Experience</span>
                   </>
                 )}
               </button>

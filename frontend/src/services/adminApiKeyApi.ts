@@ -111,4 +111,10 @@ export const adminApiKeyApi = {
     const response = await api.delete(`/admin/api-keys/${id}`);
     return response.data;
   },
+
+  // Bulk operations
+  bulkDelete: async (ids: string[]) => {
+    const response = await api.delete('/admin/api-keys/bulk', { data: { ids } });
+    return response.data;
+  },
 };

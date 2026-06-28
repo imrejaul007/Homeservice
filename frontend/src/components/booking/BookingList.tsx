@@ -16,6 +16,8 @@ import {
   ChevronDown,
   Eye,
   RefreshCw,
+  CreditCard,
+  Download,
 } from 'lucide-react';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -59,6 +61,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
     acceptBooking,
     rejectBooking,
     startBooking,
+    markBookingPaymentCompleted,
     completeBooking,
     cancelBooking,
     isLoading,
@@ -192,6 +195,36 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
     }));
   };
 
+  const handleExport = () => {
+    if (bookings.length === 0) {
+      toast.error('No bookings to export', { description: 'Adjust filters or wait for bookings to load.' });
+      return;
+    }
+
+    const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const headers = ['Booking ID', 'Service', 'Customer', 'Date', 'Time', 'Status', 'Amount', 'Currency'];
+    const rows = bookings.map((booking) => [
+      booking.bookingNumber || booking._id,
+      booking.service?.name || '',
+      `${booking.customer?.firstName || ''} ${booking.customer?.lastName || ''}`.trim(),
+      booking.scheduledDate || '',
+      booking.scheduledTime || '',
+      booking.status,
+      booking.pricing?.totalAmount ?? booking.pricing?.total ?? '',
+      booking.pricing?.currency || 'AED',
+    ]);
+
+    const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `provider-bookings-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success('Export ready', 'Your filtered booking list was downloaded.');
+  };
+
   const getStatusIcon = (status: Booking['status']) => {
     switch (status) {
       case 'pending':
@@ -267,6 +300,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
           });
           toast.success('Booking completed');
           break;
+        case 'mark_payment':
+          await markBookingPaymentCompleted(bookingId, {
+            notes: 'Payment received by provider',
+          });
+          toast.success('Payment marked as completed');
+          break;
         case 'cancel':
           await cancelBooking(bookingId, {
             reason: 'Cancelled by customer',
@@ -325,7 +364,11 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
         actions.push('start');
         break;
       case 'in_progress':
-        actions.push('complete');
+        if (booking.paymentStatus === 'completed') {
+          actions.push('complete');
+        } else {
+          actions.push('mark_payment');
+        }
         break;
     }
 
@@ -340,6 +383,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
         return 'bg-gradient-to-r from-nilin-rose to-nilin-coral hover:shadow-nilin-warm text-white';
       case 'complete':
         return 'bg-nilin-success hover:bg-nilin-success/90 text-white';
+      case 'mark_payment':
+        return 'bg-blue-600 hover:bg-blue-700 text-white';
       case 'reject':
       case 'cancel':
         return 'bg-nilin-error hover:bg-nilin-error/90 text-white';
@@ -359,13 +404,22 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
         return <Clock className="h-4 w-4" />;
       case 'complete':
         return <CheckCircle className="h-4 w-4" />;
+      case 'mark_payment':
+        return <CreditCard className="h-4 w-4" />;
       default:
         return <AlertCircle className="h-4 w-4" />;
     }
   };
 
   return (
-    <div className={cn("space-y-6", className)}>
+    <div className={cn("space-y-6", className)} role="region" aria-label="Bookings list">
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isLoading ? 'Loading bookings...' : ''}
+        {error ? `Error: ${error}` : ''}
+        {selectedCount > 0 ? `${selectedCount} bookings selected` : ''}
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         {!hideHeader && (
@@ -414,6 +468,19 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
             <span className="text-nilin-charcoal">Filters</span>
             <ChevronDown className={cn("h-4 w-4 text-nilin-warmGray transition-transform", showFilters && "rotate-180")} />
           </button>
+
+          {userType === 'provider' && (
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={isLoading || bookings.length === 0}
+              className="glass-btn flex items-center gap-2 px-4 py-2 rounded-xl transition-all disabled:opacity-50"
+              aria-label="Export filtered bookings"
+            >
+              <Download className="h-4 w-4 text-nilin-warmGray" />
+              <span className="text-nilin-charcoal">Export</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -733,8 +800,9 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                                 ) : (
                                   getActionIcon(action)
                                 )}
-                                {action.charAt(0).toUpperCase() + action.slice(1)}
-                                {action === 'complete' && ' Service'}
+                                {action === 'mark_payment'
+                                  ? 'Mark Payment Received'
+                                  : `${action.charAt(0).toUpperCase() + action.slice(1)}${action === 'complete' ? ' Service' : ''}`}
                               </button>
                             ))}
                           </div>
@@ -803,6 +871,19 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
             <div className="flex justify-center mt-8">
               <div className="glass flex items-center gap-2 p-2 rounded-xl">
                 <button
+                  onClick={() => handlePageChange(1)}
+                  disabled={pagination.page === 1}
+                  className={cn(
+                    "px-3 py-2 rounded-xl text-sm",
+                    pagination.page === 1
+                      ? "text-nilin-lightGray cursor-not-allowed"
+                      : "text-nilin-charcoal hover:bg-nilin-blush/30"
+                  )}
+                  aria-label="First page"
+                >
+                  First
+                </button>
+                <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page === 1}
                   className={cn(
@@ -849,6 +930,19 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                   aria-label="Next page"
                 >
                   Next
+                </button>
+                <button
+                  onClick={() => handlePageChange(pagination.pages)}
+                  disabled={pagination.page === pagination.pages}
+                  className={cn(
+                    "px-3 py-2 rounded-xl text-sm",
+                    pagination.page === pagination.pages
+                      ? "text-nilin-lightGray cursor-not-allowed"
+                      : "text-nilin-charcoal hover:bg-nilin-blush/30"
+                  )}
+                  aria-label="Last page"
+                >
+                  Last
                 </button>
               </div>
             </div>

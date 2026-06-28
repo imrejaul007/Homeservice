@@ -24,6 +24,7 @@ import authService from '../../services/AuthService';
 export type DisputeStatus = 'open' | 'under_review' | 'resolved' | 'escalated' | 'closed';
 export type DisputeCategory = 'service_quality' | 'no_show' | 'damage' | 'billing' | 'cancellation' | 'communication' | 'other';
 export type ResolutionType = 'refund' | 'partial_refund' | 'no_action' | 'provider_warning' | 'provider_suspended';
+export type AppealStatus = 'none' | 'pending' | 'approved' | 'rejected';
 
 export interface DisputeEvidence {
   _id: string;
@@ -48,6 +49,20 @@ export interface DisputeTimeline {
   performedByRole: string;
   timestamp: string;
   details?: string;
+}
+
+export interface DisputeAppeal {
+  status: AppealStatus;
+  reason: string;
+  submittedAt: string;
+  deadline: string;
+  reviewedAt?: string;
+  reviewNotes?: string;
+  originalResolution?: {
+    type: ResolutionType;
+    amount?: number;
+    reason: string;
+  };
 }
 
 export interface BookingReference {
@@ -76,6 +91,7 @@ export interface Dispute {
     notes?: string;
     resolvedAt: string;
   };
+  appeal?: DisputeAppeal;
   timeline: DisputeTimeline[];
   bookingReference?: BookingReference;
   createdAt: string;

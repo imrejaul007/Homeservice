@@ -20,14 +20,17 @@ import {
   Check,
   RefreshCw,
   ChevronDown,
+  Flame,
   X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import NavigationHeader from '../../components/layout/NavigationHeader';
+import CustomerHubNav from '../../components/customer/CustomerHubNav';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { loyaltyApi, type LoyaltyStatus, type TierBenefits, type TierBenefitsResponse, type PointsHistoryEntry } from '../../services/loyaltyApi';
+import superAppApi from '../../services/superappApi';
 import { api } from '../../services/api';
 
 const RewardsPage: React.FC = () => {
@@ -42,24 +45,47 @@ const RewardsPage: React.FC = () => {
   const [referralCode, setReferralCode] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [pointsHistory, setPointsHistory] = useState<PointsHistoryEntry[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(true);
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [showRedeemModal, setShowRedeemModal] = useState(false);
   const [redeemAmount, setRedeemAmount] = useState(0);
   const [isRedeeming, setIsRedeeming] = useState(false);
-  const [redeemSuccess, setRedeemSuccess] = useState<{ amount: number; newBalance: number } | null>(null);
+  const [redeemSuccess, setRedeemSuccess] = useState<{ amount: number; newBalance: number; aedCredited: number } | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
+
+  const fetchHistory = useCallback(async (page = 1, append = false) => {
+    setIsHistoryLoading(true);
+    try {
+      const historyRes = await loyaltyApi.getHistory({ page, limit: 10 });
+      const entries = historyRes.data?.history ?? [];
+      setPointsHistory(prev => (append ? [...prev, ...entries] : entries));
+      setHistoryPage(historyRes.data?.page ?? page);
+      setHistoryTotal(historyRes.data?.total ?? entries.length);
+      const pages = historyRes.data?.pages ?? 1;
+      setHasMoreHistory(page < pages);
+      if (!append && entries.length > 0) {
+        setIsHistoryExpanded(true);
+      }
+    } catch {
+      if (!append) setPointsHistory([]);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }, []);
 
   const fetchData = useCallback(async (refresh = false) => {
     if (refresh) setIsRefreshing(true);
     else setIsLoading(true);
     setError(null);
     try {
-      const [statusRes, benefitsRes, referralRes, historyRes] = await Promise.all([
+      const [statusRes, benefitsRes, referralRes] = await Promise.all([
         loyaltyApi.getStatus(),
         loyaltyApi.getTierBenefits(),
         api.get('/referrals/my-code').catch(() => null),
-        loyaltyApi.getHistory({ limit: 10 }).catch(() => null),
       ]);
       setLoyaltyStatus(statusRes.data);
 
@@ -69,10 +95,7 @@ const RewardsPage: React.FC = () => {
       }
 
       setAllTierBenefits(benefitsRes.data);
-
-      if (historyRes?.data?.history) {
-        setPointsHistory(historyRes.data.history);
-      }
+      await fetchHistory(1, false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load rewards data';
       setError(message);
@@ -81,7 +104,7 @@ const RewardsPage: React.FC = () => {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [fetchHistory]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -117,16 +140,17 @@ const RewardsPage: React.FC = () => {
     try {
       const result = await loyaltyApi.redeemPoints(redeemAmount);
       if (result.success) {
-        const newBalance = result.newBalance ?? (loyaltyStatus?.coins ?? 0) - redeemAmount;
-        setRedeemSuccess({ amount: redeemAmount, newBalance });
+        const newBalance = result.data?.newBalance ?? (loyaltyStatus?.coins ?? 0) - redeemAmount;
+        const aedCredited = result.data?.aedCredited ?? redeemAmount / 100;
+        setRedeemSuccess({ amount: redeemAmount, newBalance, aedCredited });
         setLoyaltyStatus(prev => prev ? { ...prev, coins: newBalance } : null);
-        toast.success(`Successfully redeemed ${redeemAmount} coins!`);
+        toast.success(`Redeemed ${redeemAmount} coins → AED ${aedCredited.toFixed(2)} wallet credit!`);
 
         setTimeout(() => {
           setShowRedeemModal(false);
           setRedeemSuccess(null);
           setRedeemAmount(0);
-        }, 2000);
+        }, 3000);
       } else {
         setRedeemError(result.message || 'Failed to redeem coins');
       }
@@ -151,6 +175,64 @@ const RewardsPage: React.FC = () => {
     setRedeemError(null);
     setRedeemSuccess(null);
   };
+
+  const handleCheckIn = async () => {
+    if (isCheckedInToday) {
+      toast('Already checked in today');
+      return;
+    }
+    setIsCheckingIn(true);
+    try {
+      const result = await superAppApi.checkIn();
+      if (result.data?.success === false) {
+        toast(result.data.message || 'Already checked in today');
+        return;
+      }
+      const earned = result.data?.pointsEarned ?? 0;
+      const newStreak = result.data?.newStreak ?? loyaltyStatus?.streakDays ?? 0;
+      toast.success(result.data?.message || `+${earned} coins! ${newStreak}-day streak`);
+      setLoyaltyStatus(prev => prev ? {
+        ...prev,
+        streakDays: newStreak,
+        coins: prev.coins + earned,
+        totalEarned: prev.totalEarned + earned,
+        lastCheckIn: new Date().toISOString(),
+        totalCheckIns: (prev.totalCheckIns ?? 0) + 1,
+        longestStreak: Math.max(prev.longestStreak ?? 0, newStreak),
+      } : null);
+      await fetchHistory(1, false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Check-in failed';
+      toast.error(message);
+    } finally {
+      setIsCheckingIn(false);
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    if (!hasMoreHistory || isHistoryLoading) return;
+    await fetchHistory(historyPage + 1, true);
+  };
+
+  const isCheckedInToday = (() => {
+    if (!loyaltyStatus?.lastCheckIn) return false;
+    const last = new Date(loyaltyStatus.lastCheckIn);
+    const today = new Date();
+    return last.toDateString() === today.toDateString();
+  })();
+
+  const coinsRedeemed = loyaltyStatus?.totalSpent ?? 0;
+  const aedRedeemed = (coinsRedeemed / 100).toFixed(2);
+  const streakDays = loyaltyStatus?.streakDays ?? 0;
+  const hasStreakHistory = (loyaltyStatus?.totalCheckIns ?? 0) > 0 || (loyaltyStatus?.longestStreak ?? 0) > 0;
+  const streakBroken = hasStreakHistory && streakDays === 0 && !isCheckedInToday;
+
+  const historyEntryLabel =
+    historyTotal === 0
+      ? 'No activity yet'
+      : historyTotal === 1
+        ? '1 entry'
+        : `${historyTotal.toLocaleString()} entries`;
 
   // Helper to get relative time
   const getRelativeTime = (dateString: string): string => {
@@ -204,6 +286,7 @@ const RewardsPage: React.FC = () => {
   const colors = tierColors[currentTier];
   const tierIndex = ALL_TIERS.indexOf(currentTier as typeof ALL_TIERS[number]);
   const currentTierBenefits = allTierBenefits?.[currentTier as keyof typeof allTierBenefits] ?? null;
+  const earningMultiplier = Math.max(1, currentTierBenefits?.pointsMultiplier ?? 1);
 
   // Skeleton shimmer bar
   const SkeletonBar = ({ className = '' }: { className?: string }) => (
@@ -214,6 +297,7 @@ const RewardsPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
+      <CustomerHubNav />
         <div className="flex-1 space-y-8 animate-pulse">
           {/* Header skeleton */}
           <div className="bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-nilin-xl p-8 text-white">
@@ -266,6 +350,7 @@ const RewardsPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <CustomerHubNav />
 
       <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
@@ -333,7 +418,7 @@ const RewardsPage: React.FC = () => {
                     </div>
                     {loyaltyStatus.nextTier && (
                       <p className="text-sm text-white/80">
-                        {Math.max(0, loyaltyStatus.pointsToNextTier ?? 0).toLocaleString()} pts to {loyaltyStatus.nextTier}
+                        {Math.max(0, loyaltyStatus.pointsToNextTier ?? 0).toLocaleString()} coins to {loyaltyStatus.nextTier}
                       </p>
                     )}
                   </div>
@@ -356,6 +441,56 @@ const RewardsPage: React.FC = () => {
                 )}
               </div>
 
+              {/* Daily Check-in */}
+              <div className="glass-nilin rounded-nilin-xl p-5 mb-6 border border-amber-200/60">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-4">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      streakDays > 0 ? 'bg-amber-100' : 'bg-nilin-muted'
+                    }`}>
+                      <Flame className={`w-6 h-6 ${streakDays > 0 ? 'text-amber-600' : 'text-nilin-warmGray'}`} />
+                    </div>
+                    <div>
+                      <h3 className="font-serif text-lg font-semibold text-nilin-charcoal">Daily Check-in</h3>
+                      <p className="text-sm text-nilin-warmGray">
+                        {isCheckedInToday
+                          ? `Checked in today — ${streakDays} day streak!`
+                          : streakBroken
+                            ? 'Your streak was broken. Check in to start again.'
+                            : streakDays > 0
+                              ? `Don't break your ${streakDays}-day streak — check in today`
+                              : 'Check in daily to earn bonus coins and build your streak'}
+                      </p>
+                      {(loyaltyStatus.longestStreak ?? 0) > 0 && (
+                        <p className="text-xs text-nilin-warmGray mt-1">
+                          Best streak: {loyaltyStatus.longestStreak} days
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCheckIn}
+                    disabled={isCheckingIn || isCheckedInToday}
+                    className="w-full sm:w-auto min-h-[44px] px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-white font-semibold rounded-nilin-lg hover:from-amber-600 hover:to-amber-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 flex items-center justify-center gap-2"
+                  >
+                    {isCheckingIn ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : isCheckedInToday ? (
+                      <>
+                        <Check className="w-5 h-5" />
+                        Checked In
+                      </>
+                    ) : (
+                      <>
+                        <Flame className="w-5 h-5" />
+                        Check In Now
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
               {/* Redeem Coins Banner */}
               <div className="bg-gradient-to-r from-nilin-coral to-nilin-rose rounded-nilin-xl p-5 mb-6 text-white shadow-nilin-warm">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -371,9 +506,11 @@ const RewardsPage: React.FC = () => {
                   <button
                     onClick={openRedeemModal}
                     disabled={(loyaltyStatus?.coins ?? 0) < 100}
-                    className="px-6 py-3 bg-white text-nilin-coral font-semibold rounded-nilin-lg hover:bg-white/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                    className="w-full sm:w-auto min-h-[44px] px-6 py-3 bg-white text-nilin-coral font-semibold rounded-nilin-lg hover:bg-white/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
                   >
-                    Redeem Now
+                    {(loyaltyStatus?.coins ?? 0) < 100
+                      ? `Need ${(100 - (loyaltyStatus?.coins ?? 0)).toLocaleString()} more coins`
+                      : 'Redeem Now'}
                   </button>
                 </div>
               </div>
@@ -389,28 +526,34 @@ const RewardsPage: React.FC = () => {
                 </div>
                 <div className="glass-nilin rounded-nilin-lg p-4 text-center hover:shadow-nilin-sm transition-shadow">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-2 ${
-                    (loyaltyStatus.streakDays ?? 0) > 0 ? 'bg-amber-100' : 'bg-gray-100'
+                    streakDays > 0 ? 'bg-amber-100' : 'bg-gray-100'
                   }`}>
-                    <TrendingUp className={`w-5 h-5 ${(loyaltyStatus.streakDays ?? 0) > 0 ? 'text-amber-600' : 'text-gray-400'}`} />
+                    <TrendingUp className={`w-5 h-5 ${streakDays > 0 ? 'text-amber-600' : 'text-gray-400'}`} />
                   </div>
-                  <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">{loyaltyStatus.streakDays ?? 0}</p>
+                  <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">{streakDays}</p>
                   <p className="text-xs text-nilin-warmGray">Day Streak</p>
-                  {(loyaltyStatus.streakDays ?? 0) === 0 && (
-                    <p className="text-xs text-nilin-warning mt-1">Streak broken!</p>
+                  {streakBroken && (
+                    <p className="text-xs text-nilin-warning mt-1">Streak broken</p>
+                  )}
+                  {!hasStreakHistory && streakDays === 0 && (
+                    <p className="text-xs text-nilin-warmGray mt-1">Check in to start</p>
                   )}
                 </div>
                 <div className="glass-nilin rounded-nilin-lg p-4 text-center hover:shadow-nilin-sm transition-shadow">
                   <div className="w-10 h-10 rounded-full bg-nilin-success/20 flex items-center justify-center mx-auto mb-2">
                     <CheckCircle className="w-5 h-5 text-nilin-success" />
                   </div>
-                  <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">{loyaltyStatus.totalSpent?.toLocaleString() ?? 0}</p>
-                  <p className="text-xs text-nilin-warmGray">AED Redeemed</p>
+                  <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">{coinsRedeemed.toLocaleString()}</p>
+                  <p className="text-xs text-nilin-warmGray">Coins Redeemed</p>
+                  {coinsRedeemed > 0 && (
+                    <p className="text-xs text-nilin-warmGray/80 mt-0.5">≈ AED {aedRedeemed}</p>
+                  )}
                 </div>
                 <div className="glass-nilin rounded-nilin-lg p-4 text-center hover:shadow-nilin-sm transition-shadow">
                   <div className="w-10 h-10 rounded-full bg-nilin-rose/20 flex items-center justify-center mx-auto mb-2">
                     <Zap className="w-5 h-5 text-nilin-rose" />
                   </div>
-                  <p className="text-2xl font-bold text-nilin-charcoal capitalize tabular-nums">{currentTierBenefits?.pointsMultiplier ?? 1}x</p>
+                  <p className="text-2xl font-bold text-nilin-charcoal capitalize tabular-nums">{earningMultiplier}x</p>
                   <p className="text-xs text-nilin-warmGray">Earning Rate</p>
                 </div>
               </div>
@@ -486,7 +629,11 @@ const RewardsPage: React.FC = () => {
                             <div className="flex items-center justify-between">
                               <span className="font-medium text-nilin-charcoal capitalize">{tier}</span>
                               <span className="text-xs text-nilin-warmGray tabular-nums">
-                                {tierReq ? `${tierReq.toLocaleString()}+ pts` : tier === 'bronze' ? '0 pts' : ''}
+                                {isActive
+                                  ? `${(loyaltyStatus.totalEarned ?? 0).toLocaleString()} coins earned`
+                                  : tierReq
+                                    ? `${tierReq.toLocaleString()}+ coins`
+                                    : ''}
                               </span>
                             </div>
                             <p className="text-xs text-nilin-warmGray">
@@ -558,7 +705,7 @@ const RewardsPage: React.FC = () => {
                       </div>
                       <div>
                         <p className="font-medium text-nilin-charcoal text-sm">Book Services</p>
-                        <p className="text-xs text-nilin-warmGray">Earn {(currentTierBenefits?.pointsMultiplier ?? 1)} coins per AED 10 spent</p>
+                        <p className="text-xs text-nilin-warmGray">Earn {earningMultiplier} coins per AED 10 spent</p>
                       </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -575,8 +722,8 @@ const RewardsPage: React.FC = () => {
                         <TrendingUp className="w-4 h-4 text-amber-600" />
                       </div>
                       <div>
-                        <p className="font-medium text-nilin-charcoal text-sm">Maintain Streaks</p>
-                        <p className="text-xs text-nilin-warmGray">Earn bonus coins for consecutive bookings</p>
+                        <p className="font-medium text-nilin-charcoal text-sm">Daily Check-in</p>
+                        <p className="text-xs text-nilin-warmGray">Earn 10+ bonus coins each day you check in</p>
                       </div>
                     </div>
                   </div>
@@ -597,7 +744,7 @@ const RewardsPage: React.FC = () => {
                     <div className="text-left">
                       <h2 className="font-serif text-lg text-nilin-charcoal">Recent Activity</h2>
                       <p className="text-xs text-nilin-warmGray">
-                        {isHistoryLoading ? 'Loading history...' : `${pointsHistory.length} recent entries`}
+                        {isHistoryLoading && pointsHistory.length === 0 ? 'Loading history...' : historyEntryLabel}
                       </p>
                     </div>
                   </div>
@@ -661,12 +808,23 @@ const RewardsPage: React.FC = () => {
                           );
                         })}
 
-                        <button
-                          onClick={() => navigate('/customer/profile?tab=rewards')}
-                          className="w-full mt-4 py-2 text-sm text-nilin-coral hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded"
-                        >
-                          View all activity →
-                        </button>
+                        {hasMoreHistory && (
+                          <button
+                            type="button"
+                            onClick={loadMoreHistory}
+                            disabled={isHistoryLoading}
+                            className="w-full mt-4 min-h-[44px] py-2 text-sm text-nilin-coral hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded flex items-center justify-center gap-2 disabled:opacity-50"
+                          >
+                            {isHistoryLoading ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Loading...
+                              </>
+                            ) : (
+                              'Load more activity →'
+                            )}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -732,12 +890,13 @@ const RewardsPage: React.FC = () => {
                 <div className="w-16 h-16 rounded-full bg-nilin-success/20 flex items-center justify-center mx-auto mb-4">
                   <Check className="w-8 h-8 text-nilin-success" />
                 </div>
-                <p className="text-lg font-semibold text-nilin-success mb-2">Redemption Successful!</p>
-                <p className="text-nilin-charcoal mb-4">
-                  You redeemed <span className="font-bold tabular-nums">{redeemSuccess.amount.toLocaleString()}</span> coins
+                <p className="text-lg font-semibold text-nilin-success mb-2">Coins Redeemed!</p>
+                <p className="text-nilin-charcoal mb-1">
+                  <span className="font-bold tabular-nums">{redeemSuccess.amount.toLocaleString()}</span> coins → <span className="font-bold text-nilin-success">AED {redeemSuccess.aedCredited.toFixed(2)}</span>
                 </p>
+                <p className="text-sm text-nilin-warmGray mb-3">Added to your wallet balance</p>
                 <p className="text-sm text-nilin-warmGray">
-                  New balance: <span className="font-bold tabular-nums">{redeemSuccess.newBalance.toLocaleString()}</span> coins
+                  Remaining coins: <span className="font-bold tabular-nums">{redeemSuccess.newBalance.toLocaleString()}</span>
                 </p>
               </div>
             ) : (
@@ -774,12 +933,12 @@ const RewardsPage: React.FC = () => {
                 {/* Selected Amount Display */}
                 {redeemAmount > 0 && (
                   <div className="bg-nilin-success/10 rounded-nilin-lg p-4 mb-4 text-center">
-                    <p className="text-sm text-nilin-warmGray mb-1">You will receive</p>
+                    <p className="text-sm text-nilin-warmGray mb-1">Wallet credit you will receive</p>
                     <p className="text-2xl font-bold text-nilin-success tabular-nums">
                       AED {(redeemAmount / 100).toFixed(2)}
                     </p>
                     <p className="text-xs text-nilin-warmGray mt-1">
-                      ({redeemAmount.toLocaleString()} coins)
+                      ({redeemAmount.toLocaleString()} coins at 100 coins = AED 1.00)
                     </p>
                   </div>
                 )}

@@ -10,8 +10,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { Activity, TrendingUp, Loader, DollarSign, ShoppingCart, Users, Clock } from 'lucide-react';
+import { Activity, TrendingUp, Loader, DollarSign, ShoppingCart, Users, Clock, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface MarketplaceVelocityProps {
   timeRange?: '24h' | '7d' | '30d' | '90d';
@@ -36,41 +37,40 @@ interface VelocityStats {
   growth: number;
 }
 
-const MOCK_DATA: VelocityData[] = [
-  { timestamp: '00:00', bookings: 12, revenue: 2400, newUsers: 5, transactions: 15 },
-  { timestamp: '04:00', bookings: 5, revenue: 850, newUsers: 2, transactions: 7 },
-  { timestamp: '08:00', bookings: 45, revenue: 9200, newUsers: 18, transactions: 52 },
-  { timestamp: '12:00', bookings: 78, revenue: 15600, newUsers: 32, transactions: 95 },
-  { timestamp: '16:00', bookings: 95, revenue: 19200, newUsers: 45, transactions: 120 },
-  { timestamp: '20:00', bookings: 62, revenue: 12400, newUsers: 28, transactions: 78 },
-];
-
-const MOCK_STATS: VelocityStats = {
-  currentTPS: 125,
-  peakTPS: 245,
-  avgResponseTime: 45,
-  totalBookings: 1847,
-  totalRevenue: 369400,
-  totalUsers: 28450,
-  activeProviders: 892,
-  growth: 15.3,
-};
-
 export const MarketplaceVelocity: React.FC<MarketplaceVelocityProps> = ({
   timeRange = '24h',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<VelocityData[]>(MOCK_DATA);
-  const [stats, setStats] = useState<VelocityStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<VelocityData[]>([]);
+  const [stats, setStats] = useState<VelocityStats>({
+    currentTPS: 0,
+    peakTPS: 0,
+    avgResponseTime: 0,
+    totalBookings: 0,
+    totalRevenue: 0,
+    totalUsers: 0,
+    activeProviders: 0,
+    growth: 0,
+  });
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'bookings' | 'revenue' | 'users'>('bookings');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminMarketplaceVelocity(selectedRange);
+        setData(apiData.timeSeries || []);
+        setStats(apiData.stats);
+      } catch (err) {
+        setData([]);
+        setError(err instanceof Error ? err.message : 'Failed to load marketplace velocity data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [selectedRange]);

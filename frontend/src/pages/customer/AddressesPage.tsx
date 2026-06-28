@@ -17,7 +17,14 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
-import { customerApi, type Address } from '../../services/customerApi';
+import { customerApi, type Address, CustomerApiError } from '../../services/customerApi';
+import toast from 'react-hot-toast';
+
+const getApiErrorMessage = (err: unknown, fallback: string): string => {
+  if (err instanceof CustomerApiError) return err.message;
+  const axiosErr = err as { response?: { data?: { message?: string } } };
+  return axiosErr.response?.data?.message || fallback;
+};
 
 const AddressesPage: React.FC = () => {
   const navigate = useNavigate();
@@ -53,8 +60,8 @@ const AddressesPage: React.FC = () => {
     try {
       const response = await customerApi.getAddresses();
       setAddresses(response.data.addresses);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load addresses');
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Failed to load addresses'));
     } finally {
       setIsLoading(false);
     }
@@ -75,8 +82,11 @@ const AddressesPage: React.FC = () => {
       setEditingAddress(null);
       resetForm();
       fetchAddresses();
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to save address');
+      toast.success(editingAddress ? 'Address updated' : 'Address added');
+    } catch (err) {
+      const message = getApiErrorMessage(err, 'Failed to save address');
+      setError(message);
+      toast.error(message);
     } finally {
       setIsSaving(false);
     }
@@ -88,8 +98,11 @@ const AddressesPage: React.FC = () => {
     try {
       await customerApi.deleteAddress(addressId);
       fetchAddresses();
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to delete address');
+      toast.success('Address deleted');
+    } catch (err) {
+      const message = getApiErrorMessage(err, 'Failed to delete address');
+      setError(message);
+      toast.error(message);
     }
   };
 
@@ -111,8 +124,11 @@ const AddressesPage: React.FC = () => {
     try {
       await customerApi.setDefaultAddress(addressId);
       fetchAddresses();
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to set default address');
+      toast.success('Default address updated');
+    } catch (err) {
+      const message = getApiErrorMessage(err, 'Failed to set default address');
+      setError(message);
+      toast.error(message);
     }
   };
 

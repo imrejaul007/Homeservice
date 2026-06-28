@@ -10,10 +10,10 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
 } from 'recharts';
-import { PieChart as PieIcon, Loader, TrendingUp } from 'lucide-react';
+import { PieChart as PieIcon, Loader, TrendingUp, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface CategoryDistributionProps {
   customerId?: string;
@@ -38,33 +38,23 @@ interface CategoryStats {
 }
 
 const COLORS = [
-  '#2563EB', // Blue
-  '#7C3AED', // Purple
-  '#10B981', // Green
-  '#F59E0B', // Amber
-  '#EF4444', // Red
-  '#8B5CF6', // Violet
-  '#EC4899', // Pink
-  '#14B8A6', // Teal
-  '#F97316', // Orange
-  '#6366F1', // Indigo
+  '#2563EB',
+  '#7C3AED',
+  '#10B981',
+  '#F59E0B',
+  '#EF4444',
+  '#8B5CF6',
+  '#EC4899',
+  '#14B8A6',
+  '#F97316',
+  '#6366F1',
 ];
 
-const MOCK_DATA: CategoryData[] = [
-  { categoryId: '1', categoryName: 'Home Cleaning', count: 45, revenue: 9450, percentage: 32.4, trend: 15, color: COLORS[0] },
-  { categoryId: '2', categoryName: 'Beauty & Spa', count: 32, revenue: 7680, percentage: 23.2, trend: 8, color: COLORS[1] },
-  { categoryId: '3', categoryName: 'Plumbing', count: 18, revenue: 5400, percentage: 13.0, trend: -5, color: COLORS[2] },
-  { categoryId: '4', categoryName: 'Electrical', count: 15, revenue: 4500, percentage: 10.9, trend: 12, color: COLORS[3] },
-  { categoryId: '5', categoryName: 'AC Repair', count: 12, revenue: 3600, percentage: 8.7, trend: 22, color: COLORS[4] },
-  { categoryId: '6', categoryName: 'Gardening', count: 10, revenue: 2000, percentage: 7.2, trend: -2, color: COLORS[5] },
-  { categoryId: '7', categoryName: 'Other', count: 7, revenue: 1370, percentage: 4.6, trend: 5, color: COLORS[6] },
-];
-
-const MOCK_STATS: CategoryStats = {
-  topCategory: 'Home Cleaning',
-  totalCategories: 7,
-  mostUsedCategory: 'Home Cleaning',
-  fastestGrowingCategory: 'AC Repair',
+const EMPTY_STATS: CategoryStats = {
+  topCategory: 'N/A',
+  totalCategories: 0,
+  mostUsedCategory: 'N/A',
+  fastestGrowingCategory: 'N/A',
 };
 
 export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
@@ -72,18 +62,47 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
   timeRange = '90d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<CategoryData[]>(MOCK_DATA);
-  const [stats, setStats] = useState<CategoryStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<CategoryData[]>([]);
+  const [stats, setStats] = useState<CategoryStats>(EMPTY_STATS);
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'pie' | 'bar'>('pie');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getCustomerCategoryDistribution(selectedRange, customerId);
+        const categories = (apiData.categories || []).map((category, index) => ({
+          categoryId: category.categoryId,
+          categoryName: category.categoryName,
+          count: category.bookingCount,
+          revenue: category.totalSpent,
+          percentage: category.percentage,
+          trend: 0,
+          color: COLORS[index % COLORS.length],
+        }));
+
+        const mostUsed = [...categories].sort((a, b) => b.count - a.count)[0];
+
+        setData(categories);
+        setStats({
+          topCategory: apiData.topCategory || 'N/A',
+          totalCategories: categories.length,
+          mostUsedCategory: mostUsed?.categoryName || 'N/A',
+          fastestGrowingCategory: categories[0]?.categoryName || 'N/A',
+        });
+      } catch (err) {
+        setData([]);
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load category distribution');
+      } finally {
+        setLoading(false);
+      }
     };
+
     fetchData();
   }, [customerId, selectedRange]);
 
@@ -101,10 +120,7 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
       return (
         <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-200">
           <div className="flex items-center gap-2 mb-2">
-            <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: item.color }}
-            />
+            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }} />
             <p className="font-semibold text-gray-900">{item.categoryName}</p>
           </div>
           <div className="space-y-1 text-sm">
@@ -117,9 +133,6 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
             <p className="text-gray-600">
               Share: <span className="font-medium">{item.percentage.toFixed(1)}%</span>
             </p>
-            <p className={item.trend >= 0 ? 'text-green-600' : 'text-red-600'}>
-              Trend: <span className="font-medium">{item.trend >= 0 ? '+' : ''}{item.trend}%</span>
-            </p>
           </div>
         </div>
       );
@@ -131,10 +144,7 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
     <div className="flex flex-wrap justify-center gap-3 mt-4">
       {data.slice(0, 5).map((entry) => (
         <div key={entry.categoryId} className="flex items-center gap-2">
-          <div
-            className="w-3 h-3 rounded-full"
-            style={{ backgroundColor: entry.color }}
-          />
+          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }} />
           <span className="text-xs text-gray-600">{entry.categoryName}</span>
         </div>
       ))}
@@ -157,7 +167,6 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
       animate={{ opacity: 1, y: 0 }}
       className="bg-white rounded-xl shadow-sm border border-gray-200 p-6"
     >
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -169,9 +178,7 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
           </p>
         </div>
 
-        {/* Controls */}
         <div className="flex items-center gap-3">
-          {/* View Mode Toggle */}
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             <button
               onClick={() => setViewMode('pie')}
@@ -195,7 +202,6 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
             </button>
           </div>
 
-          {/* Time Range */}
           <select
             value={selectedRange}
             onChange={(e) => setSelectedRange(e.target.value as typeof selectedRange)}
@@ -210,7 +216,13 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {error && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="bg-gray-50 rounded-lg p-4">
           <p className="text-sm text-gray-500 mb-1">Top Category</p>
@@ -225,18 +237,25 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
         </div>
 
         <div className="bg-gray-50 rounded-lg p-4">
-          <p className="text-sm text-gray-500 mb-1">Fastest Growing</p>
+          <p className="text-sm text-gray-500 mb-1">Most Booked</p>
           <div className="flex items-center gap-1">
             <TrendingUp className="h-4 w-4 text-green-600" />
-            <p className="text-lg font-bold text-green-600">{stats.fastestGrowingCategory}</p>
+            <p className="text-lg font-bold text-green-600">{stats.mostUsedCategory}</p>
           </div>
         </div>
       </div>
 
-      {/* Chart */}
       {loading ? (
         <div className="h-64 flex items-center justify-center">
           <Loader className="h-8 w-8 text-purple-600 animate-spin" />
+        </div>
+      ) : data.length === 0 ? (
+        <div className="h-64 flex flex-col items-center justify-center text-center">
+          <PieIcon className="h-10 w-10 text-gray-300 mb-3" />
+          <p className="text-sm font-medium text-gray-700">No category data yet</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Complete bookings to see how your spend is distributed across categories.
+          </p>
         </div>
       ) : viewMode === 'pie' ? (
         <div className="h-72">
@@ -276,11 +295,7 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
                 width={75}
               />
               <Tooltip content={<CustomTooltip />} />
-              <Bar
-                dataKey="percentage"
-                name="Share"
-                radius={[0, 4, 4, 0]}
-              >
+              <Bar dataKey="percentage" name="Share" radius={[0, 4, 4, 0]}>
                 {data.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.color} />
                 ))}
@@ -290,43 +305,30 @@ export const CategoryDistribution: React.FC<CategoryDistributionProps> = ({
         </div>
       )}
 
-      {/* Category List */}
-      <div className="mt-6 pt-6 border-t border-gray-200">
-        <h4 className="text-sm font-medium text-gray-900 mb-3">All Categories</h4>
-        <div className="space-y-2">
-          {data.map((category) => (
-            <div
-              key={category.categoryId}
-              className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: category.color }}
-                />
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{category.categoryName}</p>
-                  <p className="text-xs text-gray-500">{category.count} bookings</p>
+      {!loading && data.length > 0 && (
+        <div className="mt-6 pt-6 border-t border-gray-200">
+          <h4 className="text-sm font-medium text-gray-900 mb-3">All Categories</h4>
+          <div className="space-y-2">
+            {data.map((category) => (
+              <div
+                key={category.categoryId}
+                className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: category.color }} />
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{category.categoryName}</p>
+                    <p className="text-xs text-gray-500">{category.count} bookings</p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-4">
                 <span className="text-sm font-medium text-gray-900">
                   {formatCurrency(category.revenue)}
                 </span>
-                <span
-                  className={`text-xs font-medium px-2 py-0.5 rounded ${
-                    category.trend >= 0
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-red-100 text-red-700'
-                  }`}
-                >
-                  {category.trend >= 0 ? '+' : ''}{category.trend}%
-                </span>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </motion.div>
   );
 };

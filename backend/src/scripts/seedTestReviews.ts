@@ -176,36 +176,42 @@ async function seedReviews() {
     console.log(`\n📋 Created/Found ${customerIds.length} test customers`);
     console.log();
 
-    // Create bookings and reviews
+    // Create bookings and reviews using batch operations
     const recentReviews: any[] = [];
     const reviewsCollection = db.collection('reviews');
     const bookingsCollection = db.collection('bookings');
+    const CHUNK_SIZE = 100;
+
+    // Prepare all booking and review data
+    const bookingsToCreate: any[] = [];
+    const reviewsToCreate: any[] = [];
 
     for (let i = 0; i < TEST_REVIEWS.length; i++) {
       const testReview = TEST_REVIEWS[i];
       const customerId = customerIds[i];
+      const reviewId = new mongoose.Types.ObjectId();
+      const bookingId = new mongoose.Types.ObjectId();
 
-      // Create a booking
+      // Prepare booking data
       const booking = {
-        _id: new mongoose.Types.ObjectId(),
+        _id: bookingId,
         bookingNumber: `BK-${Date.now()}-${i + 1}`,
         customerId: new mongoose.Types.ObjectId(customerId),
         providerId: new mongoose.Types.ObjectId(providerProfile.userId),
         serviceId: serviceForReviews._id,
         status: 'completed',
-        scheduledDate: new Date(Date.now() - (i + 1) * 24 * 60 * 60 * 1000), // Days ago
+        scheduledDate: new Date(Date.now() - (i + 1) * 24 * 60 * 60 * 1000),
         scheduledTime: '10:00',
         completedAt: new Date(Date.now() - i * 24 * 60 * 60 * 1000),
         createdAt: new Date(Date.now() - (i + 2) * 24 * 60 * 60 * 1000),
-        customerReview: null as mongoose.Types.ObjectId | null
+        customerReview: reviewId
       };
+      bookingsToCreate.push(booking);
 
-      await bookingsCollection.insertOne(booking);
-
-      // Create a review
+      // Prepare review data
       const review = {
-        _id: new mongoose.Types.ObjectId(),
-        bookingId: booking._id,
+        _id: reviewId,
+        bookingId: bookingId,
         reviewerId: new mongoose.Types.ObjectId(customerId),
         reviewerType: 'customer',
         revieweeId: new mongoose.Types.ObjectId(providerProfile.userId),
@@ -221,19 +227,12 @@ async function seedReviews() {
         createdAt: new Date(Date.now() - i * 24 * 60 * 60 * 1000),
         updatedAt: new Date(Date.now() - i * 24 * 60 * 60 * 1000)
       };
-
-      await reviewsCollection.insertOne(review);
-
-      // Update booking with review reference
-      await bookingsCollection.updateOne(
-        { _id: booking._id },
-        { $set: { customerReview: review._id } }
-      );
+      reviewsToCreate.push(review);
 
       // Add to recentReviews array for provider profile
       recentReviews.push({
         customerId: new mongoose.Types.ObjectId(customerId),
-        bookingId: booking._id,
+        bookingId: bookingId,
         serviceId: serviceForReviews._id,
         rating: testReview.rating,
         title: testReview.title,
@@ -243,8 +242,42 @@ async function seedReviews() {
         helpfulVotes: 0,
         createdAt: review.createdAt
       });
+    }
 
-      console.log(`   ✅ Created review: ${testReview.customerName} - ${testReview.rating} stars`);
+    // Use transaction for batch operations
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // Bulk insert bookings in chunks
+      for (let i = 0; i < bookingsToCreate.length; i += CHUNK_SIZE) {
+        const chunk = bookingsToCreate.slice(i, i + CHUNK_SIZE);
+        await bookingsCollection.insertMany(chunk, { session });
+      }
+
+      // Bulk insert reviews in chunks
+      for (let i = 0; i < reviewsToCreate.length; i += CHUNK_SIZE) {
+        const chunk = reviewsToCreate.slice(i, i + CHUNK_SIZE);
+        await reviewsCollection.insertMany(chunk, { session });
+      }
+
+      // Bulk update booking statuses (already set in the document, but keeping for explicit status update)
+      await bookingsCollection.updateMany(
+        { _id: { $in: bookingsToCreate.map(b => b._id) } },
+        { $set: { status: 'completed', customerReview: reviewsToCreate.find(r => r.bookingId === bookingsToCreate[0]._id)?._id || null } },
+        { session }
+      );
+
+      await session.commitTransaction();
+
+      for (let i = 0; i < TEST_REVIEWS.length; i++) {
+        console.log(`   ✅ Batch insert: ${TEST_REVIEWS[i].customerName} - ${TEST_REVIEWS[i].rating} stars`);
+      }
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
     }
 
     // Update provider profile with recent reviews

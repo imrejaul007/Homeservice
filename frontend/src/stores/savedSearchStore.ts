@@ -50,7 +50,8 @@ export const useSavedSearchStore = create<SavedSearchState>()(
       clearAll: () => set({ searches: [] }),
     }),
     {
-      name: 'nilin-book-saved-searches', // localStorage key
+      name: 'nilin-book-saved-searches',
+      version: 1,
     }
   )
 );

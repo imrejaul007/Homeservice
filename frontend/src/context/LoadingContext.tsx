@@ -34,7 +34,7 @@ export function LoadingProvider({ children }: { children: React.ReactNode }) {
     loadingTimeoutRef.current = setTimeout(() => {
       setIsLoading(false);
       setLoadingMessageState(undefined);
-    }, 300);
+    }, 100);
   }, []);
 
   const setLoading = useCallback((loading: boolean) => {

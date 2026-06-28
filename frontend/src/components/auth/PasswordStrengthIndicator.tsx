@@ -180,17 +180,26 @@ export const validatePassword = (password: string): { valid: boolean; errors: st
 };
 
 // Get password strength score (0-4)
+// Requires 12+ chars for maximum score (aligns with password policy)
 export const getPasswordStrength = (password: string): number => {
   if (!password) return 0;
 
   let score = 0;
+  // Length scoring - 12+ chars required for best score
   if (password.length >= 8) score++;
   if (password.length >= 12) score++;
+  if (password.length >= 16) score++;
+  // Character type requirements
   if (/[a-z]/.test(password)) score++;
   if (/[A-Z]/.test(password)) score++;
   if (/\d/.test(password)) score++;
   if (/[@$!%*?&]/.test(password)) score++;
-  if (password.length >= 16) score++;
 
-  return Math.min(4, Math.floor(score / 2));
+  // Score distribution: 0-1=weak, 2=fair, 3-4=good, 5+=strong
+  // Max score of 4 requires meeting length + all character requirements
+  if (score <= 1) return 0; // Weak
+  if (score <= 2) return 1; // Fair
+  if (score <= 4) return 2; // Good
+  if (score <= 6) return 3; // Strong
+  return 4; // Very Strong
 };

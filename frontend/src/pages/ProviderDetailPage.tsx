@@ -19,7 +19,8 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { toast } from 'react-hot-toast';
+import { showDeduplicatedError } from '../utils/toastUtils';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import ServiceReviews from '../components/service/ServiceReviews';
@@ -279,7 +280,7 @@ const ProviderDetailPage: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
-      toast.error('Failed to update favorites. Please try again.');
+      showDeduplicatedError('Failed to update favorites', 'Please try again.');
     } finally {
       setIsTogglingFavorite(false);
     }

@@ -295,6 +295,38 @@ export const deleteApiKey = asyncHandler(async (req: Request, res: Response) => 
 });
 
 /**
+ * DELETE /api/admin/api-keys/bulk
+ * Bulk delete API keys
+ */
+export const bulkDeleteApiKeys = asyncHandler(async (req: Request, res: Response) => {
+  const { ids } = req.body;
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw ApiError.badRequest('Request body must contain an array of API key IDs', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const invalidIds = ids.filter((id: string) => !mongoose.Types.ObjectId.isValid(id));
+  if (invalidIds.length > 0) {
+    throw ApiError.badRequest(`Invalid API key IDs: ${invalidIds.join(', ')}`, [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const result = await AdminApiKey.deleteMany({ _id: { $in: ids } });
+
+  logger.info('Bulk API keys deleted', {
+    action: 'BULK_API_KEYS_DELETED',
+    ids,
+    deletedCount: result.deletedCount,
+    requestedBy: (req as any).user?._id,
+  });
+
+  res.json({
+    success: true,
+    message: `${result.deletedCount} API key(s) deleted`,
+    data: { processed: ids.length, deletedCount: result.deletedCount }
+  });
+});
+
+/**
  * POST /api/admin/api-keys/:id/regenerate
  * Regenerate an API key (creates a new key value, keeps same metadata)
  */
@@ -454,6 +486,12 @@ router.get('/', getAllApiKeys);
  * Create a new API key
  */
 router.post('/', createApiKey);
+
+/**
+ * DELETE /api/admin/api-keys/bulk
+ * Bulk delete API keys
+ */
+router.delete('/bulk', bulkDeleteApiKeys);
 
 // ============================================
 // ROUTES WITH :id - Specific routes BEFORE parameterized /:id

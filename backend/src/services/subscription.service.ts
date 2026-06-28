@@ -730,33 +730,37 @@ export class SubscriptionService {
     }
 
     // Handle cancelled subscriptions
+    const now = new Date();
     const cancelledSubscriptions = await UserSubscription.find({
       cancelAtPeriodEnd: true,
-      currentPeriodEnd: { $lt: new Date() },
+      currentPeriodEnd: { $lt: now },
     });
 
-    for (const subscription of cancelledSubscriptions) {
-      try {
-        subscription.status = 'cancelled';
-        subscription.cancelledAt = new Date();
-        subscription.plan = 'free'; // Downgrade to free
-        subscription.price = 0;
-        await subscription.save();
-        result.cancelled++;
+    if (cancelledSubscriptions.length > 0) {
+      const cancelledSubscriptionIds = cancelledSubscriptions.map((s: IUserSubscription) => s._id);
 
-        // Emit event
+      // Bulk update cancelled subscriptions
+      await UserSubscription.updateMany(
+        { _id: { $in: cancelledSubscriptionIds } },
+        {
+          $set: {
+            status: 'cancelled',
+            cancelledAt: now,
+            plan: 'free',
+            price: 0
+          }
+        }
+      );
+
+      // Emit events for each cancelled subscription
+      for (const subscription of cancelledSubscriptions) {
         eventBus.publish(EVENT_TYPES.SUBSCRIPTION_EXPIRED, {
           subscriptionId: subscription._id,
           userId: subscription.userId,
         });
-      } catch (error) {
-        logger.error('Failed to cancel subscription', {
-          context: 'SubscriptionService',
-          action: 'CANCEL_FAILED',
-          subscriptionId: subscription._id.toString(),
-          error: error instanceof Error ? error.message : String(error),
-        });
       }
+
+      result.cancelled = cancelledSubscriptions.length;
     }
 
     return result;
@@ -767,25 +771,37 @@ export class SubscriptionService {
    */
   async processExpiredSubscriptions(): Promise<number> {
     const expiredSubscriptions = await UserSubscription.findExpired();
-    let processed = 0;
 
-    for (const subscription of expiredSubscriptions) {
-      if (!subscription.cancelAtPeriodEnd) {
-        subscription.status = 'expired';
-        subscription.plan = 'free'; // Downgrade to free
-        subscription.price = 0;
-        await subscription.save();
-        processed++;
+    // Filter out subscriptions that will be cancelled (already handled in processRenewals)
+    const toExpire = expiredSubscriptions.filter((s: IUserSubscription) => !s.cancelAtPeriodEnd);
 
-        // Emit event
+    if (toExpire.length > 0) {
+      const expiredSubscriptionIds = toExpire.map((s: IUserSubscription) => s._id);
+
+      // Bulk update expired subscriptions
+      await UserSubscription.updateMany(
+        { _id: { $in: expiredSubscriptionIds } },
+        {
+          $set: {
+            status: 'expired',
+            plan: 'free',
+            price: 0
+          }
+        }
+      );
+
+      // Emit events for each expired subscription
+      for (const subscription of toExpire) {
         eventBus.publish(EVENT_TYPES.SUBSCRIPTION_EXPIRED, {
           subscriptionId: subscription._id,
           userId: subscription.userId,
         });
       }
+
+      return toExpire.length;
     }
 
-    return processed;
+    return 0;
   }
 
   // ========================================
@@ -833,6 +849,7 @@ export class SubscriptionService {
 
   /**
    * Get subscription statistics (admin)
+   * FIX #10: Proper MRR calculation using aggregation pipeline
    */
   async getStats(): Promise<{
     byPlan: Record<string, { count: number; totalRevenue: number }>;
@@ -845,14 +862,65 @@ export class SubscriptionService {
     const totalSubscriptions = await UserSubscription.countDocuments();
     const activeSubscriptions = await UserSubscription.countDocuments({ status: 'active' });
 
-    // Calculate MRR (monthly recurring revenue)
-    const active = await UserSubscription.find({ status: 'active' });
-    const mrr = active.reduce((sum: number, sub: any) => {
-      if (sub.billingCycle === 'yearly') {
-        return sum + (sub.price / 12);
-      }
-      return sum + sub.price;
-    }, 0);
+    // FIX #10: Proper MRR calculation using aggregation
+    // MRR = Sum of (subscription monthly value) for all active subscriptions
+    // For yearly subscriptions: price / 12 = monthly value
+    // For monthly subscriptions: price = monthly value
+    // Use billingCycleMonths for dynamic billing cycle support
+    const mrrData = await UserSubscription.aggregate([
+      {
+        $match: { status: 'active', isDeleted: { $ne: true } },
+      },
+      {
+        $addFields: {
+          // Normalize billing cycle to months (default to 1 for monthly, 12 for yearly)
+          billingCycleMonths: {
+            $switch: {
+              branches: [
+                { case: { $eq: ['$billingCycle', 'yearly'] }, then: 12 },
+                { case: { $eq: ['$billingCycle', 'quarterly'] }, then: 3 },
+                { case: { $eq: ['$billingCycle', 'weekly'] }, then: 1 / 4 },
+              ],
+              default: 1, // monthly
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          // FIX #10: Properly calculate monthly value by dividing by cycle length
+          monthlyValue: { $divide: ['$price', '$billingCycleMonths'] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalMrr: { $sum: '$monthlyValue' },
+          count: { $sum: 1 },
+          byPlan: {
+            $push: {
+              plan: '$plan',
+              monthlyValue: '$monthlyValue',
+            },
+          },
+        },
+      },
+    ]);
+
+    // Fallback to simple calculation if aggregation returns empty
+    let mrr = 0;
+    if (mrrData.length > 0 && mrrData[0].totalMrr !== undefined) {
+      mrr = mrrData[0].totalMrr;
+    } else {
+      // Fallback: simple query-based calculation
+      const active = await UserSubscription.find({ status: 'active' });
+      mrr = active.reduce((sum: number, sub: any) => {
+        if (sub.billingCycle === 'yearly') {
+          return sum + (sub.price / 12);
+        }
+        return sum + sub.price;
+      }, 0);
+    }
 
     return {
       ...stats,

@@ -125,4 +125,15 @@ export const adminCouponApi = {
     const response = await api.delete(`/admin/coupons/${id}`);
     return response.data;
   },
+
+  // Bulk operations
+  bulkDeactivate: async (ids: string[]) => {
+    const response = await api.post('/admin/coupons/bulk/deactivate', { ids });
+    return response.data;
+  },
+
+  bulkDelete: async (ids: string[]) => {
+    const response = await api.delete('/admin/coupons/bulk', { data: { ids } });
+    return response.data;
+  },
 };

@@ -8,10 +8,42 @@ import type {
   FeaturedProvidersResponse,
 } from '@/types/provider';
 
+export class ProviderApiError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'ProviderApiError';
+  }
+}
+
+function toProviderError(error: unknown, fallback: string, code: string): ProviderApiError {
+  const err = error as AxiosError;
+  const message =
+    (err.response?.data as { message?: string })?.message || err.message || fallback;
+  console.error(`[providerApi] ${code}:`, message, err.response?.status);
+  return new ProviderApiError(message, err.response?.status, code);
+}
+
 const api = axios.create({
   baseURL: `${API_BASE_URL}/providers`,
   timeout: 10000,
+  withCredentials: true,
 });
+
+api.interceptors.request.use(
+  (config) => {
+    config.headers['X-Correlation-ID'] = generateCorrelationId();
+    const tokens = getAuthTokens();
+    if (tokens?.accessToken) {
+      config.headers.Authorization = `Bearer ${tokens.accessToken}`;
+    }
+    return config;
+  },
+  (error: AxiosError) => Promise.reject(error)
+);
 
 // Analytics API base - uses a different endpoint structure
 const analyticsApi = axios.create({
@@ -191,8 +223,12 @@ export const providerApi = {
   getProviderById: async (id: string): Promise<ProviderResponse> => {
     const requestKey = `provider:${id}`;
     return getDeduplicatedRequest(requestKey, async () => {
-      const response = await api.get(`/${id}`);
-      return response.data as ProviderResponse;
+      try {
+        const response = await api.get(`/${id}`);
+        return response.data as ProviderResponse;
+      } catch (error) {
+        throw toProviderError(error, 'Failed to fetch provider', 'GET_PROVIDER_FAILED');
+      }
     });
   },
 
@@ -207,8 +243,12 @@ export const providerApi = {
   ): Promise<ProvidersByCategoryResponse> => {
     const requestKey = `providers:category:${categorySlug}:${JSON.stringify(options || {})}`;
     return getDeduplicatedRequest(requestKey, async () => {
-      const response = await api.get(`/category/${categorySlug}`, { params: options });
-      return response.data as ProvidersByCategoryResponse;
+      try {
+        const response = await api.get(`/category/${categorySlug}`, { params: options });
+        return response.data as ProvidersByCategoryResponse;
+      } catch (error) {
+        throw toProviderError(error, 'Failed to fetch providers by category', 'GET_PROVIDERS_BY_CATEGORY_FAILED');
+      }
     });
   },
 
@@ -224,10 +264,14 @@ export const providerApi = {
   ): Promise<ProvidersBySubcategoryResponse> => {
     const requestKey = `providers:subcategory:${categorySlug}:${subcategorySlug}:${JSON.stringify(options || {})}`;
     return getDeduplicatedRequest(requestKey, async () => {
-      const response = await api.get(`/subcategory/${categorySlug}/${subcategorySlug}`, {
-        params: options,
-      });
-      return response.data as ProvidersBySubcategoryResponse;
+      try {
+        const response = await api.get(`/subcategory/${categorySlug}/${subcategorySlug}`, {
+          params: options,
+        });
+        return response.data as ProvidersBySubcategoryResponse;
+      } catch (error) {
+        throw toProviderError(error, 'Failed to fetch providers by subcategory', 'GET_PROVIDERS_BY_SUBCATEGORY_FAILED');
+      }
     });
   },
 
@@ -239,8 +283,12 @@ export const providerApi = {
   getFeaturedProviders: async (limit?: number): Promise<FeaturedProvidersResponse> => {
     const requestKey = `providers:featured:${limit || 'all'}`;
     return getDeduplicatedRequest(requestKey, async () => {
-      const response = await api.get('/featured', { params: { limit } });
-      return response.data as FeaturedProvidersResponse;
+      try {
+        const response = await api.get('/featured', { params: { limit } });
+        return response.data as FeaturedProvidersResponse;
+      } catch (error) {
+        throw toProviderError(error, 'Failed to fetch featured providers', 'GET_FEATURED_PROVIDERS_FAILED');
+      }
     });
   },
 };

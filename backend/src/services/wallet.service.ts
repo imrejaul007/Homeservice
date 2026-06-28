@@ -109,13 +109,12 @@ const creditWalletInternal = async (
     status: 'completed' as const,
     metadata: data.metadata,
     createdAt: new Date(),
+    balanceAfter: 0, // placeholder — updated atomically after balance increment
   };
 
-  // Build query with tenant isolation
+  // Wallets are globally unique per userId (unique index). Querying by userId alone is
+  // correct here — adding tenantId would cause misses if the wallet was created without one.
   const baseQuery: any = { userId: data.userId };
-  if (!isAdmin && tenantId) {
-    baseQuery.tenantId = tenantId;
-  }
 
   // SECURITY FIX: If duplicate prevention is requested, use atomic check-and-credit
   // This prevents race conditions where two requests could both pass a check
@@ -311,37 +310,53 @@ const creditWalletInternal = async (
   }
 
   if (!result.wallet) {
-    // Wallet doesn't exist, create it with the credit
-    const newWalletData: any = {
-      userId: data.userId,
-      balance: data.amount,
-      currency: 'AED',
-      transactions: [transaction],
-      pendingBalance: 0,
-      totalEarned: data.amount,
-      totalSpent: 0,
-      version: 1, // Initialize version
+    // Wallet not found via findOneAndUpdate (may not exist, or was just created by concurrent request).
+    // Use upsert to atomically create-or-credit in one operation, avoiding duplicate key races.
+    const upsertUpdate: any = {
+      $setOnInsert: {
+        currency: 'AED',
+        pendingBalance: 0,
+        totalSpent: 0,
+        ...(tenantId ? { tenantId } : {}),
+      },
+      $inc: {
+        balance: data.amount,
+        totalEarned: data.amount,
+        version: 1,
+      },
+      $set: {
+        lastTransactionAt: new Date(),
+        lastTransactionType: 'credit',
+      },
+      $push: {
+        transactions: { ...transaction, balanceAfter: data.amount },
+      },
     };
 
-    // Set tenantId for multi-tenant isolation
-    if (tenantId) {
-      newWalletData.tenantId = tenantId;
-    }
+    const upsertedWallet = await Wallet.findOneAndUpdate(
+      { userId: data.userId },
+      upsertUpdate,
+      { new: true, upsert: true, session }
+    );
 
-    const newWallet = await Wallet.create([newWalletData], { session }).then(wallets => wallets[0]);
+    // Correct balanceAfter to the real post-upsert balance
+    await Wallet.updateOne(
+      { userId: data.userId, 'transactions.id': transactionId },
+      { $set: { 'transactions.$.balanceAfter': upsertedWallet.balance } }
+    ).session(session || null);
 
-    logger.info('Wallet created and credited (atomic)', {
+    logger.info('Wallet upserted and credited (atomic)', {
       userId: data.userId,
       tenantId,
       amount: data.amount,
-      newBalance: newWallet.balance,
+      newBalance: upsertedWallet.balance,
       reference: data.reference,
-      action: 'WALLET_CREATED_AND_CREDITED',
+      action: 'WALLET_UPSERTED_AND_CREDITED',
     });
 
     return {
       success: true,
-      newBalance: newWallet.balance,
+      newBalance: upsertedWallet.balance,
       transactionId: transactionId,
     };
   }
@@ -412,6 +427,11 @@ const debitWalletInternal = async (
   isAdmin?: boolean,
   session?: mongoose.ClientSession
 ): Promise<TransactionResult> => {
+  // CRITICAL FIX: Validate amount is a positive finite number
+  if (!Number.isFinite(data.amount) || data.amount <= 0) {
+    return { success: false, newBalance: 0, error: 'Invalid amount: must be positive number' };
+  }
+
   const transactionId = `txn_${randomUUID()}`;
   const transaction = {
     id: transactionId,
@@ -423,14 +443,13 @@ const debitWalletInternal = async (
     status: 'completed' as const,
     metadata: data.metadata,
     createdAt: new Date(),
+    balanceAfter: 0, // placeholder — updated atomically after balance decrement
   };
 
   // CRITICAL FIX: Use atomic findOneAndUpdate with optimistic locking and retry
   // This prevents race conditions by combining read-check-write into a single atomic operation
+  // Wallets are unique per userId — tenantId filter would miss wallets created without one.
   const baseQuery: any = { userId: data.userId };
-  if (!isAdmin && tenantId) {
-    baseQuery.tenantId = tenantId;
-  }
 
   const MAX_RETRIES = 3;
 
@@ -826,6 +845,11 @@ export const getTransaction = async (
 // Process booking payment to provider (tenant-isolated)
 export const processProviderPayout = async (bookingId: string, req?: Request): Promise<TransactionResult> => {
   try {
+    // CRITICAL FIX: Authorization check - only admin or system can trigger payouts
+    if (!req?.user?.role || !['admin', 'system'].includes(req.user.role)) {
+      return { success: false, newBalance: 0, error: 'Unauthorized: Admin access required' };
+    }
+
     const tenantId = req ? getTenantIdOptional(req) : undefined;
     const isAdmin = req ? isAdminOrSystem(req) : false;
 

@@ -74,6 +74,7 @@ export interface IUser extends Document {
   loyaltySystem: {
     coins: number;
     tier: 'bronze' | 'silver' | 'gold' | 'platinum';
+    tierChangedAt?: Date;
     referralCode: string;
     referredBy?: mongoose.Types.ObjectId;
     streakDays: number;
@@ -129,6 +130,7 @@ export interface IUser extends Document {
       newMessages: boolean;
       promotions: boolean;
       marketing?: boolean;
+      disputeUpdates?: boolean;
     };
     telegram?: {
       enabled: boolean;
@@ -225,6 +227,9 @@ export interface IUser extends Document {
   accountStatus: AccountStatus;
   isEmailVerified: boolean;
   isPhoneVerified: boolean;
+  emailBounceAt?: Date;
+  emailBounceType?: string;
+  emailComplaintAt?: Date;
   isActive: boolean;
   isDeleted: boolean;
   
@@ -610,11 +615,12 @@ const userSchema = new Schema<IUser>(
     // Loyalty System Fields
     loyaltySystem: {
       coins: { type: Number, default: 0, min: 0 },
-      tier: { 
-        type: String, 
-        enum: ['bronze', 'silver', 'gold', 'platinum'], 
-        default: 'bronze' 
+      tier: {
+        type: String,
+        enum: ['bronze', 'silver', 'gold', 'platinum'],
+        default: 'bronze'
       },
+      tierChangedAt: { type: Date, default: Date.now }, // FIX: Track when tier last changed for downgrade prevention
       referralCode: {
         type: String,
         unique: true,
@@ -675,6 +681,7 @@ const userSchema = new Schema<IUser>(
         newMessages: { type: Boolean, default: true },
         promotions: { type: Boolean, default: false },
         marketing: { type: Boolean, default: false },
+        disputeUpdates: { type: Boolean, default: true },
       },
       telegram: {
         enabled: { type: Boolean, default: false },
@@ -786,6 +793,9 @@ const userSchema = new Schema<IUser>(
       type: Boolean,
       default: false
     },
+    emailBounceAt: Date,
+    emailBounceType: String,
+    emailComplaintAt: Date,
     isActive: {
       type: Boolean,
       default: true,
@@ -1004,6 +1014,14 @@ const userSchema = new Schema<IUser>(
   }
 );
 
+// ===================================
+// CRITICAL INDEXES (DATABASE INTEGRITY FIXES)
+// ===================================
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+userSchema.index({ isDeleted: 1, accountStatus: 1 }); // Soft deleted users by account status
+userSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted users sorted by date
+userSchema.index({ isDeleted: 1, role: 1 }); // Soft deleted users by role
+
 // Compound Indexes for Performance
 userSchema.index({ email: 1, role: 1 });
 userSchema.index({ isActive: 1, isDeleted: 1 });
@@ -1068,6 +1086,14 @@ userSchema.index({ 'sessions.deviceFingerprint': 1 }, { sparse: true });
 // FIX: Add compound index for email login queries with soft delete
 userSchema.index({ email: 1, isDeleted: 1 });
 
+// SECURITY FIX: Add TTL index for password reset tokens
+// MongoDB will automatically delete documents where resetPasswordExpire < current time
+// This ensures reset tokens expire even if not explicitly checked
+userSchema.index({ resetPasswordExpire: 1 }, { expireAfterSeconds: 0 });
+
+// SECURITY FIX: Add index for password reset token lookup (token + expiry for fast verification)
+userSchema.index({ resetPasswordToken: 1, resetPasswordExpire: 1 });
+
 // FIX: Add index for notifications.isRead for efficient unread notification queries
 // Supports queries like: find users with unread notifications, count unread per user
 // Note: Sparse index since not all notification documents have isRead explicitly set
@@ -1119,7 +1145,8 @@ async function generateUniqueReferralCode(firstName: string): Promise<string> {
     { new: true, upsert: true }
   );
 
-  const randomPart = crypto.randomBytes(2).toString('hex').toUpperCase();
+  // FIX: Increase entropy from 2 bytes (256 values) to 4 bytes (65536 values)
+  const randomPart = crypto.randomBytes(4).toString('hex').toUpperCase();
   const sequencePart = String(counter.sequence).padStart(4, '0');
 
   return `${namePrefix}${randomPart}${sequencePart}`;
@@ -1156,9 +1183,10 @@ userSchema.pre('save', async function(next) {
 userSchema.statics.generateUniqueReferralCode = generateUniqueReferralCode;
 
 // ===================================
-// CASCADE DELETE HOOKS (CRITICAL)
+// CASCADE DELETE HOOKS (CRITICAL - FIX 6)
 // ===================================
-// FIX: Add cascade delete hooks to clean up related data when user is deleted
+// FIX 6: Add cascade soft delete hooks to clean up related data when user is deleted
+// All related records (bookings, reviews, services) are soft deleted to maintain audit trails
 
 // Note: Mongoose 'remove' hook is deprecated in v6+. Use deleteOne/deleteMany hooks instead.
 // The cascade logic is triggered via the soft delete mechanism (findOneAndUpdate with isDeleted: true)
@@ -1166,8 +1194,10 @@ userSchema.statics.generateUniqueReferralCode = generateUniqueReferralCode;
 /**
  * Helper function to perform cascade cleanup when a user is deleted
  * CRITICAL: Prevents orphan records across all related collections
+ * FIX 6: Now uses SOFT DELETE for bookings, reviews, and services instead of hard delete
+ * This maintains audit trails and prevents data integrity issues
  */
-async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRole: string): Promise<void> {
+async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRole: string, tenantId?: mongoose.Types.ObjectId): Promise<void> {
   // Skip transactions for standalone MongoDB instances (e.g., MongoDB Memory Server in tests)
   // MongoDB Memory Server uses a standalone instance that doesn't support transactions
   const mongoUri = process.env.MONGODB_URI || '';
@@ -1200,8 +1230,12 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
 
     // Clean up bookings where this user is the customer or provider
     // Soft delete to maintain booking history for auditing
+    // FIX: Add tenantId to cascade deletes for multi-tenant isolation
     await Booking.updateMany(
-      { $or: [{ customerId: userId }, { providerId: userId }] },
+      {
+        $or: [{ customerId: userId }, { providerId: userId }],
+        ...(tenantId ? { tenantId } : {})
+      },
       {
         $set: {
           isDeleted: true,
@@ -1211,13 +1245,38 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
       sessionOption
     );
 
-    // Clean up reviews where this user is the reviewer or reviewee
-    await Review.deleteMany(
+    // FIX 6: Soft delete reviews where this user is the reviewer or reviewee
+    // Soft delete to maintain review history for provider rating integrity
+    // Note: Review model must have isDeleted field added (done in review.model.ts)
+    await Review.updateMany(
       {
         $or: [{ reviewerId: userId }, { revieweeId: userId }]
       },
+      {
+        $set: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: userId
+        }
+      },
       sessionOption
     );
+
+    // FIX 6: Soft delete services when provider is deleted
+    // Services must be soft deleted to maintain booking history integrity
+    if (userRole === 'provider') {
+      await mongoose.model('Service').updateMany(
+        { providerId: userId },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: userId
+          }
+        },
+        sessionOption
+      );
+    }
 
     // CRITICAL: Clean up customer profile (prevents orphan customer data)
     await CustomerProfile.deleteMany({ userId }, sessionOption);
@@ -1265,9 +1324,18 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
       sessionOption
     );
 
-    // If provider, clean up provider profile (this also cascades to services, availability)
+    // If provider, clean up provider profile (soft delete to maintain analytics)
     if (userRole === 'provider') {
-      await ProviderProfile.deleteMany({ userId: userId }, sessionOption);
+      await ProviderProfile.updateMany(
+        { userId: userId },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+          }
+        },
+        sessionOption
+      );
     }
 
     if (session) {
@@ -1305,7 +1373,7 @@ userSchema.pre('findOneAndUpdate', async function() {
     const doc = await this.model.findOne(this.getQuery()).lean() as (mongoose.Document & { _id: mongoose.Types.ObjectId; role: string; isDeleted?: boolean }) | null;
     if (doc && !doc.isDeleted) {
       // User is being soft-deleted, trigger cascade
-      await performUserCascadeDelete(doc._id, doc.role as string);
+await performUserCascadeDelete(doc._id, doc.role as string, (doc as any).tenantId);
     }
   }
 });
@@ -1314,7 +1382,7 @@ userSchema.pre('findOneAndUpdate', async function() {
 userSchema.pre('deleteOne', { document: true, query: false }, async function() {
   const userId = this._id;
   const userRole = this.role;
-  await performUserCascadeDelete(userId, userRole);
+  await performUserCascadeDelete(userId, userRole, this.tenantId);
 });
 
 // Hook for deleteMany operations
@@ -1514,24 +1582,17 @@ userSchema.methods.generateVerificationToken = function(): string {
 };
 
 userSchema.methods.isLocked = function(): boolean {
-  // Admin accounts are never locked out (ops access must remain available)
-  if (this.role === 'admin') {
-    return false;
-  }
+  // SECURITY FIX: All accounts including admins can be locked for security
+  // Admin lockouts are rare (brute force attacks) but should be possible
+  // The auth.middleware.ts applies stricter IP-based rate limiting for admin routes
+  // which provides an additional layer of protection
   return !!(this.lockUntil && this.lockUntil > new Date());
 };
 
 userSchema.methods.incLoginAttempts = async function() {
-  // Admin accounts: no failed-attempt tracking or lockout
-  if (this.role === 'admin') {
-    if (this.lockUntil || this.loginAttempts > 0) {
-      return this.updateOne({
-        $set: { loginAttempts: 0 },
-        $unset: { lockUntil: 1 },
-      });
-    }
-    return;
-  }
+  // SECURITY FIX: All accounts including admins now track failed login attempts
+  // Admin routes are protected by stricter IP-based rate limiting (see auth.middleware.ts)
+  // This ensures security while maintaining operational access when needed
 
   // If we have a previous lock that has expired, restart at 1
   if (this.lockUntil && this.lockUntil < new Date()) {

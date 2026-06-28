@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Filter, SlidersHorizontal, MapPin, Clock, Star, ChevronDown } from 'lucide-react';
+import { X, Filter, SlidersHorizontal, MapPin, Clock, Star, ChevronDown, Navigation } from 'lucide-react';
 import { searchApi } from '../../services/searchApi';
+import { useLocationStore } from '../../stores/locationStore';
 
 export interface AdvancedFilterOptions {
   // Location filters
@@ -69,10 +70,39 @@ const AdvancedBookingFilters: React.FC<AdvancedBookingFiltersProps> = ({
 }) => {
   const [filters, setFilters] = useState<AdvancedFilterOptions>(currentFilters);
   const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const { currentLocation, fetchCurrentLocation } = useLocationStore();
 
   useEffect(() => {
     setFilters(currentFilters);
   }, [currentFilters]);
+
+  const handleUseMyLocation = async () => {
+    setIsGettingLocation(true);
+    try {
+      const location = await fetchCurrentLocation();
+      if (location?.coordinates) {
+        setFilters(prev => ({
+          ...prev,
+          latitude: location.coordinates.latitude,
+          longitude: location.coordinates.longitude,
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to get location:', error);
+    } finally {
+      setIsGettingLocation(false);
+    }
+  };
+
+  const handleClearLocation = () => {
+    setFilters(prev => ({
+      ...prev,
+      latitude: undefined,
+      longitude: undefined,
+      radiusKm: undefined,
+    }));
+  };
 
   if (!isOpen) return null;
 
@@ -126,6 +156,31 @@ const AdvancedBookingFilters: React.FC<AdvancedBookingFiltersProps> = ({
       icon: MapPin,
       content: (
         <div className="space-y-4">
+          {/* Use My Location Button */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleUseMyLocation}
+              disabled={isGettingLocation}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-nilin-coral text-white rounded-lg text-sm font-medium hover:bg-nilin-rose transition-colors disabled:opacity-50"
+            >
+              <Navigation className={`w-4 h-4 ${isGettingLocation ? 'animate-pulse' : ''}`} />
+              {isGettingLocation ? 'Getting location...' : 'Use my location'}
+            </button>
+            {filters.latitude && filters.longitude && (
+              <button
+                onClick={handleClearLocation}
+                className="px-3 py-2 text-sm text-nilin-warmGray hover:text-nilin-charcoal"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          {filters.latitude && filters.longitude && (
+            <p className="text-xs text-nilin-warmGray">
+              Location set: {filters.latitude.toFixed(4)}, {filters.longitude.toFixed(4)}
+            </p>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Search Radius

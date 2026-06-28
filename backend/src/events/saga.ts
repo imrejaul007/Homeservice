@@ -56,35 +56,41 @@ class SagaOrchestrator {
 export const sagaOrchestrator = new SagaOrchestrator();
 
 // Booking Saga
+interface SagaEventPayload {
+  bookingId?: string;
+  [key: string]: unknown;
+}
+
 export const bookingSaga: Saga = {
   name: 'booking-saga',
   steps: [
     {
       execute: async (event) => {
         // Step 1: Validate booking
-        console.log('Saga: Validating booking');
+        const payload = event.data as SagaEventPayload;
+        logger.debug('Saga: Validating booking', { context: 'BookingSaga', bookingId: payload.bookingId });
       },
       compensate: async () => {
-        console.log('Saga: Undo validation');
+        logger.debug('Saga: Undo validation', { context: 'BookingSaga' });
       },
     },
     {
       execute: async (event) => {
         // Step 2: Reserve provider
-        console.log('Saga: Reserving provider');
+        logger.debug('Saga: Reserving provider', { context: 'BookingSaga' });
         eventBus.publish(EVENT_TYPES.BOOKING_CONFIRMED, event.data, event.metadata);
       },
       compensate: async (event) => {
-        console.log('Saga: Releasing provider');
+        logger.debug('Saga: Releasing provider', { context: 'BookingSaga' });
       },
     },
     {
       execute: async (event) => {
         // Step 3: Process payment
-        console.log('Saga: Processing payment');
+        logger.debug('Saga: Processing payment', { context: 'BookingSaga' });
       },
       compensate: async (event) => {
-        console.log('Saga: Refunding payment');
+        logger.debug('Saga: Refunding payment', { context: 'BookingSaga' });
       },
     },
   ],

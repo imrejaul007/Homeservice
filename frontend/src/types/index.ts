@@ -1,6 +1,9 @@
 // API Types
 export * from './api';
 
+// Error & pagination types
+export * from './errors';
+
 // Auth Types - export explicitly to avoid VerificationStatus conflict
 export type { BusinessInfo, LocationInfo, ServiceInput, VerificationStatus, ProviderVerificationData, DashboardStats } from './auth';
 
@@ -27,3 +30,12 @@ export * from './booking.types';
 
 // Subscription types (unified tier types across codebase)
 export * from './subscription.types';
+
+// Activity types
+export * from './activity';
+
+// Permissions types for admin role-based access control
+export * from './permissions';
+
+// Bulk operation types
+export * from './bulk';

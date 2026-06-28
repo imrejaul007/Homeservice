@@ -272,8 +272,11 @@ const EarningsReport: React.FC = () => {
       );
       await fetchEarningsReports(1);
       setShowGenerateReportModal(false);
+      toast.success('Report generated successfully');
     } catch (err) {
       console.error('Error generating report:', err);
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || 'Failed to generate report. Please try again.');
       setError('Failed to generate report');
     } finally {
       setIsGeneratingReport(false);
@@ -283,13 +286,17 @@ const EarningsReport: React.FC = () => {
   // Export handler
   const handleExport = async (format: 'csv' | 'json') => {
     try {
+      toast.loading(`Exporting as ${format.toUpperCase()}...`);
       await earningsApi.downloadExport(
         dateRangeFilter.start.toISOString(),
         dateRangeFilter.end.toISOString(),
         format
       );
+      toast.success(`Export downloaded as ${format.toUpperCase()}`);
     } catch (err) {
       console.error('Error exporting data:', err);
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || 'Failed to export data. Please try again.');
       setError('Failed to export data');
     }
   };
@@ -646,8 +653,43 @@ const EarningsReport: React.FC = () => {
         </div>
       </div>
 
-      {/* Commission List */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      {/* Commission List — mobile cards */}
+      <div className="md:hidden space-y-3 mb-4">
+        {commissions.map((commission) => (
+          <div key={commission._id} className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">
+                  {commission.metadata?.serviceTitle || 'Service'}
+                </p>
+                <p className="text-xs text-gray-500">{commission.bookingNumber}</p>
+              </div>
+              <span className="text-sm font-semibold text-green-600 flex-shrink-0">
+                {formatCurrency(commission.providerEarnings, commission.metadata?.currency)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-3">
+              <span>Amount: {formatCurrency(commission.grossAmount, commission.metadata?.currency)}</span>
+              <span>Fee: -{formatCurrency(commission.commissionAmount)}</span>
+              <span className="col-span-2">
+                {commission.metadata?.bookingDate
+                  ? formatDate(commission.metadata.bookingDate)
+                  : formatDate(commission.calculatedAt)}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => openCommissionModal(commission)}
+              className="min-h-[44px] w-full text-sm font-medium text-primary-600 border border-primary-200 rounded-lg"
+            >
+              View Details
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Commission List — desktop table */}
+      <div className="hidden md:block bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
           <table className="w-full min-w-[800px]">
             <thead className="bg-gray-50 border-b border-gray-100">
@@ -765,8 +807,31 @@ const EarningsReport: React.FC = () => {
   // Tax Documents Tab
   const renderTaxDocumentsTab = () => (
     <div className="space-y-4">
-      {/* Tax Documents List */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      {/* Tax Documents List — mobile cards */}
+      <div className="md:hidden space-y-3 mb-4">
+        {taxDocuments.map((doc) => (
+          <div key={doc._id} className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+            <p className="text-sm font-medium text-gray-900 mb-1">{doc.documentNumber}</p>
+            <p className="text-xs text-gray-500 mb-2 capitalize">{doc.type.replace('_', ' ')}</p>
+            <p className="text-xs text-gray-600 mb-2">
+              {formatDate(doc.period.start)} – {formatDate(doc.period.end)}
+            </p>
+            <p className="text-sm font-semibold text-gray-900 mb-3">
+              {formatCurrency(doc.subtotal, doc.currency)}
+            </p>
+            <button
+              type="button"
+              onClick={() => handleDownloadTaxDocument(doc._id)}
+              className="min-h-[44px] w-full text-sm font-medium text-primary-600 border border-primary-200 rounded-lg"
+            >
+              Download
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Tax Documents List — desktop table */}
+      <div className="hidden md:block bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
           <table className="w-full min-w-[900px]">
             <thead className="bg-gray-50 border-b border-gray-100">
@@ -1005,8 +1070,8 @@ const EarningsReport: React.FC = () => {
         {/* Breadcrumb */}
         <Breadcrumb
           items={[
-            { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Earnings & Reports', href: '/earnings-report' },
+            { label: 'Dashboard', href: '/provider/dashboard' },
+            { label: 'Earnings & Reports', href: '/provider/earnings-report' },
           ]}
         />
 

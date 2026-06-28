@@ -19,95 +19,9 @@ import { useCategories } from '../../hooks/useCategories';
 import { useToastActions } from '../common/Toast';
 import { parseApiValidationError } from '../../utils/apiError';
 import type { Subcategory } from '../../types/category';
-
-// Confirmation Modal Component
-interface ConfirmModalProps {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  variant?: 'danger' | 'warning' | 'default';
-  isLoading?: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-const ConfirmModal: React.FC<ConfirmModalProps> = ({
-  isOpen,
-  title,
-  message,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  variant = 'danger',
-  isLoading = false,
-  onConfirm,
-  onCancel,
-}) => {
-  if (!isOpen) return null;
-
-  const buttonStyles = {
-    danger: 'bg-red-600 hover:bg-red-700 text-white',
-    warning: 'bg-amber-600 hover:bg-amber-700 text-white',
-    default: 'bg-nilin-coral hover:bg-nilin-coral/90 text-white',
-  };
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onCancel}
-      />
-      <div className="relative glass-nilin-strong rounded-nilin-xl p-6 max-w-md w-full shadow-nilin-lg">
-        <div className="text-center">
-          <div className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4 ${
-            variant === 'danger' ? 'bg-red-100' : variant === 'warning' ? 'bg-amber-100' : 'bg-nilin-blush'
-          }`}>
-            {variant === 'danger' ? (
-              <AlertCircle className="w-6 h-6 text-red-600" />
-            ) : variant === 'warning' ? (
-              <AlertCircle className="w-6 h-6 text-amber-600" />
-            ) : (
-              <AlertCircle className="w-6 h-6 text-nilin-coral" />
-            )}
-          </div>
-          <h3 className="text-lg font-serif text-nilin-charcoal mb-2">{title}</h3>
-          <p className="text-sm text-nilin-warmGray mb-6">{message}</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="flex-1 py-2.5 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium disabled:opacity-50"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isLoading}
-            className={`flex-1 py-2.5 rounded-nilin font-medium transition-colors disabled:opacity-50 ${buttonStyles[variant]}`}
-          >
-            {isLoading ? 'Processing...' : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-interface DurationVariant {
-  duration: number;
-  price: number;
-  label: string;
-}
-
-interface AddOn {
-  name: string;
-  price: number;
-  description?: string;
-}
+import type { DurationVariant, AddOn, ServiceFormData } from '../../types/service';
+import { ConfirmModal } from '../common/ConfirmModal';
+import { ImageUpload } from '../common/ImageUpload';
 
 interface ServiceResponse {
   _id: string;
@@ -125,6 +39,7 @@ interface ServiceResponse {
     type: 'fixed' | 'hourly' | 'custom';
   };
   tags: string[];
+  images: string[];
   status: string;
 }
 
@@ -134,25 +49,6 @@ interface EditServiceModalProps {
   onServiceUpdated: () => void;
   serviceId: string | null;
 }
-
-interface ServiceFormData {
-  name: string;
-  category: string;
-  subcategory: string;
-  description: string;
-  shortDescription: string;
-  duration: number;
-  durationOptions: DurationVariant[];
-  addOns: AddOn[];
-  price: {
-    amount: number;
-    currency: string;
-    type: 'fixed' | 'hourly' | 'custom';
-  };
-  tags: string[];
-  status: string;
-}
-
 
 export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   isOpen,
@@ -194,6 +90,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       type: 'fixed'
     },
     tags: [],
+    images: [],
     status: 'active'
   });
 
@@ -211,6 +108,16 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   const [variantError, setVariantError] = useState<string | null>(null);
   const [addOnError, setAddOnError] = useState<string | null>(null);
 
+  // Max limits for items
+  const MAX_TAGS = 10;
+  const MAX_DURATION_VARIANTS = 10;
+  const MAX_ADD_ONS = 10;
+  const draftKey = serviceId ? `draft-service-${serviceId}` : null;
+
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [hasDraftChanges, setHasDraftChanges] = useState(false);
+  const [showDraftPrompt, setShowDraftPrompt] = useState(false);
+
   // Track original form data to detect unsaved changes
   const [originalFormData, setOriginalFormData] = useState<ServiceFormData | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
@@ -218,6 +125,27 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   // Focus trap ref
   const modalRef = useRef<HTMLDivElement>(null);
   const firstFocusableRef = useRef<HTMLButtonElement>(null);
+
+  // Focus trap for keyboard accessibility
+  const handleTabKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Tab') {
+      const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable || focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }, []);
 
   // Scroll lock and focus trap
   useEffect(() => {
@@ -237,10 +165,24 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     }
   }, [isOpen]);
 
-  // Check if there are unsaved changes
+  // Check if there are unsaved changes using shallow comparison
   const hasUnsavedChanges = useCallback(() => {
     if (!originalFormData) return false;
-    return JSON.stringify(formData) !== JSON.stringify(originalFormData);
+    return (
+      formData.name !== originalFormData.name ||
+      formData.category !== originalFormData.category ||
+      formData.subcategory !== originalFormData.subcategory ||
+      formData.description !== originalFormData.description ||
+      formData.shortDescription !== originalFormData.shortDescription ||
+      formData.duration !== originalFormData.duration ||
+      formData.price.amount !== originalFormData.price.amount ||
+      formData.price.currency !== originalFormData.price.currency ||
+      formData.price.type !== originalFormData.price.type ||
+      formData.status !== originalFormData.status ||
+      JSON.stringify(formData.tags) !== JSON.stringify(originalFormData.tags) ||
+      JSON.stringify(formData.durationOptions) !== JSON.stringify(originalFormData.durationOptions) ||
+      JSON.stringify(formData.addOns) !== JSON.stringify(originalFormData.addOns)
+    );
   }, [formData, originalFormData]);
 
   // Handle close with unsaved changes check
@@ -281,6 +223,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       addOns: [],
       price: { amount: 0, currency: 'AED', type: 'fixed' },
       tags: [],
+      images: [],
       status: 'active'
     });
     setOriginalFormData(null);
@@ -288,6 +231,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     setCurrentTag('');
     setShowDurationVariants(false);
     setShowAddOns(false);
+    setVariantError(null);
+    setAddOnError(null);
   };
 
   // Load service data when modal opens
@@ -316,6 +261,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             type: service.price?.type || 'fixed'
           },
           tags: service.tags || [],
+          images: service.images || [],
           status: service.status || 'active'
         };
 
@@ -331,7 +277,6 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
         }
       }
     } catch (error: unknown) {
-      console.error('Error loading service data:', error);
       // Check for 404 / service not found
       const isNotFound = (error as { response?: { status?: number } }).response?.status === 404;
       if (isNotFound) {
@@ -354,8 +299,62 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       loadServiceData();
     } else if (!isOpen) {
       resetForm();
+      setShowDraftPrompt(false);
+      setHasDraftChanges(false);
+      setLastSaved(null);
     }
   }, [isOpen, serviceId, loadServiceData, resetForm]);
+
+  // Offer local draft restore after service loads
+  useEffect(() => {
+    if (!isOpen || !draftKey || isLoadingService) return;
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { formData?: ServiceFormData };
+      if (parsed.formData?.name?.trim()) {
+        setShowDraftPrompt(true);
+      }
+    } catch {
+      localStorage.removeItem(draftKey);
+    }
+  }, [isOpen, draftKey, isLoadingService]);
+
+  // Debounced auto-save for edits
+  useEffect(() => {
+    if (!isOpen || !draftKey || !hasDraftChanges) return;
+    const timer = setTimeout(() => {
+      localStorage.setItem(
+        draftKey,
+        JSON.stringify({ formData, savedAt: new Date().toISOString() }),
+      );
+      setLastSaved(new Date());
+      setHasDraftChanges(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [formData, hasDraftChanges, isOpen, draftKey]);
+
+  const restoreDraft = () => {
+    if (!draftKey) return;
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { formData?: ServiceFormData };
+      if (parsed.formData) {
+        setFormData(parsed.formData);
+        setHasDraftChanges(false);
+      }
+    } catch {
+      localStorage.removeItem(draftKey);
+    } finally {
+      setShowDraftPrompt(false);
+    }
+  };
+
+  const dismissDraft = () => {
+    if (draftKey) localStorage.removeItem(draftKey);
+    setShowDraftPrompt(false);
+  };
 
   if (!isOpen) return null;
 
@@ -379,7 +378,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleInputChange = (field: string, value: any) => {
+  const handleInputChange = (field: string, value: string | number | string[] | DurationVariant[] | AddOn[]) => {
     setFormData(prev => {
       const keys = field.split('.');
       if (keys.length === 1) {
@@ -414,6 +413,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       }
       return prev;
     });
+    setHasDraftChanges(true);
 
     // Clear error when user starts typing
     if (errors[field]) {
@@ -428,6 +428,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       category: value,
       subcategory: '' // Clear subcategory when category changes
     }));
+    setHasDraftChanges(true);
     if (errors.category) {
       setErrors(prev => ({ ...prev, category: '' }));
     }
@@ -436,8 +437,12 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   const addTag = () => {
     const normalizedTag = currentTag.trim().toLowerCase();
     if (!normalizedTag) return;
+    if (formData.tags.length >= MAX_TAGS) {
+      toast.warning('Tag limit reached', `Maximum ${MAX_TAGS} tags allowed`);
+      return;
+    }
     if (formData.tags.some(tag => tag.toLowerCase() === normalizedTag)) {
-      toast.error('Duplicate tag', 'This tag has already been added');
+      toast.error('Duplicate tag', { description: 'This tag has already been added' });
       return;
     }
     handleInputChange('tags', [...formData.tags, normalizedTag]);
@@ -451,6 +456,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   // Duration Variants Management
   const addDurationVariant = () => {
     setVariantError(null);
+    if (formData.durationOptions.length >= MAX_DURATION_VARIANTS) {
+      setVariantError(`Maximum ${MAX_DURATION_VARIANTS} variants allowed`);
+      return;
+    }
     if (!newVariant.label.trim()) {
       setVariantError('Label is required');
       return;
@@ -480,6 +489,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   // Add-Ons Management
   const addAddOn = () => {
     setAddOnError(null);
+    if (formData.addOns.length >= MAX_ADD_ONS) {
+      setAddOnError(`Maximum ${MAX_ADD_ONS} add-ons allowed`);
+      return;
+    }
     if (!newAddOn.name.trim()) {
       setAddOnError('Add-on name is required');
       return;
@@ -528,13 +541,15 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       const data = await authService.put<{success: boolean}>(`/provider/services/${serviceId}`, payload);
 
       if (data.success) {
+        if (draftKey) localStorage.removeItem(draftKey);
+        setHasDraftChanges(false);
+        setLastSaved(null);
         toast.success('Service updated', 'Your changes have been saved.');
         onServiceUpdated();
         onClose();
         resetForm();
       }
     } catch (error) {
-      console.error('Error updating service:', error);
       const { submit, fields } = parseApiValidationError(error);
       setErrors({ submit, ...fields });
       toast.error(
@@ -559,9 +574,18 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="edit-service-modal-title"
       className="fixed inset-0 bg-nilin-charcoal/40 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isLoadingService ? 'Loading service data...' : ''}
+        {isLoading ? 'Saving service changes...' : ''}
+        {errors.load ? `Error: ${errors.load}` : ''}
+      </div>
       {/* Animated gradient overlay */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-nilin-rose/5 via-transparent to-nilin-coral/5 animate-gradient-shift" />
@@ -569,27 +593,28 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       <div
         ref={modalRef}
         className="glass-nilin-strong rounded-nilin-lg max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-nilin-lg border border-nilin-border animate-modal-enter"
+        onKeyDown={handleTabKey}
       >
         {/* Header with gradient */}
         <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral px-6 py-4 flex items-center justify-between relative overflow-hidden">
           {/* Animated shine effect */}
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
-          <h2 className="text-xl font-serif text-white relative z-10">Edit Service</h2>
+          <h2 id="edit-service-modal-title" className="text-xl font-serif text-white relative z-10">Edit Service</h2>
           <button
             ref={firstFocusableRef}
             onClick={handleClose}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 relative z-10"
-            aria-label="Close modal"
+            className="w-11 h-11 flex items-center justify-center rounded-nilin-lg hover:bg-white/10 transition-colors text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 relative z-10"
+            aria-label="Close edit service modal"
           >
             <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
         {errors.load && (
-          <div className="mx-6 mt-4 flex items-center justify-between p-4 rounded-xl bg-red-50 border border-red-200">
+          <div className="mx-6 mt-4 flex items-center justify-between p-4 rounded-nilin-lg bg-nilin-coral/10 border border-nilin-coral/20">
             <div className="flex items-center">
-              <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
-              <p className="text-sm text-red-600">{errors.load}</p>
+              <AlertCircle className="w-5 h-5 text-nilin-rose mr-3 flex-shrink-0" />
+              <p className="text-sm text-nilin-rose">{errors.load}</p>
             </div>
             <div className="flex gap-2">
               {!errors.load.includes('not found') && (
@@ -599,7 +624,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                     setErrors({});
                     loadServiceData();
                   }}
-                  className="px-3 py-1 rounded-lg bg-red-100 text-red-600 text-sm hover:bg-red-200 transition-colors"
+                  className="px-3 py-1 rounded-nilin-lg bg-nilin-coral/10 text-nilin-coral text-sm hover:bg-nilin-coral/20 transition-colors"
                 >
                   Retry
                 </button>
@@ -607,7 +632,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-1 rounded-lg bg-red-100 text-red-600 text-sm hover:bg-red-200 transition-colors"
+                className="px-3 py-1 rounded-nilin-lg bg-nilin-coral/10 text-nilin-coral text-sm hover:bg-nilin-coral/20 transition-colors"
               >
                 Close
               </button>
@@ -615,7 +640,27 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[calc(90vh-120px)] overflow-y-auto animate-slide-up">
+        {showDraftPrompt && (
+          <div className="mx-6 mt-4 p-4 rounded-nilin-lg bg-nilin-coral/10 border border-nilin-coral/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-nilin-charcoal">You have a saved draft for this service. Restore it?</p>
+            <div className="flex gap-2">
+              <button type="button" onClick={restoreDraft} className="px-3 py-1.5 text-sm font-medium bg-nilin-coral text-white rounded-nilin-lg">
+                Restore draft
+              </button>
+              <button type="button" onClick={dismissDraft} className="px-3 py-1.5 text-sm font-medium text-nilin-warmGray hover:text-nilin-charcoal">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {lastSaved && (
+          <p className="px-6 pt-2 text-xs text-nilin-warmGray" aria-live="polite">
+            Draft saved {lastSaved.toLocaleTimeString()}
+          </p>
+        )}
+
+        <form onSubmit={handleSubmit} aria-label="Edit service form" className="p-6 space-y-6 max-h-[calc(90vh-120px)] overflow-y-auto animate-slide-up">
           <p className="flex items-start gap-2 text-sm text-nilin-warmGray bg-nilin-muted/50 rounded-nilin px-4 py-3 border border-nilin-border">
             <MapPin className="w-4 h-4 text-nilin-coral shrink-0 mt-0.5" />
             <span>
@@ -632,7 +677,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             <label className="block text-sm font-medium text-nilin-charcoal mb-2">
               Status
             </label>
-            <div className="px-4 py-3 rounded-xl bg-nilin-muted/50 border border-nilin-border text-sm text-nilin-charcoal capitalize">
+            <div className="px-4 py-3 rounded-nilin-lg bg-nilin-muted/50 border border-nilin-border text-sm text-nilin-charcoal capitalize">
               {formData.status.replace('_', ' ')}
             </div>
             <p className="mt-1.5 text-xs text-nilin-warmGray">
@@ -645,30 +690,38 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Service Name */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-name" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Service Name *
               </label>
               <input
+                id="edit-service-name"
                 type="text"
                 maxLength={100}
                 value={formData.name}
                 onChange={(e) => handleInputChange('name', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
+                aria-required="true"
+                aria-invalid={!!errors.name}
+                aria-describedby={errors.name ? 'edit-service-name-error' : undefined}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
                 placeholder="e.g., Professional House Cleaning"
               />
-              {errors.name && <p className="mt-1.5 text-sm text-red-500">{errors.name}</p>}
+              {errors.name && <p id="edit-service-name-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.name}</p>}
             </div>
 
             {/* Category Dropdown */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-category" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Category *
               </label>
               <select
+                id="edit-service-category"
                 value={formData.category}
                 onChange={(e) => handleCategoryChange(e.target.value)}
                 disabled={categoriesLoading}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer dropdown-arrow"
+                aria-required="true"
+                aria-invalid={!!errors.category}
+                aria-describedby={errors.category ? 'edit-service-category-error' : undefined}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer dropdown-arrow"
               >
                 <option value="">{categoriesLoading ? 'Loading categories...' : 'Select a category'}</option>
                 {categoryOptions.map(category => (
@@ -677,19 +730,20 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                   </option>
                 ))}
               </select>
-              {errors.category && <p className="mt-1.5 text-sm text-red-500">{errors.category}</p>}
+              {errors.category && <p id="edit-service-category-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.category}</p>}
             </div>
 
             {/* Subcategory Dropdown - Only show when category is selected */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-subcategory" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Subcategory
               </label>
               <select
+                id="edit-service-subcategory"
                 value={formData.subcategory}
                 onChange={(e) => handleInputChange('subcategory', e.target.value)}
                 disabled={!formData.category || categoriesLoading}
-                className={`w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer ${formData.category ? 'dropdown-arrow' : ''}`}
+                className={`w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer ${formData.category ? 'dropdown-arrow' : ''}`}
               >
                 <option value="">
                   {!formData.category ? 'Select a category first' : selectedCategory?.subcategories.length ? 'Select a subcategory (optional)' : 'No subcategories available'}
@@ -702,39 +756,43 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
 
             {/* Duration with Minutes Label */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-duration" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Duration *
               </label>
               <div className="relative">
                 <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray w-4 h-4" />
                 <input
+                  id="edit-service-duration"
                   type="number"
                   min="15"
                   max="480"
                   step="15"
                   value={formData.duration}
                   onChange={(e) => handleInputChange('duration', parseInt(e.target.value) || 0)}
-                  className="w-full pl-12 pr-16 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
+                  aria-invalid={!!errors.duration}
+                  aria-describedby={errors.duration ? 'edit-service-duration-error' : undefined}
+                  className="w-full pl-12 pr-16 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
                 />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-nilin-warmGray">
                   minutes
                 </span>
               </div>
-              {errors.duration && <p className="mt-1.5 text-sm text-red-500">{errors.duration}</p>}
+              {errors.duration && <p id="edit-service-duration-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.duration}</p>}
             </div>
           </div>
 
           {/* Pricing */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Price Type */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-price-type" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Price Type *
               </label>
               <select
+                id="edit-service-price-type"
                 value={formData.price.type}
                 onChange={(e) => handleInputChange('price.type', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
               >
                 <option value="fixed">Fixed Price</option>
                 <option value="hourly">Per Hour</option>
@@ -745,36 +803,40 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             {/* Price Amount with AED Symbol */}
             {formData.price.type !== 'custom' && (
               <div>
-                <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                <label htmlFor="edit-service-price-amount" className="block text-sm font-medium text-nilin-charcoal mb-2">
                   Price Amount *
                 </label>
                 <div className="relative">
                   <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray w-4 h-4" />
                   <input
+                    id="edit-service-price-amount"
                     type="number"
                     min="1"
                     step="0.01"
                     value={formData.price.amount}
                     onChange={(e) => handleInputChange('price.amount', parseFloat(e.target.value) || 0)}
-                    className="w-full pl-12 pr-16 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
+                    aria-invalid={!!errors.price}
+                    aria-describedby={errors.price ? 'edit-service-price-error' : undefined}
+                    className="w-full pl-12 pr-16 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-nilin-coral">
                     AED
                   </span>
                 </div>
-                {errors.price && <p className="mt-1.5 text-sm text-red-500">{errors.price}</p>}
+                {errors.price && <p id="edit-service-price-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.price}</p>}
               </div>
             )}
 
             {/* Currency */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-price-currency" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Currency
               </label>
               <select
+                id="edit-service-price-currency"
                 value={formData.price.currency}
                 onChange={(e) => handleInputChange('price.currency', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
               >
                 <option value="AED">AED (UAE Dirham)</option>
                 <option value="USD">USD ($)</option>
@@ -789,42 +851,48 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
           <div className="space-y-4">
             {/* Short Description */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-short-description" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Short Description *
               </label>
               <input
+                id="edit-service-short-description"
                 type="text"
                 maxLength={150}
                 value={formData.shortDescription}
                 onChange={(e) => handleInputChange('shortDescription', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
+                aria-invalid={!!errors.shortDescription}
+                aria-describedby={errors.shortDescription ? 'edit-service-short-description-error' : 'edit-service-short-description-hint'}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
                 placeholder="Brief description for search results"
               />
-              <p className="mt-1.5 text-xs text-nilin-warmGray">{formData.shortDescription.length}/150 characters</p>
-              {errors.shortDescription && <p className="mt-1.5 text-sm text-red-500">{errors.shortDescription}</p>}
+              <p id="edit-service-short-description-hint" className="mt-1.5 text-xs text-nilin-warmGray">{formData.shortDescription.length}/150 characters</p>
+              {errors.shortDescription && <p id="edit-service-short-description-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.shortDescription}</p>}
             </div>
 
             {/* Detailed Description */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="edit-service-description" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Detailed Description *
               </label>
               <textarea
+                id="edit-service-description"
                 rows={4}
                 maxLength={1000}
                 value={formData.description}
                 onChange={(e) => handleInputChange('description', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray resize-y min-h-[100px]"
+                aria-invalid={!!errors.description}
+                aria-describedby={errors.description ? 'edit-service-description-error' : 'edit-service-description-hint'}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray resize-y min-h-[100px]"
                 placeholder="Describe your service in detail..."
               />
-              <p className={`mt-1.5 text-xs ${formData.description.length > 900 ? 'text-red-500' : 'text-nilin-warmGray'}`}>{formData.description.length}/1000 characters (minimum 50)</p>
-              {errors.description && <p className="mt-1.5 text-sm text-red-500">{errors.description}</p>}
+              <p id="edit-service-description-hint" className={`mt-1.5 text-xs ${formData.description.length > 900 ? 'text-red-500' : 'text-nilin-warmGray'}`}>{formData.description.length}/1000 characters (minimum 50)</p>
+              {errors.description && <p id="edit-service-description-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.description}</p>}
             </div>
           </div>
 
           {/* Tags */}
           <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+            <label htmlFor="edit-service-tags" className="block text-sm font-medium text-nilin-charcoal mb-2">
               Tags * <span className="text-nilin-warmGray font-normal">(help customers find your service)</span>
             </label>
             <div className="flex flex-wrap gap-2 mb-3 min-h-[32px]">
@@ -848,10 +916,13 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             </div>
             <div className="flex">
               <input
+                id="edit-service-tags"
                 type="text"
                 value={currentTag}
                 onChange={(e) => setCurrentTag(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+                aria-invalid={!!errors.tags}
+                aria-describedby={errors.tags ? 'edit-service-tags-error' : undefined}
                 className="flex-1 px-4 py-3 rounded-l-xl bg-white/60 border border-nilin-border border-r-0 focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
                 placeholder="Add a tag and press Enter"
               />
@@ -866,11 +937,27 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             </div>
           </div>
 
+          {/* Service Images */}
+          <div className="border-t border-nilin-border pt-6">
+            <ImageUpload
+              images={formData.images}
+              onImagesChange={(images) => handleInputChange('images', images)}
+              maxImages={5}
+              disabled={isLoading || isLoadingService}
+              uploadEndpoint={`/provider/services/${serviceId}/images`}
+              serviceId={serviceId || undefined}
+              label="Service Images"
+              helpText="Add up to 5 images to showcase your service"
+            />
+          </div>
+
           {/* Duration Variants */}
           <div className="border-t border-nilin-border pt-6">
             <button
               type="button"
               onClick={() => setShowDurationVariants(!showDurationVariants)}
+              aria-expanded={showDurationVariants}
+              aria-controls="edit-duration-variants-content"
               className="w-full flex items-center justify-between text-left"
             >
               <div className="flex items-center gap-2">
@@ -892,7 +979,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             </button>
 
             {showDurationVariants && (
-              <div className="mt-4 space-y-4">
+              <div id="edit-duration-variants-content" className="mt-4 space-y-4">
                 <p className="text-xs text-nilin-warmGray">
                   Offer multiple service options with different durations and prices (e.g., Express, Standard, Premium).
                 </p>
@@ -900,14 +987,14 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                 {formData.durationOptions.length > 0 && (
                   <div className="space-y-2">
                     {formData.durationOptions.map((variant, index) => (
-                      <div key={index} className="flex items-center gap-3 p-3 bg-nilin-muted/30 rounded-xl">
+                      <div key={index} className="flex items-center gap-3 p-3 bg-nilin-muted/30 rounded-nilin-lg">
                         <div className="flex-1 grid grid-cols-3 gap-2">
                           <input
                             type="text"
                             value={variant.label}
                             onChange={(e) => updateDurationVariant(index, 'label', e.target.value)}
                             placeholder="Label (e.g., Premium)"
-                            className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            className="px-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                           />
                           <div className="relative">
                             <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -917,7 +1004,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                               onChange={(e) => updateDurationVariant(index, 'duration', parseInt(e.target.value) || 0)}
                               min="15"
                               max="480"
-                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                              className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                             />
                           </div>
                           <div className="relative">
@@ -927,14 +1014,14 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                               value={variant.price}
                               onChange={(e) => updateDurationVariant(index, 'price', parseFloat(e.target.value) || 0)}
                               min="0"
-                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                              className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                             />
                           </div>
                         </div>
                         <button
                           type="button"
                           onClick={() => removeDurationVariant(index)}
-                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                          className="p-2 text-nilin-rose hover:bg-nilin-rose/10 rounded-nilin-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose"
                           aria-label={`Remove ${variant.label || 'variant'}`}
                         >
                           <Trash2 className="w-4 h-4" aria-hidden="true" />
@@ -951,7 +1038,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                       value={newVariant.label}
                       onChange={(e) => setNewVariant({ ...newVariant, label: e.target.value })}
                       placeholder="Label"
-                      className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      className="px-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                     />
                     <div className="relative">
                       <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -962,7 +1049,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                         min="15"
                         max="480"
                         placeholder="Minutes"
-                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                        className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                       />
                     </div>
                     <div className="relative">
@@ -973,7 +1060,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                         onChange={(e) => setNewVariant({ ...newVariant, price: parseFloat(e.target.value) || 0 })}
                         min="0"
                         placeholder="Price"
-                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                        className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                       />
                     </div>
                   </div>
@@ -981,7 +1068,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                     type="button"
                     onClick={addDurationVariant}
                     disabled={!newVariant.label.trim()}
-                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-nilin-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
                     aria-label="Add duration variant"
                   >
                     <Plus className="w-4 h-4" aria-hidden="true" /> Add
@@ -1003,6 +1090,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             <button
               type="button"
               onClick={() => setShowAddOns(!showAddOns)}
+              aria-expanded={showAddOns}
+              aria-controls="edit-addons-content"
               className="w-full flex items-center justify-between text-left"
             >
               <div className="flex items-center gap-2">
@@ -1024,7 +1113,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             </button>
 
             {showAddOns && (
-              <div className="mt-4 space-y-4">
+              <div id="edit-addons-content" className="mt-4 space-y-4">
                 <p className="text-xs text-nilin-warmGray">
                   Offer optional extras that customers can add to their booking (e.g., Extra cleaning supplies, Express delivery).
                 </p>
@@ -1032,14 +1121,14 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                 {formData.addOns.length > 0 && (
                   <div className="space-y-2">
                     {formData.addOns.map((addon, index) => (
-                      <div key={index} className="flex items-start gap-3 p-4 bg-nilin-muted/30 rounded-xl border border-nilin-border/50">
+                      <div key={index} className="flex items-start gap-3 p-4 bg-nilin-muted/30 rounded-nilin-lg border border-nilin-border/50">
                         <div className="flex-1 grid grid-cols-3 gap-3">
                           <input
                             type="text"
                             value={addon.name}
                             onChange={(e) => updateAddOn(index, 'name', e.target.value)}
                             placeholder="Name"
-                            className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                            className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                           />
                           <div className="relative">
                             <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -1048,7 +1137,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                               value={addon.price}
                               onChange={(e) => updateAddOn(index, 'price', parseFloat(e.target.value) || 0)}
                               min="0"
-                              className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                              className="w-full pl-10 pr-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                             />
                           </div>
                           <input
@@ -1056,13 +1145,13 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                             value={addon.description || ''}
                             onChange={(e) => updateAddOn(index, 'description', e.target.value)}
                             placeholder="Description"
-                            className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                            className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                           />
                         </div>
                         <button
                           type="button"
                           onClick={() => removeAddOn(index)}
-                          className="p-2.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                          className="p-2.5 text-nilin-rose hover:bg-nilin-rose/10 rounded-nilin-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose"
                           aria-label={`Remove ${addon.name || 'add-on'}`}
                         >
                           <Trash2 className="w-4 h-4" aria-hidden="true" />
@@ -1082,7 +1171,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                         setAddOnError(null);
                       }}
                       placeholder="Add-on name"
-                      className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                      className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                     />
                     <div className="relative">
                       <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -1095,7 +1184,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                         }}
                         min="0"
                         placeholder="Price"
-                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                        className="w-full pl-10 pr-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                       />
                     </div>
                     <input
@@ -1103,14 +1192,14 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                       value={newAddOn.description}
                       onChange={(e) => setNewAddOn({ ...newAddOn, description: e.target.value })}
                       placeholder="Description (optional)"
-                      className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                      className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={addAddOn}
                     disabled={!newAddOn.name.trim()}
-                    className="px-4 py-2.5 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                    className="px-4 py-2.5 bg-nilin-coral/10 text-nilin-coral rounded-nilin-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
                     aria-label="Add add-on"
                   >
                     <Plus className="w-4 h-4" aria-hidden="true" /> Add
@@ -1129,9 +1218,9 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
 
           {/* Error Messages */}
           {errors.submit && (
-            <div className="flex items-center p-4 rounded-xl bg-red-50 border border-red-200">
-              <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
-              <p className="text-sm text-red-600">{errors.submit}</p>
+            <div className="flex items-center p-4 rounded-nilin-lg bg-nilin-coral/10 border border-nilin-coral/20">
+              <AlertCircle className="w-5 h-5 text-nilin-rose mr-3 flex-shrink-0" />
+              <p className="text-sm text-nilin-rose">{errors.submit}</p>
             </div>
           )}
 
@@ -1140,14 +1229,14 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             <button
               type="button"
               onClick={handleClose}
-              className="px-6 py-3 rounded-xl border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
+              className="px-6 py-3 rounded-nilin-lg border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isLoading || categoriesLoading}
-              className="px-8 py-3 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium shadow-lg shadow-nilin-rose/20 hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="px-8 py-3 rounded-nilin-lg bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium shadow-lg shadow-nilin-rose/20 hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {isLoading ? (
                 <>

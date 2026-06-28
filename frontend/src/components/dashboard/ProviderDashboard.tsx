@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
 import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/providerApi';
@@ -17,10 +18,14 @@ import {
   syncLocalTipPreferencesToServer,
 } from '../../utils/aiTips';
 import NotificationBell from '../common/NotificationBell';
+import ProviderHubNav from '../provider/ProviderHubNav';
 import { PageErrorBoundary } from '../common/PageErrorBoundary';
+import { OfflineBanner } from '../common/OfflineBanner';
 import { useToastActions } from '../common/Toast';
+import { shouldShowThrottledToast } from '../../utils/throttledToast';
 import { useProviderStatus, useServiceBatchUpdates } from '../../hooks/useSocket';
 import { formatPrice } from '../../lib/utils';
+import { escapeHtml } from '../../lib/security';
 import {
   Building,
   DollarSign,
@@ -50,6 +55,124 @@ import {
   List,
   TrendingUpIcon,
 } from 'lucide-react';
+
+// =============================================================================
+// SKELETON COMPONENTS - Consistent loading patterns
+// =============================================================================
+
+const ShimmerSkeleton: React.FC<{ className?: string; delay?: number }> = ({
+  className = '',
+  delay = 0,
+}) => (
+  <div
+    className={`relative overflow-hidden rounded ${className}`}
+    style={{ animationDelay: `${delay}ms` }}
+  >
+    <div
+      className="absolute inset-0 -translate-x-full animate-shimmer"
+      style={{
+        background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
+        animationDuration: '1.5s',
+        animationDelay: `${delay}ms`,
+      }}
+    />
+    <div className="w-full h-full bg-nilin-blush/50 rounded" />
+  </div>
+);
+
+// Booking request item skeleton
+const BookingRequestSkeleton: React.FC<{ delay?: number }> = ({ delay = 0 }) => (
+  <div className="border border-nilin-border/50 rounded-xl p-4">
+    <div className="flex items-center justify-between mb-3">
+      <div>
+        <ShimmerSkeleton className="h-4 w-24 mb-2" delay={delay} />
+        <ShimmerSkeleton className="h-3 w-16" delay={delay + 50} />
+      </div>
+      <ShimmerSkeleton className="h-6 w-20" delay={delay + 100} />
+    </div>
+    <div className="flex items-center justify-between text-sm mb-3">
+      <ShimmerSkeleton className="h-4 w-32" delay={delay + 150} />
+      <ShimmerSkeleton className="h-4 w-16" delay={delay + 200} />
+    </div>
+    <div className="flex space-x-2">
+      <ShimmerSkeleton className="h-9 w-20" delay={delay + 250} />
+      <ShimmerSkeleton className="h-9 w-20" delay={delay + 300} />
+    </div>
+  </div>
+);
+
+// Review item skeleton
+const ReviewSkeleton: React.FC<{ delay?: number }> = ({ delay = 0 }) => (
+  <div className="border border-nilin-border/50 rounded-xl p-4">
+    <div className="flex items-start justify-between mb-2">
+      <div className="flex items-center">
+        <ShimmerSkeleton className="h-9 w-9 rounded-xl" delay={delay} />
+        <div className="ml-3">
+          <ShimmerSkeleton className="h-4 w-20 mb-2" delay={delay + 50} />
+          <ShimmerSkeleton className="h-3 w-32" delay={delay + 100} />
+        </div>
+      </div>
+      <div className="flex items-center">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <ShimmerSkeleton key={i} className="h-4 w-4" delay={delay + 50 + i * 20} />
+        ))}
+      </div>
+    </div>
+    <ShimmerSkeleton className="h-4 w-full mb-1" delay={delay + 200} />
+    <ShimmerSkeleton className="h-4 w-3/4" delay={delay + 250} />
+  </div>
+);
+
+// Analytics row skeleton
+const AnalyticsRowSkeleton: React.FC<{ delay?: number }> = ({ delay = 0 }) => (
+  <div className="flex justify-between items-center">
+    <ShimmerSkeleton className="h-4 w-24" delay={delay} />
+    <ShimmerSkeleton className="h-4 w-12" delay={delay + 50} />
+  </div>
+);
+
+// Top service skeleton
+const TopServiceSkeleton: React.FC<{ delay?: number }> = ({ delay = 0 }) => (
+  <div className="h-16 bg-nilin-blush/30 rounded-xl p-4 flex items-center justify-between">
+    <div className="flex items-center gap-3">
+      <ShimmerSkeleton className="h-8 w-8 rounded-lg" delay={delay} />
+      <div>
+        <ShimmerSkeleton className="h-4 w-24 mb-2" delay={delay + 50} />
+        <ShimmerSkeleton className="h-3 w-16" delay={delay + 100} />
+      </div>
+    </div>
+    <div className="text-right">
+      <ShimmerSkeleton className="h-4 w-16 mb-2" delay={delay + 150} />
+      <ShimmerSkeleton className="h-3 w-12" delay={delay + 200} />
+    </div>
+  </div>
+);
+
+// Category bar skeleton
+const CategoryBarSkeleton: React.FC<{ delay?: number }> = ({ delay = 0 }) => (
+  <div className="flex items-center gap-3">
+    <div className="flex-1">
+      <div className="flex justify-between mb-1">
+        <ShimmerSkeleton className="h-4 w-20" delay={delay} />
+        <ShimmerSkeleton className="h-4 w-8" delay={delay + 50} />
+      </div>
+      <ShimmerSkeleton className="h-2 w-full rounded-full" delay={delay + 100} />
+    </div>
+  </div>
+);
+
+// Customer metric card skeleton
+const CustomerMetricSkeleton: React.FC<{ delay?: number }> = ({ delay = 0 }) => (
+  <div className="bg-gradient-to-br from-nilin-blush/30 to-nilin-peach/20 rounded-xl p-4">
+    <div className="flex items-center gap-3">
+      <ShimmerSkeleton className="h-10 w-10 rounded-lg" delay={delay} />
+      <div>
+        <ShimmerSkeleton className="h-3 w-24 mb-2" delay={delay + 50} />
+        <ShimmerSkeleton className="h-8 w-12" delay={delay + 100} />
+      </div>
+    </div>
+  </div>
+);
 
 interface StatCard {
   title: string;
@@ -153,6 +276,10 @@ const ProviderDashboard: React.FC = () => {
   const socketCleanupRef = useRef<(() => void)[]>([]);
   // Track if socket was connected
   const socketConnectedRef = useRef(false);
+  // Socket reconnection state
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const reconnectAttemptsRef = useRef(0);
+  const maxReconnectAttempts = 5;
 
   // Analytics state
   const [analytics, setAnalytics] = useState<ProviderAnalytics | null>(null);
@@ -171,6 +298,9 @@ const ProviderDashboard: React.FC = () => {
 
   // Booking action state
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Track recently updated items for animation
+  const [recentlyUpdated, setRecentlyUpdated] = useState<Set<string>>(new Set());
 
   // Wallet state
   const [walletBalance, setWalletBalance] = useState<number>(0);
@@ -207,6 +337,16 @@ const ProviderDashboard: React.FC = () => {
     isInitialized,
   } = useAuthStore();
   const toast = useToastActions();
+  const lastToastTime = useRef<number>(0);
+  const TOAST_COOLDOWN = 5000;
+
+  const showErrorToast = useCallback((title: string, description?: string) => {
+    const now = Date.now();
+    if (now - lastToastTime.current < TOAST_COOLDOWN) return;
+    lastToastTime.current = now;
+    toast.error(title, description ? { description } : undefined);
+  }, [toast]);
+
   const aiRecommendationsEnabled = useFeatureFlag('enable_ai_recommendations');
   const providerUserId = user?.id || user?._id;
 
@@ -246,12 +386,14 @@ const ProviderDashboard: React.FC = () => {
       if (response.success && response.data.bookings) {
         setBookingRequests(response.data.bookings.map(normalizeProviderBooking));
       }
-    } catch {
+    } catch (error) {
+      console.error('Failed to fetch booking requests:', error);
+      showErrorToast('Failed to load booking requests', 'Please try again');
       setBookingRequests([]);
     } finally {
       setLoadingBookings(false);
     }
-  }, []);
+  }, [showErrorToast]);
 
   // Fetch analytics with retry logic
   const fetchAnalyticsWithRetry = useCallback(async (retryCount = 0) => {
@@ -286,7 +428,7 @@ const ProviderDashboard: React.FC = () => {
       }
       // API returned success but no data - this is valid for new providers
       setAnalytics(response.data.overview || getEmptyAnalytics());
-    } catch (error: any) {
+    } catch (error) {
       const isNetworkError = !error.response || error.code === 'ECONNABORTED';
       const shouldRetry = isNetworkError && retryCount < MAX_RETRIES;
 
@@ -332,12 +474,13 @@ const ProviderDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to fetch reviews:', error);
+      showErrorToast('Failed to load reviews', 'Please try again');
       setReviewsError('Failed to load reviews');
       setRecentReviews([]);
     } finally {
       setLoadingReviews(false);
     }
-  }, []);
+  }, [showErrorToast]);
 
   const AI_TIPS_TIMEOUT_MS = 12000;
 
@@ -411,18 +554,37 @@ const ProviderDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to fetch wallet balance:', error);
+      showErrorToast('Failed to load wallet balance', 'Please try again');
       setWalletBalance(0);
     } finally {
       setLoadingWallet(false);
     }
-  }, []);
+  }, [showErrorToast]);
 
-  // Initial data fetch
+  // Initial data fetch — batch independent requests
   useEffect(() => {
-    fetchWalletBalance();
-  }, [fetchWalletBalance]);
+    if (!isInitialized || !isAuthenticated || !providerUserId) return;
 
-  // Handle provider approval in real-time
+    isMountedRef.current = true;
+    void Promise.all([
+      fetchBookingRequests(),
+      fetchAnalyticsWithRetry(),
+      fetchReviews(),
+      fetchWalletBalance(),
+    ]);
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [
+    isInitialized,
+    isAuthenticated,
+    providerUserId,
+    fetchBookingRequests,
+    fetchAnalyticsWithRetry,
+    fetchReviews,
+    fetchWalletBalance,
+  ]);
   useEffect(() => {
     if (approved && approved.providerId === user?.id) {
       toast.success('Congratulations! Your account has been approved. You can now start accepting bookings.');
@@ -434,7 +596,7 @@ const ProviderDashboard: React.FC = () => {
   // Handle provider rejection in real-time
   useEffect(() => {
     if (rejected && rejected.providerId === user?.id) {
-      toast.error(`Your application was rejected: ${rejected.reason}`);
+      showErrorToast(`Your application was rejected: ${rejected.reason}`);
       if (rejected.canAppeal) {
         toast.success('You can submit an appeal from your verification page.');
       }
@@ -444,13 +606,13 @@ const ProviderDashboard: React.FC = () => {
   // Handle provider suspension in real-time
   useEffect(() => {
     if (suspended && suspended.providerId === user?.id) {
-      toast.error(`Your account has been suspended: ${suspended.reason}`);
+      showErrorToast(`Your account has been suspended: ${suspended.reason}`);
       if (suspended.until) {
         toast.success(`Suspension will end on ${new Date(suspended.until).toLocaleDateString()}`);
       }
       refreshProviderProfile();
     }
-  }, [suspended, user?.id, toast, refreshProviderProfile]);
+  }, [suspended, user?.id, showErrorToast, toast, refreshProviderProfile]);
 
   // Handle batch service operations in real-time
   useEffect(() => {
@@ -506,19 +668,46 @@ const ProviderDashboard: React.FC = () => {
         try {
           await socketService.connect();
           socketConnectedRef.current = true;
+          reconnectAttemptsRef.current = 0;
+          setIsReconnecting(false);
         } catch (error) {
           console.warn('Socket connection failed:', error);
+          // Attempt reconnection with exponential backoff
+          if (isMounted && reconnectAttemptsRef.current < maxReconnectAttempts) {
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+            reconnectAttemptsRef.current++;
+            setIsReconnecting(true);
+            setTimeout(() => {
+              if (isMounted) setupSocket();
+            }, delay);
+          }
           return;
         }
+      } else {
+        // Reset reconnection state if already connected
+        reconnectAttemptsRef.current = 0;
+        setIsReconnecting(false);
       }
 
       if (!isMounted) return;
 
       // Listen for booking status changes
-      const unsubBookingStatus = socketService.onBookingStatusChanged(() => {
+      const unsubBookingStatus = socketService.onBookingStatusChanged((data) => {
         if (isMountedRef.current) {
           fetchBookingRequests();
           fetchAnalyticsWithRetry();
+          // Highlight the updated booking with animation
+          if (data?.bookingId) {
+            setRecentlyUpdated(prev => new Set(prev).add(data.bookingId));
+            // Remove highlight after animation completes
+            setTimeout(() => {
+              setRecentlyUpdated(prev => {
+                const next = new Set(prev);
+                next.delete(data.bookingId!);
+                return next;
+              });
+            }, 2000);
+          }
         }
       });
 
@@ -540,11 +729,10 @@ const ProviderDashboard: React.FC = () => {
       // Listen for service approved events (when admin approves a provider's service)
       const unsubServiceApproved = socketService.onServiceApproved((data) => {
         if (isMountedRef.current) {
-          // Refresh analytics to update service stats
           fetchAnalyticsWithRetry();
-          // Show toast notification when service is approved (issue #11)
-          toast.success('Your service has been approved and is now live!');
-          console.log('Service approved:', data.serviceId);
+          if (shouldShowThrottledToast(`service-approved:${data.serviceId}`)) {
+            toast.success('Your service has been approved and is now live!');
+          }
         }
       });
 
@@ -552,9 +740,10 @@ const ProviderDashboard: React.FC = () => {
       const unsubServiceRejected = socketService.onServiceRejected((data) => {
         if (isMountedRef.current) {
           fetchAnalyticsWithRetry();
-          // Show toast notification when service is rejected (issue #12)
-          toast.error(`Service rejected: ${data.reason || 'Please review the feedback'}`);
-          console.log('Service rejected:', data.serviceId);
+          const rejectKey = `service-rejected:${data.serviceId}:${data.reason ?? ''}`;
+          if (shouldShowThrottledToast(rejectKey)) {
+            showErrorToast(`Service rejected: ${data.reason || 'Please review the feedback'}`);
+          }
         }
       });
 
@@ -564,7 +753,6 @@ const ProviderDashboard: React.FC = () => {
           // Refresh analytics and AI tips when insights change
           fetchAnalyticsWithRetry();
           fetchAiTips();
-          console.log('Insights updated:', data.reason);
         }
       });
 
@@ -633,7 +821,7 @@ const ProviderDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to accept booking:', error);
-      toast.error('Failed to accept booking', 'Please try again.');
+      showErrorToast('Failed to accept booking', 'Please try again.');
     } finally {
       if (isMountedRef.current) {
         setActionLoading(null);
@@ -660,7 +848,7 @@ const ProviderDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to decline booking:', error);
-      toast.error('Failed to decline booking', 'Please try again.');
+      showErrorToast('Failed to decline booking', 'Please try again.');
     } finally {
       if (isMountedRef.current) {
         setActionLoading(null);
@@ -771,25 +959,25 @@ const ProviderDashboard: React.FC = () => {
 
     const config = {
       pending: {
-        color: 'text-amber-700 bg-amber-50 border border-amber-200',
+        color: 'text-nilin-peach bg-nilin-peach/50 border border-nilin-peach/60',
         icon: Clock,
         text: 'Verification Pending',
         description: 'Your account is under review. We\'ll notify you once approved.'
       },
       approved: {
-        color: 'text-green-700 bg-green-50 border border-green-200',
+        color: 'text-nilin-charcoal bg-nilin-blush/50 border border-nilin-blush/60',
         icon: CheckCircle,
         text: 'Verified Provider',
         description: 'Your account is verified and active.'
       },
       rejected: {
-        color: 'text-red-700 bg-red-50 border border-red-200',
+        color: 'text-nilin-rose bg-nilin-rose/30 border border-nilin-rose/40',
         icon: XCircle,
         text: 'Verification Rejected',
         description: 'Please review your documents and resubmit.'
       },
       suspended: {
-        color: 'text-red-700 bg-red-50 border border-red-200',
+        color: 'text-nilin-rose bg-nilin-rose/30 border border-nilin-rose/40',
         icon: AlertTriangle,
         text: 'Account Suspended',
         description: 'Contact support for assistance.'
@@ -803,15 +991,15 @@ const ProviderDashboard: React.FC = () => {
     switch (status) {
       case 'confirmed':
       case 'in_progress':
-        return 'text-green-700 bg-green-50';
+        return 'text-nilin-charcoal bg-nilin-blush/50 hover:bg-nilin-blush/70 transition-colors duration-200';
       case 'pending':
-        return 'text-amber-700 bg-amber-50';
+        return 'text-nilin-peach bg-nilin-peach/50 hover:bg-nilin-peach/70 transition-colors duration-200';
       case 'cancelled':
-        return 'text-red-700 bg-red-50';
+        return 'text-nilin-rose bg-nilin-rose/30 hover:bg-nilin-rose/50 transition-colors duration-200';
       case 'completed':
-        return 'text-nilin-charcoal bg-nilin-blush/50';
+        return 'text-nilin-charcoal bg-nilin-blush/50 hover:bg-nilin-blush/70 transition-colors duration-200';
       default:
-        return 'text-nilin-warmGray bg-nilin-muted';
+        return 'text-nilin-warmGray bg-nilin-muted hover:bg-nilin-muted/80 transition-colors duration-200';
     }
   };
 
@@ -843,10 +1031,30 @@ const ProviderDashboard: React.FC = () => {
   const verificationStatus = getVerificationStatusDisplay();
   const StatusIcon = verificationStatus.icon;
 
+  const isLoading = loadingBookings || loadingAnalytics || loadingReviews || loadingWallet;
+  const error = analyticsError || reviewsError;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream">
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isLoading ? 'Loading dashboard data...' : ''}
+        {error ? `Error: ${error}` : ''}
+        {pendingBookingsCount > 0 ? `${pendingBookingsCount} pending booking requests` : ''}
+      </div>
+
+      {/* FIX UX: Offline detection banner */}
+      <OfflineBanner autoHideDelay={3000} />
       {/* Navigation Header */}
-      <nav className="glass glass-blur shadow-nilin border-b border-nilin-border/50 backdrop-blur-md">
+      <nav className="glass glass-blur shadow-nilin border-b border-nilin-border/50 backdrop-blur-md" aria-label="Main navigation">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
@@ -856,6 +1064,13 @@ const ProviderDashboard: React.FC = () => {
             </div>
 
             <div className="flex items-center space-x-4">
+              {/* Socket reconnection indicator */}
+              {isReconnecting && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                  <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <span>Reconnecting...</span>
+                </div>
+              )}
               {/* Notifications */}
               <NotificationBell userId={user?.id || user?._id} userRole="provider" />
 
@@ -864,15 +1079,18 @@ const ProviderDashboard: React.FC = () => {
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
                   className="flex items-center text-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2"
+                  aria-expanded={showUserMenu}
+                  aria-haspopup="menu"
+                  aria-label="User menu"
                 >
                   <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-nilin-rose to-nilin-coral flex items-center justify-center">
                     <Building className="h-5 w-5 text-white" />
                   </div>
-                  <ChevronDown className="ml-2 h-4 w-4 text-nilin-warmGray" />
+                  <ChevronDown className="ml-2 h-4 w-4 text-nilin-warmGray" aria-hidden="true" />
                 </button>
 
                 {showUserMenu && (
-                  <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-xl shadow-nilin-lg bg-white ring-1 ring-nilin-border z-50">
+                  <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-xl shadow-nilin-lg bg-white ring-1 ring-nilin-border z-50" role="menu">
                     <div className="py-1">
                       <div className="px-4 py-3 text-sm border-b border-nilin-border">
                         <div className="font-medium text-nilin-charcoal">{providerProfile?.businessInfo?.businessName || `${user?.firstName} ${user?.lastName}`}</div>
@@ -881,6 +1099,7 @@ const ProviderDashboard: React.FC = () => {
                       <Link
                         to="/provider/settings"
                         className="flex items-center px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/50 font-sans"
+                        role="menuitem"
                       >
                         <Settings className="mr-3 h-4 w-4 text-nilin-coral" />
                         Business Settings
@@ -888,6 +1107,7 @@ const ProviderDashboard: React.FC = () => {
                       <button
                         onClick={handleLogout}
                         className="flex items-center w-full px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/50 font-sans"
+                        role="menuitem"
                       >
                         <LogOut className="mr-3 h-4 w-4 text-nilin-coral" />
                         Sign out
@@ -901,9 +1121,11 @@ const ProviderDashboard: React.FC = () => {
         </div>
       </nav>
 
+      <ProviderHubNav />
+
       {/* Main Content */}
       <PageErrorBoundary pageName="Provider Dashboard">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
           <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-2xl p-6 text-white shadow-nilin-lg">
@@ -915,7 +1137,7 @@ const ProviderDashboard: React.FC = () => {
                 <p className="text-white/80 mb-4 font-sans text-sm">
                   Manage your business, track earnings, and connect with customers.
                 </p>
-                <div className="flex items-center space-x-6 text-sm font-sans">
+                <div className="flex items-center space-x-4 sm:space-x-6 text-sm font-sans flex-wrap gap-y-2">
                   <div className="flex items-center">
                     <DollarSign className="h-4 w-4 mr-1" />
                     <span>{formatPrice(walletBalance)} available</span>
@@ -950,7 +1172,7 @@ const ProviderDashboard: React.FC = () => {
               {providerProfile?.verificationStatus?.overall === 'rejected' && (
                 <Link
                   to="/provider/verification"
-                  className="text-sm font-medium text-red-700 hover:text-red-800"
+                  className="text-sm font-medium text-nilin-rose hover:text-nilin-coral"
                 >
                   Update Documents
                 </Link>
@@ -964,69 +1186,70 @@ const ProviderDashboard: React.FC = () => {
 	          <div className="flex items-center justify-between mb-4">
 	            <h3 className="text-lg font-semibold text-nilin-charcoal">Quick Actions</h3>
 	          </div>
-	          <div className="grid grid-cols-4 sm:grid-cols-4 md:grid-cols-8 gap-2">
+	          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2">
 	            <Link
 	              to="/provider/services"
-	              className="flex flex-col items-center justify-center p-3 bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-xl text-white hover:shadow-lg transition-all duration-300"
+	              className="flex flex-col items-center justify-center min-h-[72px] p-3 bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-xl text-white hover:shadow-lg active:scale-95 active:shadow-md transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
 	            >
 	              <Plus className="h-5 w-5 mb-1" />
 	              <span className="text-xs font-medium text-center">Add Service</span>
 	            </Link>
 	            <Link
 	              to="/provider/bookings"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	              className="flex flex-col items-center justify-center min-h-[72px] p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
 	            >
 	              <Calendar className="h-5 w-5 text-nilin-coral mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Bookings</span>
 	            </Link>
 	            <Link
 	              to="/provider/calendar"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300"
 	            >
 	              <List className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Schedule</span>
 	            </Link>
 	            <Link
+	              to="/provider/messages"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300"
+	            >
+	              <MessageSquare className="h-5 w-5 text-nilin-coral mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Messages</span>
+	            </Link>
+	            <Link
 	              to="/provider/analytics"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300"
 	            >
 	              <BarChart className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Analytics</span>
 	            </Link>
 	            <Link
 	              to="/provider/earnings"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300"
 	            >
-	              <DollarSign className="h-5 w-5 text-green-600 mb-1" />
+	              <DollarSign className="h-5 w-5 text-nilin-charcoal mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Earnings</span>
 	            </Link>
 	            <Link
 	              to="/provider/reviews"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300"
 	            >
-	              <Star className="h-5 w-5 text-yellow-500 mb-1" />
+	              <Star className="h-5 w-5 text-nilin-coral mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Reviews</span>
 	            </Link>
 	            <Link
 	              to="/provider/availability"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md active:scale-95 active:shadow-md transition-all duration-300"
 	            >
 	              <Clock className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Hours</span>
 	            </Link>
-	            <Link
-	              to="/provider/settings"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
-	            >
-	              <Shield className="h-5 w-5 text-nilin-warmGray mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Settings</span>
-	            </Link>
 	          </div>
 	          <div className="mt-3 flex flex-wrap gap-2">
-	            <Link to="/provider/profile" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Profile</Link>
-	            <Link to="/provider/portfolio" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Portfolio</Link>
-	            <Link to="/provider/ads" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Ads</Link>
-	            <Link to="/provider/managed-services" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Managed</Link>
+	            <Link to="/provider/profile" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50 active:scale-95">Profile</Link>
+	            <Link to="/provider/portfolio" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50 active:scale-95">Portfolio</Link>
+	            <Link to="/provider/ads" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50 active:scale-95">Ads</Link>
+	            <Link to="/provider/managed-services" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50 active:scale-95">Managed</Link>
+	            <Link to="/provider/settings" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50 active:scale-95">Settings</Link>
 	          </div>
 	        </div>
 
@@ -1049,7 +1272,7 @@ const ProviderDashboard: React.FC = () => {
                           <p className="text-2xl font-serif font-light text-nilin-charcoal">
                             {typeof stat.value === 'number' ? stat.value.toFixed(1) : stat.value}
                           </p>
-                          <Star className="h-5 w-5 text-amber-400 fill-amber-400" />
+                          <Star className="h-5 w-5 text-nilin-coral fill-nilin-coral" />
                         </div>
                       ) : (
                         <p className="text-2xl font-serif font-light text-nilin-charcoal">
@@ -1057,9 +1280,12 @@ const ProviderDashboard: React.FC = () => {
                         </p>
                       )}
                       {stat.trend && (
-                        <span className={`ml-2 text-sm font-medium font-sans ${
-                          stat.trend.isPositive ? 'text-green-600' : 'text-red-600'
-                        }`}>
+                        <span
+                          className={`ml-2 text-sm font-medium font-sans ${
+                            stat.trend.isPositive ? 'text-nilin-charcoal' : 'text-nilin-rose'
+                          }`}
+                          aria-label={`${stat.trend.isPositive ? 'Up' : 'Down'} ${stat.trend.value}% from last month`}
+                        >
                           {stat.trend.isPositive ? '+' : '-'}{stat.trend.value}%
                         </span>
                       )}
@@ -1081,7 +1307,7 @@ const ProviderDashboard: React.FC = () => {
               <div className="p-4 glass rounded-xl border border-nilin-border/50">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-amber-500" />
+                    <AlertTriangle className="h-5 w-5 text-nilin-peach" />
                     <span className="text-sm text-nilin-charcoal">AI Recommendations unavailable</span>
                   </div>
                   <button
@@ -1125,58 +1351,79 @@ const ProviderDashboard: React.FC = () => {
             </div>
             <div className="p-6">
               {loadingBookings ? (
-                <div className="flex items-center justify-center py-6">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
-                  <span className="ml-3 text-nilin-warmGray font-sans text-sm">Loading booking requests...</span>
+                <div className="space-y-4">
+                  <BookingRequestSkeleton delay={0} />
+                  <BookingRequestSkeleton delay={100} />
+                  <BookingRequestSkeleton delay={200} />
                 </div>
               ) : bookingRequests.length > 0 ? (
                 <div className="space-y-4">
-                  {bookingRequests.map((request) => (
-                    <div key={request._id} className="border border-nilin-border/50 rounded-xl p-4 hover:border-glow transition-all">
-                      <div className="flex items-center justify-between mb-3">
-                        <div>
-                          <h4 className="text-sm font-medium text-nilin-charcoal font-sans">{request.customerName}</h4>
-                          <p className="text-xs text-nilin-warmGray">{request.serviceName}</p>
+                  {bookingRequests.map((request) => {
+                    const isUpdated = recentlyUpdated.has(request._id);
+                    return (
+                      <motion.div
+                        key={request._id}
+                        initial={isUpdated ? { backgroundColor: 'rgba(34, 197, 94, 0.2)' } : {}}
+                        animate={isUpdated ? { backgroundColor: 'rgba(34, 197, 94, 0)' } : {}}
+                        transition={{ duration: 2, ease: 'easeOut' }}
+                        className={`border border-nilin-border/50 rounded-xl p-4 hover:border-glow transition-all ${isUpdated ? 'ring-2 ring-green-400 ring-opacity-50' : ''}`}
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-medium text-nilin-charcoal font-sans">{request.customerName}</h4>
+                            <p className="text-xs text-nilin-warmGray">{request.serviceName}</p>
+                          </div>
+                          <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium font-sans ${getStatusColor(request.status)}`}>
+                            {getStatusDisplayText(request.status)}
+                          </span>
                         </div>
-                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium font-sans ${getStatusColor(request.status)}`}>
-                          {getStatusDisplayText(request.status)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm text-nilin-warmGray mb-3 font-sans">
-                        <div className="flex items-center">
-                          <Calendar className="mr-1 h-4 w-4" />
-                          {formatDate(request.scheduledDate)} at {request.scheduledTime}
+                        <div className="flex items-center justify-between text-sm text-nilin-warmGray mb-3 font-sans">
+                          <div className="flex items-center">
+                            <Calendar className="mr-1 h-4 w-4" />
+                            {formatDate(request.scheduledDate)} at {request.scheduledTime}
+                          </div>
+                          <div className="font-medium text-nilin-charcoal">
+                            AED {request.totalAmount}
+                          </div>
                         </div>
-                        <div className="font-medium text-nilin-charcoal">
-                          AED {request.totalAmount}
-                        </div>
-                      </div>
-                      {request.status === 'pending' && (
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => handleAcceptBooking(request._id)}
-                            disabled={actionLoading === request._id}
-                            className="flex-1 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-xs py-2.5 px-3 rounded-xl font-medium hover:shadow-nilin-warm transition-all btn-3d disabled:opacity-50"
-                          >
-                            {actionLoading === request._id ? 'Processing...' : 'Accept'}
-                          </button>
-                          <button
-                            onClick={() => handleDeclineBooking(request._id)}
-                            disabled={actionLoading === request._id}
-                            className="flex-1 glass-btn bg-nilin-blush text-nilin-charcoal text-xs py-2.5 px-3 rounded-xl font-medium hover:bg-nilin-peach transition-all disabled:opacity-50"
-                          >
-                            Decline
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                        {request.status === 'pending' && (
+                          <div className="flex space-x-2">
+                            <button
+                              onClick={() => handleAcceptBooking(request._id)}
+                              disabled={actionLoading === request._id}
+                              className="flex-1 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-xs py-2.5 px-3 rounded-xl font-medium hover:shadow-nilin-warm transition-all btn-3d disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                              aria-label="Accept booking request"
+                            >
+                              {actionLoading === request._id ? 'Processing...' : 'Accept'}
+                            </button>
+                            <button
+                              onClick={() => handleDeclineBooking(request._id)}
+                              disabled={actionLoading === request._id}
+                              className="flex-1 glass-btn bg-nilin-blush text-nilin-charcoal text-xs py-2.5 px-3 rounded-xl font-medium hover:bg-nilin-peach transition-all disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                              aria-label="Decline booking request"
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        )}
+                      </motion.div>
+                    );
+                  })}
                 </div>
               ) : (
-                <div className="text-center py-6">
-                  <Calendar className="mx-auto h-12 w-12 text-nilin-warmGray" />
-                  <h3 className="mt-2 text-sm font-medium text-nilin-charcoal font-sans">No pending booking requests</h3>
-                  <p className="mt-1 text-xs text-nilin-warmGray">New requests will appear here</p>
+                <div className="relative text-center py-8 overflow-hidden">
+                  {/* Decorative elements */}
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-gradient-to-br from-nilin-blush/20 to-transparent rounded-full opacity-50" />
+
+                  <div className="relative">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-nilin-coral/15 via-nilin-rose/10 to-nilin-blush/20 mx-auto mb-4 flex items-center justify-center shadow-lg shadow-nilin-coral/10">
+                      <Calendar className="h-8 w-8 text-nilin-coral/70" />
+                    </div>
+                    <h3 className="text-sm font-medium text-nilin-charcoal font-sans mb-1">No pending requests</h3>
+                    <p className="text-xs text-nilin-warmGray max-w-[200px] mx-auto leading-relaxed">
+                      New booking requests will appear here
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -1198,9 +1445,10 @@ const ProviderDashboard: React.FC = () => {
             </div>
             <div className="p-6">
               {loadingReviews ? (
-                <div className="flex items-center justify-center py-6">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
-                  <span className="ml-3 text-nilin-warmGray font-sans text-sm">Loading reviews...</span>
+                <div className="space-y-4">
+                  <ReviewSkeleton delay={0} />
+                  <ReviewSkeleton delay={100} />
+                  <ReviewSkeleton delay={200} />
                 </div>
               ) : reviewsError ? (
                 <div className="text-center py-6">
@@ -1211,17 +1459,19 @@ const ProviderDashboard: React.FC = () => {
               ) : recentReviews.length > 0 ? (
                 <div className="space-y-4">
                   {recentReviews.map((review) => (
-                    <div key={review.id} className="border border-nilin-border/50 rounded-xl p-4 hover:border-glow transition-all">
+                    <div key={review.id} className="border border-nilin-border/50 rounded-xl p-4 hover:border-nilin-coral/30 transition-all">
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex items-center">
                           <div className="h-9 w-9 bg-gradient-to-br from-nilin-rose to-nilin-coral rounded-xl flex items-center justify-center">
+                            {/* FIX SECURITY: Use nullish coalescing for customerName */}
                             <span className="text-white text-sm font-medium font-sans">
-                              {review.customerName.charAt(0)}
+                              {review.customerName?.charAt(0)?.toUpperCase() ?? '?'}
                             </span>
                           </div>
                           <div className="ml-3">
-                            <h4 className="text-sm font-medium text-nilin-charcoal font-sans">{review.customerName}</h4>
-                            <p className="text-xs text-nilin-warmGray">{review.serviceName} - {formatDate(review.date)}</p>
+                            {/* FIX SECURITY: Escape HTML entities to prevent XSS */}
+                            <h4 className="text-sm font-medium text-nilin-charcoal font-sans">{escapeHtml(review.customerName || 'Customer')}</h4>
+                            <p className="text-xs text-nilin-warmGray truncate">{review.serviceName || 'Service'} - {formatDate(review.date)}</p>
                           </div>
                         </div>
                         <div className="flex items-center">
@@ -1229,21 +1479,32 @@ const ProviderDashboard: React.FC = () => {
                             <Star
                               key={i}
                               className={`h-4 w-4 ${
-                                i < review.rating ? 'text-amber-400 fill-amber-400' : 'text-nilin-blush'
+                                // FIX: Use nullish coalescing to default to 0 if rating is undefined
+                                i < (review.rating ?? 0) ? 'text-nilin-coral fill-nilin-coral' : 'text-nilin-blush'
                               }`}
                             />
                           ))}
                         </div>
                       </div>
-                      <p className="text-sm text-nilin-warmGray font-sans">{review.comment}</p>
+                      {/* FIX SECURITY: Escape HTML entities in review comments to prevent XSS attacks */}
+                      <p className="text-sm text-nilin-warmGray font-sans line-clamp-3">{escapeHtml(review.comment || '')}</p>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-6">
-                  <MessageSquare className="mx-auto h-12 w-12 text-nilin-warmGray" />
-                  <h3 className="mt-2 text-sm font-medium text-nilin-charcoal font-sans">No reviews yet</h3>
-                  <p className="mt-1 text-xs text-nilin-warmGray">Customer reviews will appear here</p>
+                <div className="relative text-center py-8 overflow-hidden">
+                  {/* Decorative elements */}
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-gradient-to-br from-nilin-rose/15 to-transparent rounded-full opacity-50" />
+
+                  <div className="relative">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-nilin-rose/15 via-nilin-coral/10 to-nilin-peach/20 mx-auto mb-4 flex items-center justify-center shadow-lg shadow-nilin-rose/10">
+                      <MessageSquare className="h-8 w-8 text-nilin-rose/70" />
+                    </div>
+                    <h3 className="text-sm font-medium text-nilin-charcoal font-sans mb-1">No reviews yet</h3>
+                    <p className="text-xs text-nilin-warmGray max-w-[200px] mx-auto leading-relaxed">
+                      Customer reviews will appear here
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -1261,16 +1522,13 @@ const ProviderDashboard: React.FC = () => {
             </div>
             {loadingAnalytics ? (
               <div className="space-y-3">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="flex justify-between items-center">
-                    <div className="h-4 w-24 bg-nilin-blush animate-pulse rounded"></div>
-                    <div className="h-4 w-12 bg-nilin-blush animate-pulse rounded"></div>
-                  </div>
-                ))}
+                <AnalyticsRowSkeleton delay={0} />
+                <AnalyticsRowSkeleton delay={75} />
+                <AnalyticsRowSkeleton delay={150} />
               </div>
             ) : analyticsError ? (
               <div className="text-center py-4">
-                <AlertTriangle className="mx-auto h-8 w-8 text-amber-400 mb-2" />
+                <AlertTriangle className="mx-auto h-8 w-8 text-nilin-peach mb-2" />
                 <p className="text-xs text-nilin-charcoal mb-3">{analyticsError}</p>
                 <button
                   onClick={() => fetchAnalyticsWithRetry()}
@@ -1306,8 +1564,8 @@ const ProviderDashboard: React.FC = () => {
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Revenue Breakdown</h4>
-              <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center shimmer">
-                <DollarSign className="h-5 w-5 text-green-500" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/20 flex items-center justify-center shimmer">
+                <DollarSign className="h-5 w-5 text-nilin-coral" />
               </div>
             </div>
             <div className="space-y-3">
@@ -1319,13 +1577,13 @@ const ProviderDashboard: React.FC = () => {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Available</span>
-                <span className="text-sm font-medium text-green-600 font-sans">
+                <span className="text-sm font-medium text-nilin-charcoal font-sans">
                   AED {(providerProfile?.earnings?.availableBalance ?? 0).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Pending</span>
-                <span className="text-sm font-medium text-amber-600 font-sans">
+                <span className="text-sm font-medium text-nilin-peach font-sans">
                   AED {(providerProfile?.earnings?.pendingBalance ?? 0).toLocaleString()}
                 </span>
               </div>
@@ -1335,15 +1593,15 @@ const ProviderDashboard: React.FC = () => {
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Recognition</h4>
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shimmer">
-                <Award className="h-5 w-5 text-amber-500" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/20 flex items-center justify-center shimmer">
+                <Award className="h-5 w-5 text-nilin-coral" />
               </div>
             </div>
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Overall Rating</span>
                 <div className="flex items-center">
-                  <Star className="h-4 w-4 text-amber-400 fill-amber-400 mr-1" />
+                  <Star className="h-4 w-4 text-nilin-coral fill-nilin-coral mr-1" />
                   <span className="text-sm font-medium text-nilin-charcoal font-sans">
                     {(providerProfile?.ratings?.average ?? 0).toFixed(1)}
                   </span>
@@ -1359,11 +1617,11 @@ const ProviderDashboard: React.FC = () => {
                 <span className="text-sm text-nilin-warmGray font-sans">Badge</span>
                 <span className={`text-xs px-2.5 py-1 rounded-full font-sans ${
                   (providerProfile?.ratings?.average ?? 0) >= 4.8 && (providerProfile?.ratings?.count ?? 0) >= 10
-                    ? 'bg-amber-100 text-amber-700'
+                    ? 'bg-nilin-coral/20 text-nilin-coral'
                     : (providerProfile?.ratings?.average ?? 0) >= 4.5 && (providerProfile?.ratings?.count ?? 0) >= 5
-                    ? 'bg-green-100 text-green-700'
+                    ? 'bg-nilin-blush/50 text-nilin-charcoal'
                     : (providerProfile?.ratings?.count ?? 0) >= 1
-                    ? 'bg-blue-100 text-blue-700'
+                    ? 'bg-nilin-peach/50 text-nilin-peach'
                     : 'bg-nilin-blush text-nilin-charcoal'
                 }`}>
                   {(providerProfile?.ratings?.average ?? 0) >= 4.8 && (providerProfile?.ratings?.count ?? 0) >= 10
@@ -1391,12 +1649,10 @@ const ProviderDashboard: React.FC = () => {
             </div>
             {loadingAnalytics ? (
               <div className="space-y-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex justify-between items-center">
-                    <div className="h-4 w-20 bg-nilin-blush animate-pulse rounded"></div>
-                    <div className="h-4 w-8 bg-nilin-blush animate-pulse rounded"></div>
-                  </div>
-                ))}
+                <AnalyticsRowSkeleton delay={0} />
+                <AnalyticsRowSkeleton delay={50} />
+                <AnalyticsRowSkeleton delay={100} />
+                <AnalyticsRowSkeleton delay={150} />
               </div>
             ) : (
               <div className="space-y-3">
@@ -1408,13 +1664,13 @@ const ProviderDashboard: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Active</span>
-                  <span className="text-sm font-medium text-green-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
                     {analytics?.serviceStats?.active ?? 0}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Draft</span>
-                  <span className="text-sm font-medium text-amber-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-peach font-sans">
                     {analytics?.serviceStats?.draft ?? 0}
                   </span>
                 </div>
@@ -1426,7 +1682,7 @@ const ProviderDashboard: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-nilin-warmGray font-sans">Pending Review</span>
-                  <span className="text-sm font-medium text-blue-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-coral font-sans">
                     {analytics?.serviceStats?.pending_review ?? 0}
                   </span>
                 </div>
@@ -1438,48 +1694,47 @@ const ProviderDashboard: React.FC = () => {
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Booking Status Funnel</h4>
-              <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center shimmer">
-                <TrendingUpIcon className="h-5 w-5 text-blue-500" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/20 flex items-center justify-center shimmer">
+                <TrendingUpIcon className="h-5 w-5 text-nilin-coral" />
               </div>
             </div>
             {loadingAnalytics ? (
               <div className="space-y-3">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="flex justify-between items-center">
-                    <div className="h-4 w-24 bg-nilin-blush animate-pulse rounded"></div>
-                    <div className="h-4 w-8 bg-nilin-blush animate-pulse rounded"></div>
-                  </div>
-                ))}
+                <AnalyticsRowSkeleton delay={0} />
+                <AnalyticsRowSkeleton delay={50} />
+                <AnalyticsRowSkeleton delay={100} />
+                <AnalyticsRowSkeleton delay={150} />
+                <AnalyticsRowSkeleton delay={200} />
               </div>
             ) : (
               <div className="space-y-3">
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Pending</span>
-                  <span className="text-sm font-medium text-amber-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-peach font-sans">
                     {bookingStatusCounts.pending}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Confirmed</span>
-                  <span className="text-sm font-medium text-blue-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-coral font-sans">
                     {bookingStatusCounts.confirmed}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">In Progress</span>
-                  <span className="text-sm font-medium text-purple-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
                     {bookingStatusCounts.in_progress}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Completed</span>
-                  <span className="text-sm font-medium text-green-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
                     {bookingStatusCounts.completed}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-nilin-warmGray font-sans">Cancelled</span>
-                  <span className="text-sm font-medium text-red-600 font-sans">
+                  <span className="text-sm font-medium text-nilin-rose font-sans">
                     {bookingStatusCounts.cancelled}
                   </span>
                 </div>
@@ -1492,15 +1747,15 @@ const ProviderDashboard: React.FC = () => {
         <div className="mt-6 glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Top Services</h4>
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shimmer">
-              <Award className="h-5 w-5 text-amber-500" />
+            <div className="w-10 h-10 rounded-xl bg-nilin-coral/20 flex items-center justify-center shimmer">
+              <Award className="h-5 w-5 text-nilin-coral" />
             </div>
           </div>
           {loadingAnalytics ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-16 bg-nilin-blush animate-pulse rounded-xl"></div>
-              ))}
+              <TopServiceSkeleton delay={0} />
+              <TopServiceSkeleton delay={100} />
+              <TopServiceSkeleton delay={200} />
             </div>
           ) : analytics?.topServices && analytics.topServices.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1516,7 +1771,7 @@ const ProviderDashboard: React.FC = () => {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium text-green-600 font-sans">
+                    <p className="text-sm font-medium text-nilin-charcoal font-sans">
                       AED {(service.revenue || 0).toLocaleString()}
                     </p>
                     <p className="text-xs text-nilin-warmGray">revenue</p>
@@ -1538,15 +1793,16 @@ const ProviderDashboard: React.FC = () => {
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Categories Overview</h4>
-              <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center shimmer">
-                <PieChart className="h-5 w-5 text-purple-500" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-rose/20 flex items-center justify-center shimmer">
+                <PieChart className="h-5 w-5 text-nilin-rose" />
               </div>
             </div>
             {loadingAnalytics ? (
               <div className="space-y-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="h-10 bg-nilin-blush animate-pulse rounded-lg"></div>
-                ))}
+                <CategoryBarSkeleton delay={0} />
+                <CategoryBarSkeleton delay={75} />
+                <CategoryBarSkeleton delay={150} />
+                <CategoryBarSkeleton delay={225} />
               </div>
             ) : categoryStats.length > 0 ? (
               <div className="space-y-3">
@@ -1583,41 +1839,41 @@ const ProviderDashboard: React.FC = () => {
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Customer Metrics</h4>
-              <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center shimmer">
-                <Users className="h-5 w-5 text-green-500" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/20 flex items-center justify-center shimmer">
+                <Users className="h-5 w-5 text-nilin-coral" />
               </div>
             </div>
-            {loadingAnalytics ? (
+{loadingAnalytics ? (
               <div className="space-y-4">
-                <div className="h-16 bg-nilin-blush animate-pulse rounded-xl"></div>
-                <div className="h-16 bg-nilin-blush animate-pulse rounded-xl"></div>
+                <CustomerMetricSkeleton delay={0} />
+                <CustomerMetricSkeleton delay={100} />
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4">
+                <div className="bg-gradient-to-br from-nilin-blush/30 to-nilin-peach/20 rounded-xl p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
-                        <Users className="h-5 w-5 text-green-600" />
+                      <div className="w-10 h-10 rounded-lg bg-nilin-coral/20 flex items-center justify-center">
+                        <Users className="h-5 w-5 text-nilin-coral" />
                       </div>
                       <div>
-                        <p className="text-xs text-green-600 font-medium font-sans">Total Customers</p>
-                        <p className="text-2xl font-bold text-green-700">
+                        <p className="text-xs text-nilin-charcoal font-medium font-sans">Total Customers</p>
+                        <p className="text-2xl font-bold text-nilin-charcoal">
                           {analytics?.customerMetrics?.totalCustomers ?? repeatCustomers ?? 0}
                         </p>
                       </div>
                     </div>
                   </div>
                 </div>
-                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4">
+                <div className="bg-gradient-to-br from-nilin-peach/30 to-nilin-coral/20 rounded-xl p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                        <Star className="h-5 w-5 text-blue-600" />
+                      <div className="w-10 h-10 rounded-lg bg-nilin-rose/20 flex items-center justify-center">
+                        <Star className="h-5 w-5 text-nilin-rose" />
                       </div>
                       <div>
-                        <p className="text-xs text-blue-600 font-medium font-sans">Repeat Customers</p>
-                        <p className="text-2xl font-bold text-blue-700">
+                        <p className="text-xs text-nilin-charcoal font-medium font-sans">Repeat Customers</p>
+                        <p className="text-2xl font-bold text-nilin-charcoal">
                           {repeatCustomers}
                         </p>
                       </div>
@@ -1628,7 +1884,7 @@ const ProviderDashboard: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
+      </main>
       </PageErrorBoundary>
     </div>
   );

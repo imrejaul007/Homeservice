@@ -30,8 +30,8 @@ export const BOOKING_NOTIFICATION_TEMPLATES: BookingNotificationTemplate[] = [
     icon: 'calendar-plus',
     color: 'bg-blue-100 text-blue-600',
     actions: [
-      { action: 'accept', label: 'Accept', url: '/provider/bookings/{{bookingId}}/accept' },
-      { action: 'decline', label: 'Decline', url: '/provider/bookings/{{bookingId}}/decline' },
+      { action: 'accept', label: 'Accept', url: '/provider/bookings/{{bookingId}}' },
+      { action: 'decline', label: 'Decline', url: '/provider/bookings/{{bookingId}}' },
       { action: 'view', label: 'View Details' },
     ],
     dataFields: ['bookingId', 'serviceName', 'customerName', 'scheduledDate', 'scheduledTime', 'totalAmount', 'address'],

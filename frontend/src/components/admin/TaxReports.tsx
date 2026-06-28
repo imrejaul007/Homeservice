@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   FileText,
@@ -129,109 +130,11 @@ export const TaxReports: React.FC<TaxReportsProps> = ({
         setReports(response.data.data.reports || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setReports([
-          {
-            id: 'tax-001',
-            period: '2024-Q1',
-            type: 'VAT',
-            jurisdiction: 'UAE',
-            taxableAmount: 1250000,
-            taxAmount: 156250,
-            rate: 5,
-            status: 'paid',
-            dueDate: '2024-04-28',
-            filingDate: '2024-04-25',
-            transactions: [
-              { id: 't1', date: '2024-01-15', type: 'sale', amount: 5000, taxAmount: 250, description: 'Home cleaning service' },
-              { id: 't2', date: '2024-01-20', type: 'sale', amount: 3500, taxAmount: 175, description: 'Plumbing service' },
-              { id: 't3', date: '2024-02-05', type: 'refund', amount: -500, taxAmount: -25, description: 'Cancelled booking refund' }
-            ]
-          },
-          {
-            id: 'tax-002',
-            period: '2024-Q1',
-            type: 'Withholding',
-            jurisdiction: 'UAE',
-            taxableAmount: 450000,
-            taxAmount: 22500,
-            rate: 5,
-            status: 'submitted',
-            dueDate: '2024-04-30',
-            filingDate: '2024-04-28',
-            transactions: [
-              { id: 't4', date: '2024-01-31', type: 'sale', amount: 12000, taxAmount: 600, description: 'Provider payout - withholding' }
-            ]
-          },
-          {
-            id: 'tax-003',
-            period: '2024-Q2',
-            type: 'VAT',
-            jurisdiction: 'UAE',
-            taxableAmount: 1450000,
-            taxAmount: 181250,
-            rate: 5,
-            status: 'pending',
-            dueDate: '2024-07-28',
-            transactions: [
-              { id: 't5', date: '2024-04-10', type: 'sale', amount: 7800, taxAmount: 390, description: 'Electrical service' }
-            ]
-          },
-          {
-            id: 'tax-004',
-            period: '2024-Q2',
-            type: 'VAT',
-            jurisdiction: 'Dubai',
-            taxableAmount: 890000,
-            taxAmount: 44500,
-            rate: 5,
-            status: 'draft',
-            dueDate: '2024-07-28',
-            transactions: [
-              { id: 't6', date: '2024-05-15', type: 'sale', amount: 4500, taxAmount: 225, description: 'Painting service' }
-            ]
-          },
-          {
-            id: 'tax-005',
-            period: '2024-Q2',
-            type: 'VAT',
-            jurisdiction: 'Abu Dhabi',
-            taxableAmount: 560000,
-            taxAmount: 28000,
-            rate: 5,
-            status: 'pending',
-            dueDate: '2024-07-28',
-            transactions: []
-          }
-        ]);
-        setStats({
-          totalTaxCollected: 382000,
-          totalTaxPaid: 178750,
-          pendingFilings: 3,
-          overdueFilings: 0,
-          complianceRate: 94.5,
-          byJurisdiction: [
-            { jurisdiction: 'UAE (Federal)', amount: 245000, rate: 5, color: '#10B981' },
-            { jurisdiction: 'Dubai', amount: 89000, rate: 5, color: '#3B82F6' },
-            { jurisdiction: 'Abu Dhabi', amount: 48000, rate: 5, color: '#8B5CF6' }
-          ],
-          monthlyTrend: [
-            { month: 'Jan', collected: 45600, paid: 32000, net: 13600 },
-            { month: 'Feb', collected: 52300, paid: 45000, net: 7300 },
-            { month: 'Mar', collected: 58900, paid: 52000, net: 6900 },
-            { month: 'Apr', collected: 61200, paid: 49750, net: 11450 },
-            { month: 'May', collected: 67800, paid: 0, net: 67800 },
-            { month: 'Jun', collected: 45800, paid: 0, net: 45800 }
-          ],
-          byType: [
-            { type: 'VAT', amount: 335500, count: 1245 },
-            { type: 'Withholding', amount: 46500, count: 89 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching tax data:', err);
-      setError('Failed to load tax reports');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

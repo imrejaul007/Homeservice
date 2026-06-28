@@ -12,8 +12,9 @@ import {
   PieChart,
   Pie,
 } from 'recharts';
-import { Users, TrendingUp, Loader, DollarSign, PieChart as PieIcon, ArrowUpRight } from 'lucide-react';
+import { Users, TrendingUp, Loader, DollarSign, PieChart as PieIcon, ArrowUpRight, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface LTVBySegmentProps {
   timeRange?: '30d' | '90d' | '1y' | 'all';
@@ -40,37 +41,28 @@ interface LTVStats {
   segments: SegmentData[];
 }
 
-const MOCK_SEGMENTS: SegmentData[] = [
-  { segmentId: '1', segmentName: 'VIP Premium', userCount: 245, avgLTV: 12500, totalLTV: 3062500, avgOrders: 28, avgOrderValue: 450, churnRate: 2.1, growth: 15 },
-  { segmentId: '2', segmentName: 'Frequent Users', userCount: 1820, avgLTV: 4800, totalLTV: 8736000, avgOrders: 16, avgOrderValue: 300, churnRate: 5.2, growth: 12 },
-  { segmentId: '3', segmentName: 'Regular Users', userCount: 8450, avgLTV: 1800, totalLTV: 15210000, avgOrders: 8, avgOrderValue: 225, churnRate: 12.5, growth: 8 },
-  { segmentId: '4', segmentName: 'Occasional Users', userCount: 15200, avgLTV: 450, totalLTV: 6840000, avgOrders: 3, avgOrderValue: 150, churnRate: 28.0, growth: 3 },
-  { segmentId: '5', segmentName: 'At Risk', userCount: 3200, avgLTV: 280, totalLTV: 896000, avgOrders: 1.5, avgOrderValue: 185, churnRate: 45.0, growth: -8 },
-];
-
-const MOCK_STATS: LTVStats = {
-  totalUsers: 28915,
-  avgLTV: 2380,
-  totalLTV: 34597500,
-  topSegment: 'VIP Premium',
-  fastestGrowingSegment: 'Frequent Users',
-  segments: MOCK_SEGMENTS,
-};
-
 const SEGMENT_COLORS: Record<string, string> = {
-  '1': '#7C3AED', // VIP Premium - Purple
-  '2': '#2563EB', // Frequent Users - Blue
-  '3': '#10B981', // Regular Users - Green
-  '4': '#F59E0B', // Occasional Users - Amber
-  '5': '#EF4444', // At Risk - Red
+  vip: '#7C3AED',
+  frequent: '#2563EB',
+  regular: '#10B981',
+  occasional: '#F59E0B',
+  at_risk: '#EF4444',
 };
 
 export const LTVBySegment: React.FC<LTVBySegmentProps> = ({
   timeRange = '90d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<LTVStats>(MOCK_STATS);
-  const [segments, setSegments] = useState<SegmentData[]>(MOCK_SEGMENTS);
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<LTVStats>({
+    totalUsers: 0,
+    avgLTV: 0,
+    totalLTV: 0,
+    topSegment: 'N/A',
+    fastestGrowingSegment: 'N/A',
+    segments: [],
+  });
+  const [segments, setSegments] = useState<SegmentData[]>([]);
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [sortBy, setSortBy] = useState<'ltv' | 'users' | 'growth'>('ltv');
   const [viewMode, setViewMode] = useState<'bar' | 'pie'>('bar');
@@ -78,10 +70,26 @@ export const LTVBySegment: React.FC<LTVBySegmentProps> = ({
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setStats(MOCK_STATS);
-      setSegments(MOCK_SEGMENTS);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminLTVBySegment(selectedRange);
+        setStats(apiData.stats);
+        setSegments(apiData.segments || []);
+      } catch (err) {
+        setStats({
+          totalUsers: 0,
+          avgLTV: 0,
+          totalLTV: 0,
+          topSegment: 'N/A',
+          fastestGrowingSegment: 'N/A',
+          segments: [],
+        });
+        setSegments([]);
+        setError(err instanceof Error ? err.message : 'Failed to load LTV segment data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [selectedRange]);

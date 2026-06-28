@@ -30,7 +30,7 @@ const Footer: React.FC = () => {
     { name: 'Help Center', path: '/help' },
     { name: 'Contact Us', path: '/contact' },
     { name: 'FAQs', path: '/faq' },
-    { name: 'Safety', path: '/safety' },
+    { name: 'Safety', path: '/help' },
   ];
 
   const handleSubscribe = useCallback(async () => {

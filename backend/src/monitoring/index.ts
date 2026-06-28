@@ -5,6 +5,8 @@
  *   import { metrics, alerts, logger, health } from '../monitoring';
  */
 
+import logger from '../utils/logger';
+
 export { aiMetricsRegistry } from './aiMetrics';
 export * from './aiMetrics';
 export { ALERT_RULES, getFiringAlerts, evaluateAlerts, checkCircuitBreakerAlert, AlertSeverity, AlertStatus, AlertInstance } from './alerts';
@@ -81,11 +83,11 @@ let metricsExportInterval: NodeJS.Timeout | null = null;
  * Initialize all monitoring components
  */
 export async function initializeMonitoring(): Promise<void> {
-  console.log('[Monitoring] Initializing monitoring system...');
+  logger.info('[Monitoring] Initializing monitoring system...', { context: 'Monitoring' });
 
   // Initialize Sentry
   if (monitoringConfig.sentry.enabled) {
-    console.log('[Monitoring] Sentry error tracking enabled');
+    logger.info('[Monitoring] Sentry error tracking enabled', { context: 'Monitoring' });
   }
 
   // Start alert evaluation
@@ -93,7 +95,7 @@ export async function initializeMonitoring(): Promise<void> {
     startAlertEvaluation();
   }
 
-  console.log('[Monitoring] Monitoring system initialized');
+  logger.info('[Monitoring] Monitoring system initialized', { context: 'Monitoring' });
 }
 
 /**
@@ -128,7 +130,10 @@ function startAlertEvaluation(): void {
         }
       }
     } catch (error) {
-      console.error('[Monitoring] Alert evaluation failed:', error);
+      logger.error('[Monitoring] Alert evaluation failed', {
+        context: 'Monitoring',
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }, monitoringConfig.alerts.evaluationIntervalMs);
 }
@@ -147,7 +152,7 @@ export function shutdownMonitoring(): void {
     metricsExportInterval = null;
   }
 
-  console.log('[Monitoring] Monitoring system shut down');
+  logger.info('[Monitoring] Monitoring system shut down', { context: 'Monitoring' });
 }
 
 export default {

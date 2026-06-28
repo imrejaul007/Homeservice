@@ -1,6 +1,5 @@
 import React, { useEffect, lazy, Suspense, useMemo } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import ProviderDashboard from './components/dashboard/ProviderDashboard';
 import { useAuthStore } from './stores/authStore';
 import { useBackButton } from './hooks/useBackButton';
 import { useCapacitor } from './hooks/useCapacitor';
@@ -9,11 +8,13 @@ import { OfflineBanner } from './components/common/OfflineBanner';
 import { MaintenanceGuard } from './components/common/MaintenanceGuard';
 import { PlatformConfigProvider, usePlatformConfig } from './components/common/PlatformConfigProvider';
 import { AppShell } from './components/mobile/AppShell';
-import FloatingChatWidget from './components/chat/FloatingChatWidget';
 import { SearchModalProvider, useSearchModal } from './context/SearchModalContext';
-import SearchModal from './components/search/SearchModal';
 import { GlobalLoadingOverlay } from './components/common/GlobalLoadingOverlay';
 import { usePageLoading } from './hooks/usePageLoading';
+import { useDeferredMount } from './hooks/useDeferredMount';
+
+const FloatingChatWidget = lazy(() => import('./components/chat/FloatingChatWidget'));
+const SearchModal = lazy(() => import('./components/search/SearchModal'));
 
 // =============================================================================
 // Error Boundary Component
@@ -128,6 +129,24 @@ const ChurnReport = lazy(() => import('./pages/admin/ChurnReport'));
 const ProviderManagement = lazy(() => import('./pages/admin/ProviderManagement'));
 const ProviderMetricsDashboard = lazy(() => import('./pages/admin/ProviderMetricsDashboard'));
 const ChatbotBuilderPage = lazy(() => import('./pages/admin/ChatbotBuilderPage'));
+const AnalyticsDashboard = lazy(() => import('./pages/admin/AnalyticsDashboard'));
+const ExecutiveDashboard = lazy(() => import('./pages/admin/ExecutiveDashboard'));
+const ProviderDashboard = lazy(() => import('./components/dashboard/ProviderDashboard'));
+const SearchAnalyticsDashboard = lazy(() => import('./pages/admin/SearchAnalyticsDashboard'));
+const CustomReports = lazy(() => import('./pages/admin/CustomReports'));
+const FraudReport = lazy(() => import('./pages/admin/FraudReport'));
+const AnomalyDashboard = lazy(() => import('./pages/admin/AnomalyDashboard'));
+const SLAReport = lazy(() => import('./pages/admin/SLAReport'));
+const AuditLogPage = lazy(() => import('./pages/admin/AuditLogPage'));
+const BookingManagement = lazy(() => import('./pages/admin/BookingManagement'));
+const DisputeCenter = lazy(() => import('./pages/admin/DisputeCenter'));
+const RefundManagement = lazy(() => import('./pages/admin/RefundManagement'));
+const BundleManagement = lazy(() => import('./pages/admin/BundleManagement'));
+const OfferAnalyticsPage = lazy(() => import('./pages/admin/OfferAnalyticsPage'));
+const HeroSlideManager = lazy(() => import('./pages/admin/HeroSlideManager'));
+const LaunchDashboard = lazy(() => import('./pages/admin/LaunchDashboard'));
+const PermissionManager = lazy(() => import('./pages/admin/PermissionManager'));
+const CustomerManagement = lazy(() => import('./pages/admin/CustomerManagement'));
 const UnsubscribePage = lazy(() => import('./pages/UnsubscribePage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
@@ -148,6 +167,7 @@ const BookPackagePage = lazy(() => import('./pages/booking/BookPackagePage'));
 const ProviderBookingDetailPage = lazy(() => import('./pages/provider/BookingDetailPage'));
 const TrackBookingPage = lazy(() => import('./pages/booking/TrackBookingPage'));
 const CustomerStatsPage = lazy(() => import('./pages/customer/CustomerStatsPage'));
+const CustomerAnalyticsPage = lazy(() => import('./pages/customer/AnalyticsPage'));
 const ProfilePage = lazy(() => import('./pages/customer/ProfilePage'));
 const FavoritesPage = lazy(() => import('./pages/customer/FavoritesPage'));
 const WishlistPage = lazy(() => import('./pages/customer/WishlistPage'));
@@ -163,6 +183,10 @@ const ReviewsPage = lazy(() => import('./pages/customer/ReviewsPage'));
 const MessagesPage = lazy(() => import('./pages/customer/MessagesPage'));
 const NewMessagePage = lazy(() => import('./pages/customer/NewMessagePage'));
 const MyClaimsPage = lazy(() => import('./pages/customer/MyClaimsPage'));
+const CustomerDisputeDetailPage = lazy(() => import('./pages/customer/CustomerDisputeDetailPage'));
+const AIAssistantPage = lazy(() => import('./pages/customer/AIAssistantPage'));
+const GDPRExportPage = lazy(() => import('./pages/customer/GDPRExport'));
+const PrivacySettings = lazy(() => import('./pages/PrivacySettings'));
 const ProviderProfilePage = lazy(() => import('./pages/provider/ProviderProfilePage'));
 const ProviderPortfolioPage = lazy(() => import('./pages/provider/ProviderPortfolioPage'));
 const ProviderAnalyticsPage = lazy(() => import('./pages/provider/ProviderAnalyticsPage'));
@@ -199,6 +223,8 @@ const AdminSupportPage = lazy(() => import('./pages/admin/AdminSupportPage'));
 const PackagesPage = lazy(() => import('./pages/PackagesPage'));
 const PackageDetailPage = lazy(() => import('./pages/PackageDetailPage'));
 const PackageComparisonPage = lazy(() => import('./pages/PackageComparisonPage'));
+const PaymentPage = lazy(() => import('./pages/booking/PaymentPage'));
+const Demo = lazy(() => import('./pages/Demo'));
 
 import {
   ProtectedRoute,
@@ -297,10 +323,42 @@ const FaqGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
-// Search Modal Wrapper Component
+/** Demo/investor experience — disabled in production unless explicitly enabled */
+const DemoGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const isDemoEnabled =
+    import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO === 'true';
+  if (!isDemoEnabled) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+};
+
+const DeferredFloatingChatWidget: React.FC = () => {
+  const ready = useDeferredMount();
+  if (!ready) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <FloatingChatWidget
+        botName="NILIN Assistant"
+        welcomeMessage="Hi there! How can I help you today?"
+      />
+    </Suspense>
+  );
+};
+
+// Search Modal Wrapper — load after idle or when opened
 const SearchModalWrapper: React.FC = () => {
   const { isOpen, initialQuery, close } = useSearchModal();
-  return <SearchModal isOpen={isOpen} onClose={close} initialQuery={initialQuery} />;
+  const deferredReady = useDeferredMount();
+
+  if (!deferredReady && !isOpen) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <SearchModal isOpen={isOpen} onClose={close} initialQuery={initialQuery} />
+    </Suspense>
+  );
 };
 
 function App() {
@@ -501,6 +559,15 @@ function App() {
           element={<StatusDashboard />} 
         />
 
+        <Route
+          path="/demo"
+          element={
+            <DemoGate>
+              <Demo />
+            </DemoGate>
+          }
+        />
+
         {/* Authentication Status Routes */}
         <Route 
           path="/verify-email-required" 
@@ -568,6 +635,24 @@ function App() {
         />
 
         <Route
+          path="/customer/analytics"
+          element={
+            <CustomerRoute>
+              <CustomerAnalyticsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/stats"
+          element={
+            <CustomerRoute>
+              <CustomerStatsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
           path="/customer/bookings"
           element={
             <CustomerRoute>
@@ -581,6 +666,15 @@ function App() {
           element={
             <CustomerRoute>
               <BookingDetailPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/bookings/:bookingId/payment"
+          element={
+            <CustomerRoute>
+              <PaymentPage />
             </CustomerRoute>
           }
         />
@@ -631,10 +725,55 @@ function App() {
         />
 
         <Route
+          path="/customer/my-claims/:disputeId"
+          element={
+            <CustomerRoute>
+              <CustomerDisputeDetailPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
           path="/customer/my-claims"
           element={
             <CustomerRoute>
               <MyClaimsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/ai-assistant"
+          element={
+            <CustomerRoute>
+              <AIAssistantPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/gdpr"
+          element={
+            <CustomerRoute>
+              <GDPRExportPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/data-export"
+          element={
+            <CustomerRoute>
+              <GDPRExportPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/privacy-settings"
+          element={
+            <CustomerRoute>
+              <PrivacySettings />
             </CustomerRoute>
           }
         />
@@ -663,6 +802,15 @@ function App() {
             <CustomerRoute>
               <NotificationsPage />
             </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/provider/notifications"
+          element={
+            <ProviderRoute>
+              <NotificationsPage />
+            </ProviderRoute>
           }
         />
 
@@ -799,7 +947,7 @@ function App() {
         <Route
           path="/provider/services"
           element={
-            <ProviderRoute>
+            <ProviderRoute requireVerification={true}>
               <ServiceManagementPage />
             </ProviderRoute>
           }
@@ -808,7 +956,7 @@ function App() {
         <Route
           path="/provider/bookings"
           element={
-            <ProviderRoute>
+            <ProviderRoute requireVerification={true}>
               <ProviderBookingsPage />
             </ProviderRoute>
           }
@@ -880,7 +1028,7 @@ function App() {
         <Route
           path="/provider/earnings"
           element={
-            <ProviderRoute>
+            <ProviderRoute requireVerification={true}>
               <ProviderEarningsPage />
             </ProviderRoute>
           }
@@ -986,11 +1134,7 @@ function App() {
 
         <Route
           path="/provider/availability-alt"
-          element={
-            <ProviderRoute>
-              <AvailabilityPage />
-            </ProviderRoute>
-          }
+          element={<Navigate to="/provider/availability" replace />}
         />
 
         <Route
@@ -1005,7 +1149,7 @@ function App() {
         <Route
           path="/provider/payouts"
           element={
-            <ProviderRoute>
+            <ProviderRoute requireVerification={true}>
               <PayoutDashboard />
             </ProviderRoute>
           }
@@ -1148,6 +1292,159 @@ function App() {
           }
         />
 
+        <Route
+          path="/admin/analytics"
+          element={
+            <AdminRoute>
+              <AnalyticsDashboard />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/executive"
+          element={
+            <AdminRoute>
+              <ExecutiveDashboard />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/search-analytics"
+          element={
+            <AdminRoute>
+              <SearchAnalyticsDashboard />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/custom-reports"
+          element={
+            <AdminRoute>
+              <CustomReports />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/fraud"
+          element={
+            <AdminRoute>
+              <FraudReport />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/anomalies"
+          element={
+            <AdminRoute>
+              <AnomalyDashboard />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/sla"
+          element={
+            <AdminRoute>
+              <SLAReport />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/audit"
+          element={
+            <AdminRoute>
+              <AuditLogPage />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/bookings"
+          element={
+            <AdminRoute>
+              <BookingManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/disputes"
+          element={
+            <AdminRoute>
+              <DisputeCenter />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/refunds"
+          element={
+            <AdminRoute>
+              <RefundManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/bundles"
+          element={
+            <AdminRoute>
+              <BundleManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/offers-analytics"
+          element={
+            <AdminRoute>
+              <OfferAnalyticsPage />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/hero-slides"
+          element={
+            <AdminRoute>
+              <HeroSlideManager />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/launch"
+          element={
+            <AdminRoute>
+              <LaunchDashboard />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/permissions"
+          element={
+            <AdminRoute>
+              <PermissionManager />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/customers"
+          element={
+            <AdminRoute>
+              <CustomerManagement />
+            </AdminRoute>
+          }
+        />
+
         {/* Default Route - Homepage */}
         <Route
           path="/"
@@ -1178,11 +1475,7 @@ function App() {
         <Route path="*" element={<NotFound />} />
         </Routes>
 
-        {/* Floating Chat Widget - shows when not on chat pages */}
-        <FloatingChatWidget
-          botName="NILIN Assistant"
-          welcomeMessage="Hi there! How can I help you today?"
-        />
+        <DeferredFloatingChatWidget />
               </Suspense>
               </div>
               </MaintenanceGuard>
@@ -1200,22 +1493,5 @@ function App() {
 
   return appContent;
 }
-
-// Component to handle default redirects based on user role
-const RedirectToDashboard = () => {
-  const { isAuthenticated, user } = useAuthStore();
-
-  if (!isAuthenticated || !user) {
-    return <Navigate to="/login" replace />;
-  }
-
-  const dashboardPath = user.role === 'admin' 
-    ? '/admin/dashboard' 
-    : user.role === 'provider' 
-      ? '/provider/dashboard' 
-      : '/customer/dashboard';
-
-  return <Navigate to={dashboardPath} replace />;
-};
 
 export default App;

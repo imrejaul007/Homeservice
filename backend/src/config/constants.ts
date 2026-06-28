@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import logger from '../utils/logger';
 
 // Read version from package.json at runtime
 let APP_VERSION = '1.0.0';
@@ -8,7 +9,10 @@ try {
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
   APP_VERSION = packageJson.version || '1.0.0';
 } catch (error) {
-  console.warn('Could not read version from package.json, using default');
+  logger.warn('Could not read version from package.json, using default', {
+    context: 'AppConstants',
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
 export const APP_CONSTANTS = {
@@ -33,14 +37,16 @@ export const APP_CONSTANTS = {
     PENDING_REVIEW: 'pending_review',
   } as const,
 
-  // Booking Status
+  // Booking Status (aligned with frontend and booking-status.ts value object)
   BOOKING_STATUS: {
     PENDING: 'pending',
     CONFIRMED: 'confirmed',
     IN_PROGRESS: 'in_progress',
     COMPLETED: 'completed',
     CANCELLED: 'cancelled',
-    REFUNDED: 'refunded'
+    NO_SHOW: 'no_show',
+    REFUNDED: 'refunded',
+    REJECTED: 'rejected'
   } as const,
 
   // Payment Status

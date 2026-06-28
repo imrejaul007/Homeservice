@@ -1,10 +1,12 @@
 import { api } from './api';
+import { platformApi } from './platformApi';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation, type Position } from '@capacitor/geolocation';
 import { Preferences } from '@capacitor/preferences';
 import type { LocationCoordinates, GeocodeResponse, UserLocation, SupportedCity } from '@/types/location.types';
 
-export const SUPPORTED_CITIES: SupportedCity[] = [
+/** Offline fallback when API is unavailable */
+export const FALLBACK_SUPPORTED_CITIES: SupportedCity[] = [
   { id: 'dubai', name: 'Dubai', coordinates: { latitude: 25.2048, longitude: 55.2708 }, state: 'Dubai', country: 'UAE' },
   { id: 'abu-dhabi', name: 'Abu Dhabi', coordinates: { latitude: 24.4539, longitude: 54.3773 }, state: 'Abu Dhabi', country: 'UAE' },
   { id: 'sharjah', name: 'Sharjah', coordinates: { latitude: 25.3463, longitude: 55.4209 }, state: 'Sharjah', country: 'UAE' },
@@ -18,7 +20,17 @@ export const SUPPORTED_CITIES: SupportedCity[] = [
   { id: 'chennai', name: 'Chennai', coordinates: { latitude: 13.0827, longitude: 80.2707 }, state: 'Tamil Nadu', country: 'India' },
 ];
 
-const DEFAULT_CITY = SUPPORTED_CITIES[0];
+/** @deprecated Use locationService.getSupportedCities() or useLocationStore().supportedCities */
+export const SUPPORTED_CITIES = FALLBACK_SUPPORTED_CITIES;
+
+let supportedCitiesCache: SupportedCity[] | null = null;
+let supportedCitiesPromise: Promise<SupportedCity[]> | null = null;
+
+function getActiveCities(): SupportedCity[] {
+  return supportedCitiesCache && supportedCitiesCache.length > 0
+    ? supportedCitiesCache
+    : FALLBACK_SUPPORTED_CITIES;
+}
 
 const GEOCODED_CITY_ALIASES: Record<string, string> = {
   bengaluru: 'bangalore',
@@ -144,13 +156,14 @@ class WebLocationService {
   }
 
   private fallbackGeocode(lat: number, lng: number): GeocodeResponse {
-    const distances = SUPPORTED_CITIES.map((city) => ({
+    const cities = getActiveCities();
+    const distances = cities.map((city) => ({
       city,
       distance: this.calculateDistance(lat, lng, city.coordinates.latitude, city.coordinates.longitude),
     }));
 
     const nearest = distances.reduce((min, d) => (d.distance < min.distance ? d : min));
-    const selectedCity = nearest.distance < 100 ? nearest.city : DEFAULT_CITY;
+    const selectedCity = nearest.distance < 100 ? nearest.city : cities[0];
 
     return {
       formattedAddress: `${selectedCity.name}, ${selectedCity.state}, ${selectedCity.country}`,
@@ -253,20 +266,47 @@ class WebLocationService {
   }
 
   getDefaultCity(): SupportedCity {
-    return DEFAULT_CITY;
+    return getActiveCities()[0];
+  }
+
+  getSupportedCities(): SupportedCity[] {
+    return getActiveCities();
+  }
+
+  async fetchSupportedCities(): Promise<SupportedCity[]> {
+    if (supportedCitiesCache) return supportedCitiesCache;
+
+    if (!supportedCitiesPromise) {
+      supportedCitiesPromise = platformApi
+        .getSupportedCities()
+        .then((cities) => {
+          if (cities.length > 0) {
+            supportedCitiesCache = cities;
+            return cities;
+          }
+          return FALLBACK_SUPPORTED_CITIES;
+        })
+        .catch(() => FALLBACK_SUPPORTED_CITIES)
+        .finally(() => {
+          supportedCitiesPromise = null;
+        });
+    }
+
+    return supportedCitiesPromise;
   }
 
   /** Match a geocoded city name to a supported city (e.g. Bengaluru → Bangalore) */
   findSupportedCityByGeocode(cityName: string, country?: string): SupportedCity | null {
+    const cities = getActiveCities();
     const normalized = cityName.toLowerCase().trim();
     const aliasId = GEOCODED_CITY_ALIASES[normalized];
 
     if (aliasId) {
-      const byAlias = SUPPORTED_CITIES.find((city) => city.id === aliasId);
+      const byAlias = cities.find((city) => city.id === aliasId);
       if (byAlias) return byAlias;
     }
 
-    const byName = SUPPORTED_CITIES.find(
+    const byName = cities.find(
       (city) =>
         city.name.toLowerCase() === normalized ||
         city.id === normalized.replace(/\s+/g, '-')
@@ -275,7 +315,7 @@ class WebLocationService {
 
     if (country) {
       const normalizedCountry = country.toLowerCase().trim();
-      const byCountry = SUPPORTED_CITIES.find(
+      const byCountry = cities.find(
         (city) => city.country.toLowerCase() === normalizedCountry
       );
       if (byCountry) return byCountry;
@@ -285,14 +325,15 @@ class WebLocationService {
   }
 
   getDefaultLocation(): UserLocation {
+    const defaultCity = this.getDefaultCity();
     return {
-      coordinates: DEFAULT_CITY.coordinates,
+      coordinates: defaultCity.coordinates,
       address: {
-        address: DEFAULT_CITY.name,
-        city: DEFAULT_CITY.name,
-        state: DEFAULT_CITY.state,
-        country: DEFAULT_CITY.country,
-        formattedAddress: `${DEFAULT_CITY.name}, ${DEFAULT_CITY.state}, ${DEFAULT_CITY.country}`,
+        address: defaultCity.name,
+        city: defaultCity.name,
+        state: defaultCity.state,
+        country: defaultCity.country,
+        formattedAddress: `${defaultCity.name}, ${defaultCity.state}, ${defaultCity.country}`,
       },
       lastUpdated: new Date(),
       source: 'manual',
@@ -390,6 +431,10 @@ class WebLocationService {
    */
   getCityCoordinates(cityName: string): LocationCoordinates | null {
     const normalizedCity = cityName.toLowerCase().trim();
+    const fromSupported = getActiveCities().find(
+      (city) => city.id === normalizedCity || city.name.toLowerCase() === normalizedCity
+    );
+    if (fromSupported) return fromSupported.coordinates;
 
     const cityCoords: Record<string, LocationCoordinates> = {
       'dubai': { latitude: 25.2048, longitude: 55.2708 },

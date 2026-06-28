@@ -11,6 +11,7 @@ import { ApiError } from '../utils/ApiError';
 import Bundle from '../models/bundle.model';
 import logger from '../utils/logger';
 import { tenantMiddleware } from '../middleware/tenant.middleware';
+import { packageBookingService } from '../services/packageBooking.service';
 import { LOCATION_TYPES, OBJECT_ID_PATTERN, IDEMPOTENCY_KEY_PATTERN } from '../validation/schemas';
 
 /**
@@ -152,6 +153,74 @@ const router = Router();
  */
 router.get('/categories', tenantMiddleware, getPackageCategories);
 
+/**
+ * GET /api/packages/stats
+ * Aggregate package statistics for marketplace overview
+ */
+router.get('/stats', tenantMiddleware, asyncHandler(async (req: any, res: any) => {
+  const tenantId = req.tenantId;
+  if (!tenantId || !mongoose.Types.ObjectId.isValid(tenantId)) {
+    throw new ApiError(400, 'Valid tenant ID required');
+  }
+
+  const tenantFilter = tenantId !== '000000000000000000000000'
+    ? { tenantId: new mongoose.Types.ObjectId(tenantId) }
+    : {};
+
+  const baseFilter = {
+    ...tenantFilter,
+    isActive: true,
+    validFrom: { $lte: new Date() },
+    validUntil: { $gte: new Date() },
+  };
+
+  const [totalPackages, categoryStats, ratingStats] = await Promise.all([
+    Bundle.countDocuments(baseFilter),
+    Bundle.aggregate([
+      { $match: baseFilter },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'categoryId',
+          foreignField: '_id',
+          as: 'categoryInfo',
+        },
+      },
+      {
+        $group: {
+          _id: { $arrayElemAt: ['$categoryInfo.name', 0] },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+      { $limit: 5 },
+    ]),
+    Bundle.aggregate([
+      { $match: baseFilter },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: '$rating.average' },
+          totalSavings: { $sum: '$savingsAmount' },
+        },
+      },
+    ]),
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      totalPackages,
+      totalSavings: Math.round((ratingStats[0]?.totalSavings || 0) * 100) / 100,
+      averageRating: Math.round((ratingStats[0]?.averageRating || 0) * 10) / 10,
+      popularCategories: categoryStats.map((cat: any) => ({
+        category: cat._id || 'Other',
+        count: cat.count,
+      })),
+    },
+  });
+}));
+
 router.get(
   '/',
   tenantMiddleware,
@@ -169,6 +238,84 @@ router.get(
   tenantMiddleware,
   validateTenantAccess,
   customerDashboardController.getFeaturedPackages
+);
+
+/**
+ * GET /api/packages/stats — aggregate package counts for discovery UI
+ */
+router.get(
+  '/stats',
+  tenantMiddleware,
+  validateTenantAccess,
+  asyncHandler(async (req: any, res: any) => {
+    const tenantId = req.tenantId;
+    const tenantFilter = tenantId && tenantId !== '000000000000000000000000'
+      ? { tenantId: new mongoose.Types.ObjectId(tenantId) }
+      : {};
+    const now = new Date();
+    const baseFilter = {
+      ...tenantFilter,
+      isActive: true,
+      validFrom: { $lte: now },
+      validUntil: { $gte: now },
+    };
+
+    const [total, featured, categories] = await Promise.all([
+      Bundle.countDocuments(baseFilter),
+      Bundle.countDocuments({ ...baseFilter, isFeatured: true }),
+      Bundle.distinct('categoryId', baseFilter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        totalPackages: total,
+        featuredPackages: featured,
+        categoryCount: categories.filter(Boolean).length,
+      },
+    });
+  })
+);
+
+/**
+ * GET /api/packages/search?q= — alias for filtered package listing
+ */
+router.get(
+  '/search',
+  tenantMiddleware,
+  validateTenantAccess,
+  customerDashboardController.getPackages
+);
+
+/**
+ * GET /api/packages/category/:category — packages filtered by category slug/name
+ */
+router.get(
+  '/category/:category',
+  tenantMiddleware,
+  validateTenantAccess,
+  (req, _res, next) => {
+    req.query.category = req.params.category;
+    next();
+  },
+  customerDashboardController.getPackages
+);
+
+/**
+ * GET /api/packages/bookings/:bookingId — package booking details for customer
+ */
+router.get(
+  '/bookings/:bookingId',
+  authenticate,
+  requireRole('customer'),
+  validateObjectId('bookingId'),
+  asyncHandler(async (req: any, res: any) => {
+    const booking = await packageBookingService.getPackageBooking(
+      req.params.bookingId,
+      req.user._id.toString()
+    );
+    res.json({ success: true, data: booking });
+  })
 );
 
 /**

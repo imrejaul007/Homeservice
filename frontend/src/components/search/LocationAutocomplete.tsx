@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Search, Navigation, Clock, X, ChevronRight } from 'lucide-react';
-import { useLocationStore, SUPPORTED_CITIES } from '@/stores/locationStore';
+import { useLocationStore, useSupportedCities } from '@/stores/locationStore';
+import type { SupportedCity } from '@/types/location.types';
 import { cn } from '@/lib/utils';
 
 interface LocationAutocompleteProps {
   value?: string;
   onChange?: (location: string) => void;
-  onSelect?: (location: string, city?: typeof SUPPORTED_CITIES[0]) => void;
+  onSelect?: (location: string, city?: SupportedCity) => void;
   placeholder?: string;
   className?: string;
   variant?: 'default' | 'minimal' | 'hero';
@@ -28,6 +29,7 @@ const LocationAutocomplete: React.FC<LocationAutocompleteProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { selectedCity, setSelectedCity, getCurrentLocation, currentLocation } = useLocationStore();
+  const supportedCities = useSupportedCities();
 
   const [query, setQuery] = useState(value);
   const [isOpen, setIsOpen] = useState(false);
@@ -58,7 +60,7 @@ const LocationAutocomplete: React.FC<LocationAutocompleteProps> = ({
   }, []);
 
   // Filter cities based on query
-  const filteredCities = SUPPORTED_CITIES.filter(city =>
+  const filteredCities = supportedCities.filter(city =>
     city.name.toLowerCase().includes(query.toLowerCase()) ||
     city.id.includes(query.toLowerCase()) ||
     city.state.toLowerCase().includes(query.toLowerCase())
@@ -68,7 +70,7 @@ const LocationAutocomplete: React.FC<LocationAutocompleteProps> = ({
   const getNearbyLocations = useCallback(() => {
     if (!currentLocation) return [];
 
-    return SUPPORTED_CITIES
+    return supportedCities
       .map(city => {
         const distance = calculateDistance(
           currentLocation.coordinates.latitude,
@@ -80,7 +82,7 @@ const LocationAutocomplete: React.FC<LocationAutocompleteProps> = ({
       })
       .sort((a, b) => a.distance - b.distance)
       .slice(0, 4);
-  }, [currentLocation]);
+  }, [currentLocation, supportedCities]);
 
   // Calculate distance between two points (Haversine formula)
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -95,7 +97,7 @@ const LocationAutocomplete: React.FC<LocationAutocompleteProps> = ({
   };
 
   // Handle city selection
-  const handleSelect = (city: typeof SUPPORTED_CITIES[0]) => {
+  const handleSelect = (city: SupportedCity) => {
     setQuery(city.name);
     setSelectedCity(city);
     onSelect?.(city.name, city);

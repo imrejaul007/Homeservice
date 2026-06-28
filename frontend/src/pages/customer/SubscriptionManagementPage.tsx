@@ -31,6 +31,7 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 import {
   subscriptionApi,
   type Subscription,
@@ -179,9 +180,9 @@ const SubscriptionManagementPage: React.FC = () => {
       if (membershipRes.status === 'fulfilled' && membershipRes.value.data) {
         setMembershipTier(membershipRes.value.data);
       }
-    } catch (err: any) {
-      console.error('Failed to fetch subscription data:', err);
+    } catch (err) {
       if (err.response?.status !== 404) {
+        showDeduplicatedError('Failed to load subscription', err.response?.data?.message || 'Please try again');
         setError(err.response?.data?.message || 'Failed to load subscription data');
       }
     } finally {
@@ -197,8 +198,7 @@ const SubscriptionManagementPage: React.FC = () => {
       if (response.success && response.data) {
         setInvoices(response.data.invoices);
       }
-    } catch (err: any) {
-      console.error('Failed to fetch invoices:', err);
+    } catch {
       // Don't show error for invoices - they may simply not exist yet
     } finally {
       setIsLoadingInvoices(false);
@@ -223,8 +223,8 @@ const SubscriptionManagementPage: React.FC = () => {
 
       setSuccessMessage('Invoice downloaded successfully');
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err: any) {
-      console.error('Failed to download invoice:', err);
+    } catch (err) {
+      showDeduplicatedError('Failed to download invoice', err instanceof Error ? err.message : 'Please try again');
       setError('Failed to download invoice. Please try again.');
       setTimeout(() => setError(null), 3000);
     } finally {
@@ -233,22 +233,12 @@ const SubscriptionManagementPage: React.FC = () => {
   };
 
   // Open invoice PDF in new tab
-  const handleViewInvoice = async (invoice: SubscriptionInvoice) => {
-    setDownloadingInvoiceId(invoice.id);
+  const handleViewInvoice = async (invoiceId: string) => {
     try {
-      const pdfData = await subscriptionApi.downloadInvoice(invoice.id);
-
-      // Open PDF in new tab
-      const url = window.URL.createObjectURL(pdfData);
-      window.open(url, '_blank');
-
-      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
-    } catch (err: any) {
-      console.error('Failed to view invoice:', err);
-      setError('Failed to open invoice. Please try again.');
-      setTimeout(() => setError(null), 3000);
-    } finally {
-      setDownloadingInvoiceId(null);
+      const url = await subscriptionApi.getInvoicePdfUrl(invoiceId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      showDeduplicatedError('Failed to open invoice', err instanceof Error ? err.message : 'Please try again');
     }
   };
 
@@ -274,7 +264,7 @@ const SubscriptionManagementPage: React.FC = () => {
       }
 
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to change plan');
     } finally {
       setIsProcessing(false);
@@ -298,7 +288,7 @@ const SubscriptionManagementPage: React.FC = () => {
       setSuccessMessage('Your subscription will be cancelled at the end of the billing period.');
 
       setTimeout(() => setSuccessMessage(null), 5000);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to cancel subscription');
     } finally {
       setIsProcessing(false);
@@ -315,7 +305,7 @@ const SubscriptionManagementPage: React.FC = () => {
       setCurrentSubscription(subscription);
       setSuccessMessage('Your subscription has been reactivated!');
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to reactivate subscription');
     } finally {
       setIsProcessing(false);

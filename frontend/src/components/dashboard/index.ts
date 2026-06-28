@@ -3,8 +3,8 @@
  * Central export for all dashboard-related components
  */
 
-// Main Dashboard
-export { default as CustomerDashboard } from './CustomerDashboard';
+// Main Dashboard (deprecated - use /pages/CustomerDashboardEnhanced.tsx)
+// export { default as CustomerDashboard } from './CustomerDashboard';
 
 // Dashboard Sections
 export { default as DashboardStats } from './DashboardStats';

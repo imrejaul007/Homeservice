@@ -854,7 +854,7 @@ export class CustomerDashboardService {
     customerId: string,
     tenantId: string,
     limit: number = 10,
-    options?: { latitude?: number; longitude?: number; maxDistanceKm?: number }
+    options?: { latitude?: number; longitude?: number; maxDistanceKm?: number; category?: string }
   ): Promise<RecommendedProsResponseDTO> {
     try {
       // Validate inputs
@@ -878,7 +878,10 @@ export class CustomerDashboardService {
         throw new ApiError(400, 'Invalid maxDistanceKm: must be a positive number');
       }
 
-      const cacheKey = getRecommendationsCacheKey(tenantId, customerId);
+      // Include geo bucket and category in cache key so different contexts get separate caches
+      const geoSuffix = options?.latitude !== undefined && options?.longitude !== undefined ? ':geo' : ':nogeo';
+      const categorySuffix = options?.category ? `:cat:${options.category.toLowerCase()}` : '';
+      const cacheKey = getRecommendationsCacheKey(tenantId, customerId) + geoSuffix + categorySuffix;
 
       // Try to get from cache first
       try {
@@ -964,7 +967,7 @@ export class CustomerDashboardService {
     customerId: string,
     tenantId: string,
     limit: number = 10,
-    options?: { latitude?: number; longitude?: number; maxDistanceKm?: number }
+    options?: { latitude?: number; longitude?: number; maxDistanceKm?: number; category?: string }
   ): Promise<RecommendedProsResponseDTO> {
     const customerObjectId = toObjectId(customerId, 'customerId');
     const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
@@ -1018,10 +1021,14 @@ export class CustomerDashboardService {
     // Get unique recently used provider IDs
     const recentlyUsedProviderIds = [...new Set(recentBookings.map(b => b.providerId.toString()))];
 
-    // Get top-rated providers with matching categories (excluding recently used)
-    const matchCondition = preferredCategoryNames.length > 0
-      ? { 'services.category': { $in: preferredCategoryNames } }
-      : {};
+    // Get top-rated providers with matching categories (excluding recently used).
+    // If an explicit category filter was passed, use it directly (case-insensitive regex)
+    // so the chip selection on the frontend actually narrows results server-side.
+    const matchCondition = options?.category
+      ? { 'services.category': { $regex: new RegExp(options.category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
+      : preferredCategoryNames.length > 0
+        ? { 'services.category': { $in: preferredCategoryNames } }
+        : {};
 
     // Build exclude condition for recently used providers
     const excludeProviderIds = recentlyUsedProviderIds.length > 0
@@ -1773,7 +1780,8 @@ export class CustomerDashboardService {
       if (error instanceof ApiError) {
         throw error;
       }
-      console.error('Error fetching package by ID:', {
+      logger.error('Error fetching package by ID', {
+        context: 'CustomerDashboard',
         packageId,
         tenantId,
         error: error instanceof Error ? error.message : String(error),

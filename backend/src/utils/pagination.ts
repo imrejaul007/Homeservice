@@ -3,6 +3,8 @@
  * Includes robust input validation, NaN handling, and DoS prevention
  */
 
+import logger from './logger';
+
 export interface PaginationParams {
   page?: number;
   limit?: number;
@@ -19,6 +21,12 @@ export interface PaginationMeta {
   hasPrevPage: boolean;
   nextPage: number | null;
   prevPage: number | null;
+  /** @deprecated Use totalPages */
+  pages?: number;
+  /** @deprecated Use hasNextPage */
+  hasNext?: boolean;
+  /** @deprecated Use hasPrevPage */
+  hasPrev?: boolean;
 }
 
 export interface PaginatedResult<T> {
@@ -118,6 +126,10 @@ export const getPaginationMeta = (
     hasPrevPage: safePage > 1,
     nextPage: safePage < totalPages ? safePage + 1 : null,
     prevPage: safePage > 1 ? safePage - 1 : null,
+    // Frontend compatibility aliases
+    pages: totalPages,
+    hasNext: safePage < totalPages,
+    hasPrev: safePage > 1,
   };
 };
 
@@ -175,7 +187,10 @@ export const paginate = async <T>(
     };
   } catch (error) {
     // Log error and return empty result with proper pagination metadata
-    console.error('Pagination query error:', error);
+    logger.error('Pagination query error', {
+      context: 'Pagination',
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       data: [],
       pagination: getPaginationMeta(0, page, limit),
@@ -313,7 +328,10 @@ export const cursorPaginate = async <T>(
       hasMore,
     };
   } catch (error) {
-    console.error('Cursor pagination error:', error);
+    logger.error('Cursor pagination error', {
+      context: 'Pagination',
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       data: [],
       nextCursor: null,

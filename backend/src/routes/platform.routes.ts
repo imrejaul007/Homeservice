@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import PlatformSettings from '../models/settings.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { getPublicPlatformConfig } from '../services/platformSettingsPolicy.service';
+import { SUPPORTED_CITIES } from '../constants/supportedCities';
 
 const router = Router();
 
@@ -38,6 +39,20 @@ router.get(
     res.json({
       success: true,
       data: getPublicPlatformConfig(),
+    });
+  })
+);
+
+/**
+ * GET /api/platform/cities
+ * Supported service cities for location pickers and geocoding fallback.
+ */
+router.get(
+  '/cities',
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: { cities: SUPPORTED_CITIES },
     });
   })
 );

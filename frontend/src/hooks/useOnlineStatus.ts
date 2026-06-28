@@ -23,6 +23,8 @@ interface UseOnlineStatusOptions {
   onOnline?: () => void;
   /** Callback when status changes to offline */
   onOffline?: () => void;
+  /** Health check endpoint URL */
+  healthEndpoint?: string;
 }
 
 interface UseOnlineStatusReturn {
@@ -51,6 +53,7 @@ export function useOnlineStatus(options: UseOnlineStatusOptions = {}): UseOnline
     useCapacitor = Capacitor.isNativePlatform(),
     onOnline,
     onOffline,
+    healthEndpoint = '/api/health',
   } = options;
 
   const [isOnline, setIsOnline] = useState(initialStatus);
@@ -133,7 +136,7 @@ export function useOnlineStatus(options: UseOnlineStatusOptions = {}): UseOnline
           const timeoutId = setTimeout(() => controller.abort(), 5000);
 
           // Try to reach the API
-          const response = await fetch('/api/health', {
+          const response = await fetch(healthEndpoint, {
             method: 'HEAD',
             signal: controller.signal,
             cache: 'no-cache',
@@ -153,7 +156,7 @@ export function useOnlineStatus(options: UseOnlineStatusOptions = {}): UseOnline
       setIsChecking(false);
       setLastChecked(new Date());
     }
-  }, [useCapacitor]);
+  }, [useCapacitor, healthEndpoint]);
 
   /**
    * Handle coming back online

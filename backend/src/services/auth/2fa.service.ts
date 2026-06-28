@@ -13,8 +13,9 @@ if (IS_PRODUCTION && !ENCRYPTION_KEY) {
   throw new Error('FATAL: TWO_FA_ENCRYPTION_KEY environment variable is required for 2FA functionality in production');
 }
 
-// Use a development fallback key if not set (NOT for production)
-const DEV_ENC_KEY = ENCRYPTION_KEY || 'dev_2fa_encryption_key_for_development_only';
+// SECURITY FIX: Removed hardcoded fallback key - production MUST have TWO_FA_ENCRYPTION_KEY set
+// Only use environment variable; throw error in production if not set
+const DEV_ENC_KEY = IS_PRODUCTION ? undefined : 'dev_2fa_encryption_key_for_development_only';
 
 // Configuration for TOTP
 const TOTP_CONFIG = {
@@ -189,20 +190,22 @@ export async function hashRecoveryCodes(codes: string[]): Promise<string[]> {
 
 /**
  * Verify a recovery code against hashed codes
- * Iterates through all hashed codes until a match is found
+ * SECURITY FIX: This function only verifies if a code is valid.
+ * The actual atomic consumption of the code must be done separately using consumeRecoveryCode.
+ * This prevents race conditions where the same code could be used twice.
  */
 export async function verifyRecoveryCode(
   hashedCodes: string[],
   token: string
-): Promise<boolean> {
+): Promise<{ valid: boolean; codeIndex?: number }> {
   if (!hashedCodes || !Array.isArray(hashedCodes) || hashedCodes.length === 0) {
     logger.warn('Recovery code verification failed: No hashed codes provided');
-    return false;
+    return { valid: false };
   }
 
   if (!token || typeof token !== 'string') {
     logger.warn('Recovery code verification failed: Invalid token');
-    return false;
+    return { valid: false };
   }
 
   // Normalize the token
@@ -215,7 +218,7 @@ export async function verifyRecoveryCode(
       const isMatch = await bcrypt.compare(normalizedToken, hashedCodes[i]);
       if (isMatch) {
         logger.info('Recovery code verified successfully', { codeIndex: i });
-        return true;
+        return { valid: true, codeIndex: i };
       }
     } catch (error) {
       // Continue checking other codes if one fails to compare
@@ -224,7 +227,77 @@ export async function verifyRecoveryCode(
   }
 
   logger.warn('Recovery code verification failed: No match found');
-  return false;
+  return { valid: false };
+}
+
+/**
+ * SECURITY FIX: Atomically consume a recovery code to prevent race conditions.
+ * Uses findOneAndUpdate to ensure only ONE request can consume a given code.
+ * Returns true if the code was successfully consumed, false if already used or invalid.
+ */
+export async function consumeRecoveryCode(
+  userId: string,
+  hashedCode: string
+): Promise<boolean> {
+  try {
+    // Import User model dynamically to avoid circular dependencies
+    const User = (await import('../../models/user.model')).default;
+
+    // SECURITY FIX: Use atomic findOneAndUpdate to prevent race conditions
+    // Only one concurrent request can succeed in marking a code as used
+    const result = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        'twoFactor.recoveryCodes': hashedCode, // Code must exist in array
+      },
+      {
+        $pull: { 'twoFactor.recoveryCodes': hashedCode }, // Atomically remove the code
+        $inc: { 'twoFactor.recoveryCodesVersion': 1 }, // Increment version for optimistic locking
+      },
+      { new: true }
+    );
+
+    if (!result) {
+      logger.warn('Recovery code consumption failed: code not found or already used', { userId });
+      return false;
+    }
+
+    // Check remaining codes and set reenrollment flag if exhausted
+    const codesRemaining = (result.twoFactor as any)?.recoveryCodes?.length ?? 0;
+
+    if (codesRemaining < 3 && codesRemaining > 0) {
+      logger.warn('2FA recovery codes running low', {
+        userId,
+        codesRemaining,
+        warning: 'User should generate new recovery codes',
+        action: 'LOW_RECOVERY_CODES',
+      });
+    }
+
+    if (codesRemaining === 0) {
+      logger.error('SECURITY_ALERT: All 2FA recovery codes exhausted', {
+        userId,
+        email: result.email,
+        action: 'ALL_RECOVERY_CODES_EXHAUSTED',
+        requiresReenrollment: true,
+      });
+
+      // Set reenrollment flag
+      await User.updateOne(
+        { _id: userId },
+        { $set: { 'twoFactor.needsReenrollment': true } }
+      );
+    }
+
+    logger.info('Recovery code consumed atomically', { userId, codesRemaining });
+    return true;
+  } catch (error) {
+    logger.error('Error consuming recovery code', {
+      userId,
+      error: (error as Error).message,
+    });
+    return false;
+  }
 }
 
 /**
@@ -238,6 +311,13 @@ export function encryptSecret(secret: string): string {
 
   // Get encryption key from environment (use fallback in development)
   const encryptionKey = ENCRYPTION_KEY || DEV_ENC_KEY;
+  if (!encryptionKey) {
+    logger.error('TWO_FA_ENCRYPTION_KEY not configured', {
+      context: 'TwoFactorService',
+      action: 'MISSING_ENCRYPTION_KEY',
+    });
+    throw ApiError.internal('Two-factor authentication is not properly configured');
+  }
   if (IS_PRODUCTION && !ENCRYPTION_KEY) {
     logger.error('TWO_FA_ENCRYPTION_KEY not configured', {
       context: 'TwoFactorService',
@@ -293,6 +373,13 @@ export function decryptSecret(encryptedSecret: string): string {
 
   // Get encryption key from environment (use fallback in development)
   const encryptionKey = ENCRYPTION_KEY || DEV_ENC_KEY;
+  if (!encryptionKey) {
+    logger.error('TWO_FA_ENCRYPTION_KEY not configured', {
+      context: 'TwoFactorService',
+      action: 'MISSING_ENCRYPTION_KEY',
+    });
+    throw ApiError.internal('Two-factor authentication is not properly configured');
+  }
   if (IS_PRODUCTION && !ENCRYPTION_KEY) {
     logger.error('TWO_FA_ENCRYPTION_KEY not configured for decryption', {
       context: 'TwoFactorService',
@@ -444,6 +531,7 @@ export default {
   generateRecoveryCodes,
   hashRecoveryCodes,
   verifyRecoveryCode,
+  consumeRecoveryCode,
   encryptSecret,
   decryptSecret,
   generateQRCode,

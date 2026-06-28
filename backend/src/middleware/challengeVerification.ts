@@ -11,6 +11,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { cache, isRedisAvailable } from '../config/redis';
+import logger from '../utils/logger';
 
 // In-memory store fallback when Redis is unavailable
 const challengeStore = new Map<string, ChallengeData>();
@@ -184,7 +185,10 @@ export function issueChallenge(
 
   // Store (async, but we don't await)
   storeChallenge(challengeId, challengeData).catch(err => {
-    console.error('Failed to store challenge in Redis:', err);
+    logger.error('Failed to store challenge in Redis', {
+      context: 'ChallengeVerification',
+      error: err instanceof Error ? err.message : String(err),
+    });
   });
 
   return {

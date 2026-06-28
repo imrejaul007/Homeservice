@@ -1,53 +1,15 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
+import { useEffect } from 'react';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
-import { Capacitor } from '@capacitor/core';
-import { Preferences } from '@capacitor/preferences';
-import { locationService, SUPPORTED_CITIES } from '@/services/locationService';
+import { capacitorStorageAdapter } from '../lib/storageAdapters';
+import { locationService, FALLBACK_SUPPORTED_CITIES } from '@/services/locationService';
 import type { UserLocation, SupportedCity, LocationState } from '@/types/location.types';
 
-/**
- * Capacitor-safe Zustand storage adapter
- */
-const capacitorStorageAdapter: StateStorage = {
-  getItem: async (name: string): Promise<string | null> => {
-    if (Capacitor.isNativePlatform()) {
-      try {
-        const result = await Preferences.get({ key: name });
-        return result.value;
-      } catch {
-        return null;
-      }
-    }
-    // Browser fallback
-    if (typeof window !== 'undefined' && window.localStorage) {
-      return localStorage.getItem(name);
-    }
-    return null;
-  },
-  setItem: async (name: string, value: string): Promise<void> => {
-    if (Capacitor.isNativePlatform()) {
-      await Preferences.set({ key: name, value });
-    } else {
-      // Browser fallback
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.setItem(name, value);
-      }
-    }
-  },
-  removeItem: async (name: string): Promise<void> => {
-    if (Capacitor.isNativePlatform()) {
-      await Preferences.remove({ key: name });
-    } else {
-      // Browser fallback
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.removeItem(name);
-      }
-    }
-  },
-};
-
 interface LocationStoreState extends LocationState {
+  supportedCities: SupportedCity[];
+  citiesLoaded: boolean;
+  loadSupportedCities: () => Promise<SupportedCity[]>;
   requestLocationPermission: () => Promise<boolean>;
   getCurrentLocation: () => Promise<UserLocation | null>;
   setSelectedCity: (city: SupportedCity) => void;
@@ -60,18 +22,36 @@ type StoreSet = (
 ) => void;
 type StoreGet = () => LocationStoreState;
 
-const initialState: LocationState = {
+const initialState: LocationState & { supportedCities: SupportedCity[]; citiesLoaded: boolean } = {
   currentLocation: null,
   selectedCity: null,
   isLoading: false,
   error: null,
   permissionStatus: 'undetermined',
+  supportedCities: FALLBACK_SUPPORTED_CITIES,
+  citiesLoaded: false,
 };
 
 export const useLocationStore = create<LocationStoreState>()(
   persist(
     immer((set: StoreSet, get: StoreGet) => ({
       ...initialState,
+
+      loadSupportedCities: async (): Promise<SupportedCity[]> => {
+        if (get().citiesLoaded) return get().supportedCities;
+
+        try {
+          const cities = await locationService.fetchSupportedCities();
+          set(() => ({
+            supportedCities: cities.length > 0 ? cities : FALLBACK_SUPPORTED_CITIES,
+            citiesLoaded: true,
+          }));
+          return get().supportedCities;
+        } catch {
+          set(() => ({ citiesLoaded: true }));
+          return get().supportedCities;
+        }
+      },
 
       requestLocationPermission: async (): Promise<boolean> => {
         try {
@@ -196,5 +176,18 @@ export const useLocationStore = create<LocationStoreState>()(
   )
 );
 
-export { SUPPORTED_CITIES };
+export { FALLBACK_SUPPORTED_CITIES as SUPPORTED_CITIES };
+
+/** Load and return API-backed supported cities */
+export function useSupportedCities(): SupportedCity[] {
+  const supportedCities = useLocationStore((s) => s.supportedCities);
+  const loadSupportedCities = useLocationStore((s) => s.loadSupportedCities);
+
+  useEffect(() => {
+    void loadSupportedCities();
+  }, [loadSupportedCities]);
+
+  return supportedCities;
+}
+
 export default useLocationStore;

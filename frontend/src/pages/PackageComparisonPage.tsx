@@ -101,7 +101,7 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
       setPackages(data.packages);
       setMetrics(data.comparisonMetrics);
       setSelectedIds(ids);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.message || 'Failed to load comparison');
     } finally {
       setIsLoading(false);
@@ -120,7 +120,7 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
         (pkg) => !excludeIds.includes(pkg._id)
       );
       setRecommendedPackages(available);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch recommended packages:', err);
     } finally {
       setIsLoadingRecommended(false);
@@ -335,9 +335,9 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <div>
-              <h1 className="text-3xl font-serif text-nilin-charcoal flex items-center gap-3">
-                <Scale className="w-8 h-8 text-nilin-coral" />
+            <div className="min-w-0">
+              <h1 className="text-2xl sm:text-3xl font-serif text-nilin-charcoal flex flex-wrap items-center gap-2 sm:gap-3">
+                <Scale className="w-7 h-7 sm:w-8 sm:h-8 text-nilin-coral flex-shrink-0" />
                 Compare Packages
               </h1>
               <p className="text-nilin-warmGray mt-1">
@@ -345,11 +345,12 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
               </p>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
               <Button
                 variant="outline"
                 onClick={() => setShowAddModal(true)}
                 disabled={selectedIds.length >= MAX_COMPARE_PACKAGES}
+                className="w-full sm:w-auto min-h-11"
               >
                 <Filter className="w-4 h-4 mr-2" />
                 Add Package
@@ -357,6 +358,7 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
               <Button
                 variant="outline"
                 onClick={() => navigate('/packages')}
+                className="w-full sm:w-auto min-h-11"
               >
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Back to Packages
@@ -380,10 +382,119 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
             </div>
           )}
 
-          {/* Comparison Table */}
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-            {/* Mobile Horizontal Scroll */}
-            <div className="overflow-x-auto">
+          {/* Mobile card comparison */}
+          <div className="md:hidden space-y-4">
+            {packages.map((pkg) => {
+              const badge = getBestBadge(pkg);
+              const BadgeIcon = badge?.icon;
+              const pkgItems = (pkg.includedItems || []).map((i) => (typeof i === 'string' ? i : i.name));
+              return (
+                <div key={pkg._id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 relative">
+                  <button
+                    onClick={() => handleRemovePackage(pkg._id)}
+                    className="absolute top-3 right-3 w-11 h-11 bg-red-100 hover:bg-red-200 text-red-600 rounded-full flex items-center justify-center transition-colors"
+                    aria-label={`Remove ${pkg.name} from comparison`}
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                  <Link to={`/packages/${pkg._id}`} className="block pr-12">
+                    <div className="w-full h-28 bg-gradient-to-br from-nilin-coral/20 to-nilin-blush/30 rounded-lg mb-3 flex items-center justify-center">
+                      <span className="text-4xl opacity-30">📦</span>
+                    </div>
+                    <h3 className="font-medium text-nilin-charcoal text-base leading-snug">{pkg.name}</h3>
+                    <p className="text-xs text-nilin-warmGray mt-1">{pkg.provider.name}</p>
+                    {badge && BadgeIcon && (
+                      <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border mt-2 ${badge.className}`}>
+                        <BadgeIcon className="w-3 h-3" />
+                        {badge.label}
+                      </span>
+                    )}
+                  </Link>
+                  <dl className="mt-4 space-y-2 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-nilin-warmGray">Price</dt>
+                      <dd className={`font-semibold text-right ${isBestValue(pkg) ? 'text-green-600' : 'text-nilin-charcoal'}`}>
+                        {formatPrice(pkg.pricing.currentPrice)}
+                        {pkg.pricing.hasDiscount && (
+                          <span className="block text-xs text-nilin-warmGray line-through font-normal">
+                            {formatPrice(pkg.pricing.originalPrice)}
+                          </span>
+                        )}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-nilin-warmGray">Duration</dt>
+                      <dd className={isShortestDuration(pkg) ? 'text-green-600 font-medium' : 'text-nilin-charcoal'}>
+                        {pkg.duration.formatted}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-nilin-warmGray">Rating</dt>
+                      <dd className={isHighestRated(pkg) ? 'text-green-600 font-medium' : 'text-nilin-charcoal'}>
+                        {pkg.stats.rating > 0 ? pkg.stats.rating.toFixed(1) : 'N/A'} ({pkg.stats.reviewCount})
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-nilin-warmGray">Bookings</dt>
+                      <dd className={isMostPopular(pkg) ? 'text-green-600 font-medium' : 'text-nilin-charcoal'}>
+                        {pkg.stats.bookingCount > 0 ? pkg.stats.bookingCount.toLocaleString() : 'New'}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-nilin-warmGray">Verified</dt>
+                      <dd>{pkg.provider.isVerified ? <span className="text-green-600">Yes</span> : <span className="text-gray-400">No</span>}</dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-nilin-warmGray">Instant booking</dt>
+                      <dd>{pkg.availability.instantBooking ? <Check className="w-5 h-5 text-green-500 ml-auto" /> : <X className="w-5 h-5 text-gray-300 ml-auto" />}</dd>
+                    </div>
+                  </dl>
+                  {pkgItems.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <p className="text-xs font-medium text-nilin-charcoal mb-2">Included ({pkgItems.length})</p>
+                      <ul className="space-y-1">
+                        {pkgItems.slice(0, 5).map((item) => (
+                          <li key={item} className="flex items-center gap-2 text-xs text-nilin-warmGray">
+                            <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                            {item}
+                          </li>
+                        ))}
+                        {pkgItems.length > 5 && (
+                          <li className="text-xs text-nilin-warmGray">+{pkgItems.length - 5} more</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="mt-4 space-y-2">
+                    <Button onClick={() => navigate(`/book-package/${pkg._id}`)} className="w-full min-h-11">
+                      <ShoppingCart className="w-4 h-4 mr-2" />
+                      Book Now
+                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 min-h-11"
+                        onClick={() => {
+                          navigator.clipboard.writeText(`${window.location.origin}/packages/${pkg._id}`);
+                          toast.success('Link copied!');
+                        }}
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </Button>
+                      <Button variant="outline" size="sm" className="flex-1 min-h-11">
+                        <Heart className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop comparison table */}
+          <div className="hidden md:block bg-white rounded-xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
               <table className="w-full min-w-[800px]">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200">
@@ -396,8 +507,9 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
                           {/* Remove button */}
                           <button
                             onClick={() => handleRemovePackage(pkg._id)}
-                            className="absolute -top-1 -right-1 w-6 h-6 bg-red-100 hover:bg-red-200 text-red-600 rounded-full flex items-center justify-center transition-colors"
+                            className="absolute -top-1 -right-1 w-11 h-11 bg-red-100 hover:bg-red-200 text-red-600 rounded-full flex items-center justify-center transition-colors"
                             title="Remove from comparison"
+                            aria-label={`Remove ${pkg.name} from comparison`}
                           >
                             <X className="w-4 h-4" />
                           </button>
@@ -701,7 +813,8 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
               <h2 className="text-lg font-medium text-nilin-charcoal">Add Package to Compare</h2>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                className="w-11 h-11 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
+                aria-label="Close add package modal"
               >
                 <X className="w-5 h-5 text-nilin-warmGray" />
               </button>

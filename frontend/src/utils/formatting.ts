@@ -176,10 +176,12 @@ export function formatDate(
   },
   locale: string = 'en-US'
 ): string {
-  const dateObj = parseDate(date);
-  if (!dateObj) return '';
-
-  return new Intl.DateTimeFormat(locale, options).format(dateObj);
+  try {
+    const dateObj = parseDate(date);
+    return new Intl.DateTimeFormat(locale, options).format(dateObj);
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -240,22 +242,25 @@ export function formatDateTime(
   time?: string,
   locale: string = 'en-US'
 ): string {
-  const dateObj = parseDate(date);
-  if (!dateObj) return '';
+  try {
+    const dateObj = parseDate(date);
 
-  if (time) {
-    const [hours, minutes] = time.split(':').map(Number);
-    dateObj.setHours(hours, minutes, 0, 0);
+    if (time) {
+      const [hours, minutes] = time.split(':').map(Number);
+      dateObj.setHours(hours, minutes, 0, 0);
+    }
+
+    return new Intl.DateTimeFormat(locale, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(dateObj);
+  } catch {
+    return '';
   }
-
-  return new Intl.DateTimeFormat(locale, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(dateObj);
 }
 
 /**
@@ -274,8 +279,12 @@ export function formatRelativeTime(
   referenceDate: Date = new Date(),
   locale: string = 'en-US'
 ): string {
-  const dateObj = parseDate(date);
-  if (!dateObj) return '';
+  let dateObj: Date;
+  try {
+    dateObj = parseDate(date);
+  } catch {
+    return '';
+  }
 
   const diffMs = referenceDate.getTime() - dateObj.getTime();
   const diffSeconds = Math.round(diffMs / 1000);
@@ -350,10 +359,14 @@ export function formatDateRange(
   endDate: string | Date | number,
   locale: string = 'en-US'
 ): string {
-  const start = parseDate(startDate);
-  const end = parseDate(endDate);
-
-  if (!start || !end) return '';
+  let start: Date;
+  let end: Date;
+  try {
+    start = parseDate(startDate);
+    end = parseDate(endDate);
+  } catch {
+    return '';
+  }
 
   const sameDay = start.toDateString() === end.toDateString();
 
@@ -703,22 +716,34 @@ export function formatBookingNumber(bookingNumber: string): string {
  * Parse various date formats to Date object
  *
  * @param date - Date to parse
- * @returns Date object or null
+ * @returns Date object
+ * @throws Error if date is invalid
  */
-function parseDate(date: string | Date | number): Date | null {
-  if (!date) return null;
+function parseDate(date: string | Date | number): Date {
+  if (!date) {
+    throw new Error('Date is required');
+  }
 
   if (date instanceof Date) {
-    return isNaN(date.getTime()) ? null : date;
+    if (isNaN(date.getTime())) {
+      throw new Error('Invalid Date object');
+    }
+    return date;
   }
 
   if (typeof date === 'number') {
     const d = new Date(date);
-    return isNaN(d.getTime()) ? null : d;
+    if (isNaN(d.getTime())) {
+      throw new Error('Invalid timestamp');
+    }
+    return d;
   }
 
   const parsed = new Date(date);
-  return isNaN(parsed.getTime()) ? null : parsed;
+  if (isNaN(parsed.getTime())) {
+    throw new Error(`Invalid date string: ${date}`);
+  }
+  return parsed;
 }
 
 // =============================================================================

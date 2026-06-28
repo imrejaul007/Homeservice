@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Sparkles, MessageCircle, Lightbulb, Zap, Calendar, Search, Bot } from 'lucide-react';
-import { toast } from 'react-hot-toast';
+import { handleApiError } from '../../utils/toastUtils';
 import authService from '../../services/AuthService';
 
 interface AIChatResponse {
@@ -60,8 +60,7 @@ const AIAssistantPage: React.FC = () => {
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
-      console.error('AI Chat Error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to send message');
+      handleApiError(error, 'Failed to send message');
       setMessages(prev => prev.filter(m => m.id !== userMessage.id));
     } finally {
       setIsLoading(false);

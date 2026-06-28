@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, User, LogOut, BarChart3, X, Calendar, Heart, Package, Gift, MessageCircle, AlertCircle, CheckCircle } from 'lucide-react';
+import { Search, User, LogOut, BarChart3, X, Calendar, Heart, Package, Gift, MessageCircle, AlertCircle, CheckCircle, Download, Shield, TrendingUp } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import CategoryTabs from './CategoryTabs';
 import LocationDropdown from '../location/LocationDropdown';
 import NotificationBell from '../common/NotificationBell';
 import HeaderSearchDropdown from '../search/HeaderSearchDropdown';
 import { useSearchStore } from '../../stores/searchStore';
+import { useTrendingSearchTerms } from '../../hooks/useTrendingSearchTerms';
 import { toast } from 'react-hot-toast';
 import { motion } from 'framer-motion';
 
@@ -31,6 +32,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const { addToSearchHistory } = useSearchStore();
+  const { terms: trendingSearchTerms } = useTrendingSearchTerms(5);
   const [searchQuery, setSearchQuery] = useState('');
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -216,6 +218,13 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
 
   const rowMinHeight = isHeroVariant ? navHeight : 64;
 
+  const dashboardHref =
+    user?.role === 'admin'
+      ? '/admin/dashboard'
+      : user?.role === 'provider'
+        ? '/provider/dashboard'
+        : '/customer/dashboard';
+
   return (
     <>
       <header
@@ -245,6 +254,15 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
               </button>
 
               <LocationDropdown variant="mobile" />
+
+              {user && (
+                <Link
+                  to={dashboardHref}
+                  className="px-3 py-2 rounded-full text-xs font-bold text-white bg-nilin-coral hover:bg-nilin-rose shadow-sm transition-colors"
+                >
+                  Dashboard
+                </Link>
+              )}
 
               {user ? (
                 <button
@@ -304,6 +322,17 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                 <Package className="h-5 w-5" />
                 <span className="hidden lg:inline">Track Order</span>
               </Link>
+
+              {user && (
+                <Link
+                  to={dashboardHref}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-bold text-white bg-nilin-coral hover:bg-nilin-rose shadow-md hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 transition-all duration-150"
+                  style={{ transform: `scale(${textScale})` }}
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  <span>Dashboard</span>
+                </Link>
+              )}
 
               {/* Search Bar - Full width in floating */}
               {showSearch && (
@@ -434,6 +463,18 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                               <Link to="/customer/favorites" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
                                 <Heart className="h-4 w-4 text-nilin-coral" /> Favorites
                               </Link>
+                              <Link to="/customer/analytics" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
+                                <BarChart3 className="h-4 w-4 text-nilin-coral" /> Analytics
+                              </Link>
+                              <Link to="/customer/stats" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
+                                <TrendingUp className="h-4 w-4 text-nilin-coral" /> My Stats
+                              </Link>
+                              <Link to="/customer/data-export" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
+                                <Download className="h-4 w-4 text-nilin-coral" /> Data Export
+                              </Link>
+                              <Link to="/customer/privacy-settings" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
+                                <Shield className="h-4 w-4 text-nilin-coral" /> Privacy Settings
+                              </Link>
                             </>
                           )}
 
@@ -444,6 +485,9 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                               </Link>
                               <Link to="/provider/bookings" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
                                 <Calendar className="h-4 w-4 text-nilin-coral" /> Bookings
+                              </Link>
+                              <Link to="/provider/messages" className="flex items-center gap-3 px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/40 hover:text-nilin-coral active:bg-nilin-peach/30 rounded-xl mx-2 transition-all duration-150" onClick={() => setShowUserMenu(false)}>
+                                <MessageCircle className="h-4 w-4 text-nilin-coral" /> Messages
                               </Link>
                             </>
                           )}
@@ -516,7 +560,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
       {showMobileSearch && (
         <div className="fixed inset-0 bg-white/98 backdrop-blur-xl z-[105] md:hidden animate-fade-in">
           <div className="flex items-center gap-3 px-4 py-3 border-b border-nilin-border">
-            <button onClick={() => setShowMobileSearch(false)} className="p-1 text-nilin-warmGray hover:text-nilin-charcoal transition-colors duration-200">
+            <button onClick={() => setShowMobileSearch(false)} className="min-h-11 min-w-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal transition-colors duration-200">
               <X className="h-5 w-5" />
             </button>
             <form onSubmit={handleSearch} className="flex-1">
@@ -533,7 +577,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
           <div className="p-4">
             <p className="text-xs font-medium text-nilin-warmGray uppercase tracking-wider mb-3">Popular searches</p>
             <div className="space-y-1">
-              {['Bridal Makeup', 'Swedish Massage', 'Gel Nails', 'Hair Coloring', 'Facial'].map((term) => (
+              {trendingSearchTerms.map((term) => (
                 <button
                   key={term}
                   onClick={() => {
@@ -542,10 +586,10 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                     navigate(`/search?q=${encodeURIComponent(term)}`);
                     setShowMobileSearch(false);
                   }}
-                  className="flex items-center gap-3 w-full px-3 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-peach/30 rounded-lg transition-all duration-200"
+                  className="flex items-center gap-3 w-full min-h-11 px-3 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-peach/30 rounded-lg transition-all duration-200"
                 >
-                  <Search className="h-4 w-4 text-nilin-warmGray" />
-                  {term}
+                  <Search className="h-4 w-4 text-nilin-warmGray flex-shrink-0" />
+                  <span className="truncate">{term}</span>
                 </button>
               ))}
             </div>
@@ -607,6 +651,18 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                       </Link>
                       <Link to="/customer/favorites" className="flex items-center gap-4 px-4 py-3.5 text-nilin-charcoal hover:bg-nilin-blush/50 active:bg-nilin-peach/40 rounded-xl transition-all duration-150" onClick={closeMobileMenu}>
                         <Heart className="h-5 w-5 text-nilin-coral" /> Favorites
+                      </Link>
+                      <Link to="/customer/analytics" className="flex items-center gap-4 px-4 py-3.5 text-nilin-charcoal hover:bg-nilin-blush/50 active:bg-nilin-peach/40 rounded-xl transition-all duration-150" onClick={closeMobileMenu}>
+                        <BarChart3 className="h-5 w-5 text-nilin-coral" /> Analytics
+                      </Link>
+                      <Link to="/customer/stats" className="flex items-center gap-4 px-4 py-3.5 text-nilin-charcoal hover:bg-nilin-blush/50 active:bg-nilin-peach/40 rounded-xl transition-all duration-150" onClick={closeMobileMenu}>
+                        <TrendingUp className="h-5 w-5 text-nilin-coral" /> My Stats
+                      </Link>
+                      <Link to="/customer/data-export" className="flex items-center gap-4 px-4 py-3.5 text-nilin-charcoal hover:bg-nilin-blush/50 active:bg-nilin-peach/40 rounded-xl transition-all duration-150" onClick={closeMobileMenu}>
+                        <Download className="h-5 w-5 text-nilin-coral" /> Data Export
+                      </Link>
+                      <Link to="/customer/privacy-settings" className="flex items-center gap-4 px-4 py-3.5 text-nilin-charcoal hover:bg-nilin-blush/50 active:bg-nilin-peach/40 rounded-xl transition-all duration-150" onClick={closeMobileMenu}>
+                        <Shield className="h-5 w-5 text-nilin-coral" /> Privacy Settings
                       </Link>
                     </>
                   )}

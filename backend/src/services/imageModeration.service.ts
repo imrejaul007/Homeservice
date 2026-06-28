@@ -159,23 +159,54 @@ export class ImageModerationService {
    * Check with AWS Rekognition
    */
   private async checkWithRekognition(imageUrl: string): Promise<any | null> {
-    // In production, use AWS SDK:
-    // const rekognition = new AWS.Rekognition();
-    // const result = await rekognition.detectModerationLabels({
-    //   Image: { S3Object: { Bucket, Name } } or { Url: imageUrl },
-    //   MinConfidence: 50,
-    // }).promise();
-
-    // Check if AWS is configured
-    if (!process.env.AWS_REKOGNITION_ENABLED) {
+    // Check if AWS Rekognition is enabled via environment variable
+    if (process.env.USE_AWS_REKOGNITION !== 'true') {
       return null;
     }
 
     try {
-      // Simulated response
-      return null; // Would return actual result
+      // Dynamic import AWS SDK to avoid loading if not needed
+      const AWS = await import('@aws-sdk/client-rekognition');
+
+      const client = new AWS.RekognitionClient({
+        region: process.env.AWS_REGION || 'us-east-1',
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+        },
+      });
+
+      const command = new AWS.DetectModerationLabelsCommand({
+        Image: {
+          // If image is from S3, use S3Object; otherwise use Url
+          Url: imageUrl,
+        },
+        MinConfidence: 50,
+      });
+
+      const result = await client.send(command);
+
+      logger.info('AWS Rekognition check completed', {
+        context: 'ImageModerationService',
+        action: 'REKOGNITION_CHECK',
+        imageUrl,
+        labelCount: result.ModerationLabels?.length || 0,
+      });
+
+      return {
+        ModerationLabels: result.ModerationLabels?.map((label: { Name?: string; ParentName?: string; Confidence?: number }) => ({
+          Name: label.Name,
+          ParentName: label.ParentName,
+          Confidence: label.Confidence,
+        })) || [],
+      };
     } catch (error) {
-      logger.warn('Rekognition check failed, falling back', { error });
+      logger.warn('Rekognition check failed, falling back', {
+        context: 'ImageModerationService',
+        action: 'REKOGNITION_ERROR',
+        imageUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -184,19 +215,37 @@ export class ImageModerationService {
    * Check with Google Vision AI
    */
   private async checkWithVision(imageUrl: string): Promise<any | null> {
-    // In production, use Google Cloud Vision:
-    // const vision = new Vision.ImageAnnotatorClient();
-    // const [result] = await vision.safeSearchDetection(imageUrl);
-
-    if (!process.env.GOOGLE_VISION_ENABLED) {
+    // Check if Google Vision is enabled via environment variable
+    if (process.env.USE_GOOGLE_VISION !== 'true') {
       return null;
     }
 
     try {
-      // Simulated response
-      return null;
+      // Dynamic import Google Cloud Vision SDK
+      const vision = await import('@google-cloud/vision');
+
+      const client = new vision.ImageAnnotatorClient({
+        keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      });
+
+      const [result] = await client.safeSearchDetection(imageUrl);
+
+      logger.info('Google Vision check completed', {
+        context: 'ImageModerationService',
+        action: 'VISION_CHECK',
+        imageUrl,
+      });
+
+      return {
+        safeSearchAnnotation: result.safeSearchAnnotation || {},
+      };
     } catch (error) {
-      logger.warn('Vision check failed, falling back', { error });
+      logger.warn('Vision check failed, falling back', {
+        context: 'ImageModerationService',
+        action: 'VISION_ERROR',
+        imageUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }

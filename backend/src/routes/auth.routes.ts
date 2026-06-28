@@ -59,6 +59,13 @@ router.post('/login',
   authController.login
 );
 
+// Complete login after 2FA verification
+router.post('/login/verify-2fa',
+  twoFactorVerifyLimiter,
+  verifyCaptcha({ required: false, skipIfDisabled: true }),
+  authController.verifyLogin2FA
+);
+
 // Password Reset Routes
 router.post('/forgot-password',
   passwordResetLimiter,

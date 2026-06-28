@@ -158,7 +158,7 @@ const SLAReport: React.FC = () => {
   return (
     <ErrorBoundary>
       <PageLayout title="SLA Compliance" subtitle="Service Level Agreement monitoring and compliance tracking">
-        <div className="space-y-6">
+        <div className="space-y-6 overflow-x-hidden min-w-0">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -171,7 +171,7 @@ const SLAReport: React.FC = () => {
             <select
               value={dateRange}
               onChange={(e) => setDateRange(e.target.value)}
-              className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500"
+              className="min-h-11 px-4 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
               <option value="7">Last 7 days</option>
               <option value="30">Last 30 days</option>
@@ -180,7 +180,7 @@ const SLAReport: React.FC = () => {
             <button
               onClick={() => fetchData(true)}
               disabled={refreshing}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-2 min-h-11 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
               Refresh

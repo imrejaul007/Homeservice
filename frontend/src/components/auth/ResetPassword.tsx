@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { Lock, Eye, EyeOff, CheckCircle, AlertCircle, Key } from 'lucide-react';
+import CaptchaWidget from './CaptchaWidget';
 
 // Validation schema
 const resetPasswordSchema = z.object({
@@ -26,6 +27,7 @@ const ResetPassword: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
@@ -68,7 +70,7 @@ const ResetPassword: React.FC = () => {
     try {
       clearErrors();
       
-      await resetPassword(token, data.password, data.confirmPassword);
+      await resetPassword(token, data.password, data.confirmPassword, captchaToken ?? undefined);
       
       setIsSuccess(true);
       
@@ -371,6 +373,8 @@ const ResetPassword: React.FC = () => {
                 </li>
               </ul>
             </div>
+
+            <CaptchaWidget onToken={setCaptchaToken} className="mt-2" />
 
             {/* Submit Button */}
             <div>

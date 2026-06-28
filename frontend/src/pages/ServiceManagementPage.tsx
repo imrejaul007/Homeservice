@@ -5,6 +5,7 @@ import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import Breadcrumb from '../components/common/Breadcrumb';
 import ServiceManagement from '../components/provider/ServiceManagement';
+import ProviderHubNav from '../components/provider/ProviderHubNav';
 
 const ServiceManagementPage: React.FC = () => {
   const navigate = useNavigate();
@@ -12,12 +13,21 @@ const ServiceManagementPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <ProviderHubNav />
+
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
 
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main-content" className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <button
             type="button"
@@ -35,7 +45,7 @@ const ServiceManagementPage: React.FC = () => {
         </div>
 
         <ServiceManagement />
-      </div>
+      </main>
 
       <Footer />
     </div>

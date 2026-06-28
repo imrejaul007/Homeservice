@@ -325,6 +325,17 @@ export const resendVerificationSchema = Joi.object({
   email: emailSchema
 });
 
+// Login 2FA verification
+export const verifyLogin2FASchema = Joi.object({
+  preAuthToken: Joi.string().required().messages({
+    'any.required': 'Verification session is required',
+  }),
+  code: Joi.string().length(6).pattern(/^\d{6}$/).required().messages({
+    'string.pattern.base': 'Enter a valid 6-digit code',
+    'any.required': 'Verification code is required',
+  }),
+});
+
 // Refresh token validation
 export const refreshTokenSchema = Joi.object({
   refreshToken: Joi.string().required().messages({

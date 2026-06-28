@@ -154,10 +154,56 @@ export class ProviderService {
     const providerQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
     const providerProfile = await ProviderProfile.findOne(providerQuery);
     // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
-    // NOTE: Coordinates should come from tenant config or provider profile, not hardcoded
-    // TODO: Replace with tenant config lookup when multi-tenant coordinates are implemented
+    /**
+     * Multi-Tenant Coordinates Implementation
+     * =====================================
+     *
+     * CURRENT BEHAVIOR (Single-Tenant):
+     * - Uses hardcoded Dubai coordinates as default [lng, lat]
+     * - Falls back to provider profile coordinates if available
+     * - All services are associated with the single tenant's location
+     *
+     * FUTURE MULTI-TENANT BEHAVIOR:
+     * When expanding to multi-tenant architecture, coordinates should be
+     * tenant-scoped rather than system-wide. This allows:
+     *
+     * 1. Different geographic regions per tenant (e.g., Dubai vs. Abu Dhabi)
+     * 2. Tenant-specific default coordinates for new services
+     * 3. Location-based service discovery within each tenant's market
+     * 4. Geo-filtering of services by tenant's operational area
+     *
+     * IMPLEMENTATION GUIDE (When Ready for Multi-Tenant):
+     *
+     * Option A - Tenant Config Lookup:
+     * ```typescript
+     * const tenantConfig = await getTenantConfig(tenantId);
+     * let coordinatesArray = tenantConfig.location?.defaultCoordinates ?? [55.2708, 25.2048];
+     * ```
+     *
+     * Option B - Tenant Collection with Location Data:
+     * ```typescript
+     * const tenant = await Tenant.findById(tenantId).select('location.defaultCoordinates');
+     * let coordinatesArray = tenant?.location?.defaultCoordinates ?? [55.2708, 25.2048];
+     * ```
+     *
+     * Option C - Environment-Based Tenant Defaults:
+     * ```typescript
+     * const TENANT_CONFIGS: Record<string, [number, number]> = {
+     *   'tenant-dubai': [55.2708, 25.2048],
+     *   'tenant-abudhabi': [54.3773, 24.4539],
+     * };
+     * let coordinatesArray = TENANT_CONFIGS[tenantId] ?? [55.2708, 25.2048];
+     * ```
+     *
+     * DATABASE SCHEMA REQUIREMENTS:
+     * - Add `location.defaultCoordinates` field to tenant collection
+     * - Add `location.serviceArea` (polygon) for geographic bounds
+     * - Index coordinates for geospatial queries per tenant
+     *
+     * @see TENANT_ISOLATION_GUIDE.md for multi-tenant patterns
+     * @priority Medium - Required for multi-tenant geographic features
+     */
     let coordinatesArray: [number, number] = [55.2708, 25.2048]; // Default: Dubai [lng, lat]
-    // In production, this should be: coordinatesArray = tenantConfig.location.defaultCoordinates
     if (providerProfile?.locationInfo?.primaryAddress?.coordinates?.coordinates) {
       coordinatesArray = providerProfile.locationInfo.primaryAddress.coordinates.coordinates as [number, number];
     }

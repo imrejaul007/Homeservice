@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Heart,
@@ -109,38 +110,11 @@ export const CustomerHealthScore: React.FC<CustomerHealthScoreProps> = ({
       if (response.data?.success) {
         setData(response.data.data);
       } else {
-        // Mock data
-        setData({
-          overallScore: 78,
-          engagement: {
-            loginFrequency: 85,
-            bookingFrequency: 72,
-            reviewRate: 65,
-            referralRate: 45,
-            retentionDays: 120
-          },
-          lifetimeValue: 2450,
-          segment: 'active',
-          lastActivity: new Date().toISOString(),
-          totalBookings: 18,
-          avgOrderValue: 136,
-          churnRisk: 'low',
-          trend: [
-            { month: 'Jan', engagement: 60, bookings: 2 },
-            { month: 'Feb', engagement: 65, bookings: 3 },
-            { month: 'Mar', engagement: 70, bookings: 2 },
-            { month: 'Apr', engagement: 75, bookings: 4 },
-            { month: 'May', engagement: 78, bookings: 5 },
-            { month: 'Jun', engagement: 82, bookings: 2 }
-          ],
-          engagementScore: 82,
-          loyaltyTier: 'gold',
-          recommendationScore: 75
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching customer health score:', err);
-      setError('Failed to load health score data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

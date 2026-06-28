@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Check, Clock, AlertCircle, Calendar, MessageSquare, Star, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { api } from '../../services/api';
 import { socketService, type NotificationEvent } from '../../services/socket';
 import { useAuthStore } from '../../stores/authStore';
@@ -174,6 +175,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       }
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
+      toast.error('Failed to load notifications');
     } finally {
       setIsLoading(false);
     }
@@ -189,6 +191,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       }
     } catch (error) {
       console.error('Failed to fetch unread count:', error);
+      toast.error('Failed to load unread count');
     }
   };
 
@@ -236,6 +239,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (error) {
       console.error('Failed to mark as read:', error);
+      toast.error('Failed to mark as read');
     }
   };
 
@@ -327,6 +331,8 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       {/* Bell Button - NILIN styled with glass effect */}
       <button
         onClick={() => setIsOpen(!isOpen)}
+        aria-expanded={isOpen}
+        aria-haspopup="true"
         className={`
           relative p-2.5 rounded-full transition-all duration-300
           ${hasUnread
@@ -334,6 +340,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
             : 'hover:bg-nilin-muted'
           }
           ${isRinging ? 'animate-nilin-bell-button' : ''}
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2
         `}
         aria-label={`Notifications${hasUnread ? ` (${unreadCount} unread)` : ''}`}
       >

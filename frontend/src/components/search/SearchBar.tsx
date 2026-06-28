@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, X, MapPin, Clock, ChevronRight, Loader2, TrendingUp, Scissors, Flower2, Sparkles, Palette } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
-import { useLocationStore, SUPPORTED_CITIES } from '@/stores/locationStore';
+import { useLocationStore, useSupportedCities } from '@/stores/locationStore';
 import { cn } from '@/lib/utils';
 import type { Suggestion } from '@/types/search';
 
@@ -43,6 +43,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
   } = useSearchStore();
 
   const { selectedCity, setSelectedCity } = useLocationStore();
+  const supportedCities = useSupportedCities();
 
   const [query, setQuery] = useState(filters.q || '');
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -157,7 +158,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
   }, [location, setFilters, navigate, onSearch, addToSearchHistory]);
 
   const handleLocationSelect = useCallback((cityName: string) => {
-    const city = SUPPORTED_CITIES.find(c =>
+    const city = supportedCities.find(c =>
       c.name.toLowerCase() === cityName.toLowerCase() ||
       c.id === cityName.toLowerCase()
     );
@@ -180,7 +181,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
     searchInputRef.current?.focus();
   };
 
-  const filteredCities = SUPPORTED_CITIES.filter(city =>
+  const filteredCities = supportedCities.filter(city =>
     city.name.toLowerCase().includes(locationQuery.toLowerCase()) ||
     city.id.includes(locationQuery.toLowerCase())
   );

@@ -49,6 +49,8 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
+import { ErrorEmptyState } from './EmptyState';
 
 interface AutomationJob {
   id: string;
@@ -106,194 +108,11 @@ const CATEGORY_CONFIG: Record<string, { label: string; color: string; bgColor: s
   analytics: { label: 'Analytics', color: 'text-cyan-600', bgColor: 'bg-cyan-100', icon: BarChart3 },
 };
 
-const JOBS_DATA: AutomationJob[] = [
-  {
-    id: 'job-001',
-    name: 'Win-Back Campaign',
-    description: 'Detect inactive users and run win-back campaigns',
-    category: 'marketing',
-    schedule: 'Every hour',
-    lastRun: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 94.5,
-    avgExecutionTime: 2340,
-    totalExecutions: 1250,
-    recentFailures: 12,
-    icon: Users,
-  },
-  {
-    id: 'job-002',
-    name: 'Birthday Rewards',
-    description: 'Send birthday rewards and special offers',
-    category: 'marketing',
-    schedule: 'Daily at 9 AM',
-    lastRun: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 98.2,
-    avgExecutionTime: 890,
-    totalExecutions: 180,
-    recentFailures: 0,
-    icon: Cake,
-  },
-  {
-    id: 'job-003',
-    name: 'Tier Upgrades',
-    description: 'Check and process tier upgrades',
-    category: 'loyalty',
-    schedule: 'Daily at 10 AM',
-    lastRun: new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 14 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 99.1,
-    avgExecutionTime: 456,
-    totalExecutions: 365,
-    recentFailures: 1,
-    icon: Award,
-  },
-  {
-    id: 'job-004',
-    name: 'Review Requests',
-    description: 'Send review requests after bookings',
-    category: 'marketing',
-    schedule: 'Every 15 minutes',
-    lastRun: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 91.3,
-    avgExecutionTime: 1234,
-    totalExecutions: 8640,
-    recentFailures: 45,
-    icon: Star,
-  },
-  {
-    id: 'job-005',
-    name: 'Provider Training',
-    description: 'Check provider training progress and send reminders',
-    category: 'operations',
-    schedule: 'Every hour',
-    lastRun: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 96.7,
-    avgExecutionTime: 1890,
-    totalExecutions: 2480,
-    recentFailures: 8,
-    icon: Shield,
-  },
-  {
-    id: 'job-006',
-    name: 'Onboarding Checklist',
-    description: 'Process onboarding checklists for new users',
-    category: 'operations',
-    schedule: 'Every 6 hours',
-    lastRun: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 97.8,
-    avgExecutionTime: 2340,
-    totalExecutions: 620,
-    recentFailures: 3,
-    icon: CheckCircle2,
-  },
-  {
-    id: 'job-007',
-    name: 'First Booking Discount',
-    description: 'Check and apply first booking discounts',
-    category: 'marketing',
-    schedule: 'Daily at midnight',
-    lastRun: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 16 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 98.9,
-    avgExecutionTime: 678,
-    totalExecutions: 365,
-    recentFailures: 0,
-    icon: Gift,
-  },
-  {
-    id: 'job-008',
-    name: 'Negative Review Recovery',
-    description: 'Process and recover from negative reviews',
-    category: 'operations',
-    schedule: 'Every 30 minutes',
-    lastRun: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 88.4,
-    avgExecutionTime: 3456,
-    totalExecutions: 4320,
-    recentFailures: 28,
-    icon: MessageSquare,
-  },
-  {
-    id: 'job-009',
-    name: 'Auto Refund Threshold',
-    description: 'Process automatic refunds based on threshold rules',
-    category: 'operations',
-    schedule: 'Every hour',
-    lastRun: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 99.5,
-    avgExecutionTime: 890,
-    totalExecutions: 2480,
-    recentFailures: 2,
-    icon: DollarSign,
-  },
-  {
-    id: 'job-010',
-    name: 'Mediation Auto-Assign',
-    description: 'Auto-assign unassigned mediation cases',
-    category: 'operations',
-    schedule: 'Every 4 hours',
-    lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-    status: 'paused',
-    successRate: 85.2,
-    avgExecutionTime: 1567,
-    totalExecutions: 310,
-    recentFailures: 15,
-    icon: Users,
-  },
-  {
-    id: 'job-011',
-    name: 'Welcome Email Sequence',
-    description: 'Send welcome email sequences to new users',
-    category: 'email',
-    schedule: 'Every 15 minutes',
-    lastRun: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 7 * 60 * 1000).toISOString(),
-    status: 'active',
-    successRate: 95.1,
-    avgExecutionTime: 2134,
-    totalExecutions: 5760,
-    recentFailures: 34,
-    icon: Mail,
-  },
-  {
-    id: 'job-012',
-    name: 'Referral Gamification',
-    description: 'Track referrals and award badges',
-    category: 'loyalty',
-    schedule: 'Every hour',
-    lastRun: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
-    nextRun: new Date(Date.now() + 40 * 60 * 1000).toISOString(),
-    status: 'error',
-    successRate: 72.3,
-    avgExecutionTime: 4567,
-    totalExecutions: 1240,
-    recentFailures: 89,
-    icon: Gift,
-  },
-];
-
 export const AutomationStatus: React.FC<AutomationStatusProps> = ({
   embedded = false,
   onClose,
 }) => {
-  const [jobs, setJobs] = useState<AutomationJob[]>(JOBS_DATA);
+  const [jobs, setJobs] = useState<AutomationJob[]>([]);
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
   const [stats, setStats] = useState<AutomationStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -311,63 +130,25 @@ export const AutomationStatus: React.FC<AutomationStatusProps> = ({
       const response = await api.get('/admin/automation/status');
 
       if (response.data?.success) {
-        setJobs(response.data.data.jobs || []);
+        const apiJobs = (response.data.data.jobs || []).map((job: AutomationJob) => ({
+          ...job,
+          icon: CATEGORY_CONFIG[job.category]?.icon || Zap,
+        }));
+        setJobs(apiJobs);
         setLogs(response.data.data.logs || []);
-        setStats(response.data.data.stats);
+        setStats(response.data.data.stats || null);
       } else {
-        // Use local data
-        setJobs(JOBS_DATA);
-
-        // Generate mock logs
-        const mockLogs: ExecutionLog[] = [];
-        for (let i = 0; i < 20; i++) {
-          const job = JOBS_DATA[Math.floor(Math.random() * JOBS_DATA.length)];
-          mockLogs.push({
-            id: `log-${i}`,
-            jobId: job.id,
-            jobName: job.name,
-            status: Math.random() > 0.1 ? 'success' : Math.random() > 0.5 ? 'failed' : 'partial',
-            startTime: new Date(Date.now() - i * 30 * 60 * 1000).toISOString(),
-            endTime: new Date(Date.now() - i * 30 * 60 * 1000 + Math.random() * 5000).toISOString(),
-            duration: Math.floor(Math.random() * 5000),
-            recordsProcessed: Math.floor(Math.random() * 100),
-            recordsFailed: Math.floor(Math.random() * 10),
-            errorMessage: Math.random() > 0.7 ? 'Connection timeout after 30s' : undefined,
-          });
-        }
-        setLogs(mockLogs);
-
-        setStats({
-          totalJobs: JOBS_DATA.length,
-          activeJobs: JOBS_DATA.filter(j => j.status === 'active').length,
-          pausedJobs: JOBS_DATA.filter(j => j.status === 'paused').length,
-          errorJobs: JOBS_DATA.filter(j => j.status === 'error').length,
-          totalExecutions: 37850,
-          successfulExecutions: 36245,
-          failedExecutions: 1245,
-          avgSuccessRate: 95.6,
-          executionsTrend: [
-            { date: 'Mon', success: 5200, failed: 180 },
-            { date: 'Tue', success: 5400, failed: 150 },
-            { date: 'Wed', success: 5100, failed: 220 },
-            { date: 'Thu', success: 5600, failed: 190 },
-            { date: 'Fri', success: 5800, failed: 170 },
-            { date: 'Sat', success: 4900, failed: 200 },
-            { date: 'Sun', success: 4245, failed: 135 },
-          ],
-          categoryDistribution: [
-            { category: 'Email', count: 2, color: '#3B82F6' },
-            { category: 'Notifications', count: 3, color: '#8B5CF6' },
-            { category: 'Loyalty', count: 2, color: '#F59E0B' },
-            { category: 'Marketing', count: 4, color: '#EC4899' },
-            { category: 'Operations', count: 4, color: '#10B981' },
-            { category: 'Analytics', count: 1, color: '#06B6D4' },
-          ],
-        });
+        setJobs([]);
+        setLogs([]);
+        setStats(null);
+        setError('No automation data available');
       }
     } catch (err) {
       console.error('Error fetching automation data:', err);
-      setError('Failed to load automation status');
+      setJobs([]);
+      setLogs([]);
+      setStats(null);
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

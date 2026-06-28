@@ -54,12 +54,10 @@ async function seedReviews() {
 
     logger.info(`Found ${bookingsWithoutReviews.length} bookings without reviews`);
 
-    let createdCount = 0;
-
-    for (const booking of bookingsWithoutReviews) {
+    // Collect all review data first
+    const reviewsToCreate = bookingsWithoutReviews.map((booking) => {
       const sampleReview = sampleReviews[Math.floor(Math.random() * sampleReviews.length)];
-
-      const review = new Review({
+      return {
         ...sampleReview,
         bookingId: booking._id,
         serviceId: booking.serviceId,
@@ -71,16 +69,52 @@ async function seedReviews() {
         helpfulVotes: 0,
         reportCount: 0,
         isHidden: false,
-      });
+      };
+    });
 
-      await review.save();
-      createdCount++;
+    // Bulk insert reviews and update bookings in a transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-      // Update booking with review reference
-      await Booking.findByIdAndUpdate(booking._id, {
-        customerReview: review._id
-      });
+    try {
+      // Bulk insert all reviews
+      const insertedReviews = await Review.insertMany(reviewsToCreate, { session });
+      const createdCount = insertedReviews.length;
+
+      // Build booking update operations
+      const bookingUpdates = insertedReviews.map((review) => ({
+        updateOne: {
+          filter: { _id: review.bookingId },
+          update: { $set: { customerReview: review._id } },
+        },
+      }));
+
+      // Bulk update all bookings
+      await Booking.updateMany(
+        { _id: { $in: insertedReviews.map((r) => r.bookingId) } },
+        { $set: { customerReview: insertedReviews.find((r) => r.bookingId.toString() === bookingUpdates[0].updateOne.filter._id.toString())?._id || null } },
+        { session }
+      );
+
+      // Use individual updates since each review maps to a different booking
+      for (const review of insertedReviews) {
+        await Booking.updateOne(
+          { _id: review.bookingId },
+          { $set: { customerReview: review._id } },
+          { session }
+        );
+      }
+
+      await session.commitTransaction();
+      logger.info(`Created ${createdCount} review records using batch operations`);
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
     }
+
+    const createdCount = reviewsToCreate.length;
 
     logger.info(`Created ${createdCount} review records`);
 

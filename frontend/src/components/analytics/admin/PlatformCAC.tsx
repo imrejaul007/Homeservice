@@ -12,8 +12,9 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { Target, DollarSign, Loader, Users, TrendingDown, TrendingUp } from 'lucide-react';
+import { Target, DollarSign, Loader, Users, TrendingDown, TrendingUp, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface PlatformCACProps {
   timeRange?: '30d' | '90d' | '1y';
@@ -46,51 +47,43 @@ interface CACStats {
   }>;
 }
 
-const MOCK_DATA: CACData[] = [
-  { month: 'Jan', totalSpend: 15000, newCustomers: 245, newProviders: 32, customerCAC: 52.50, providerCAC: 312.50, blendedCAC: 58.20 },
-  { month: 'Feb', totalSpend: 18500, newCustomers: 280, newProviders: 45, customerCAC: 56.80, providerCAC: 255.56, blendedCAC: 62.10 },
-  { month: 'Mar', totalSpend: 22000, newCustomers: 320, newProviders: 52, customerCAC: 58.50, providerCAC: 298.08, blendedCAC: 65.80 },
-  { month: 'Apr', totalSpend: 25000, newCustomers: 385, newProviders: 58, customerCAC: 55.80, providerCAC: 305.17, blendedCAC: 63.90 },
-  { month: 'May', totalSpend: 28000, newCustomers: 420, newProviders: 65, customerCAC: 57.14, providerCAC: 292.31, blendedCAC: 65.40 },
-  { month: 'Jun', totalSpend: 32000, newCustomers: 485, newProviders: 72, customerCAC: 56.80, providerCAC: 305.56, blendedCAC: 64.80 },
-];
-
-const MOCK_STATS: CACStats = {
-  currentCustomerCAC: 56.80,
-  currentProviderCAC: 305.56,
-  currentBlendedCAC: 64.80,
-  cacTrend: -8.5,
-  totalSpend: 140500,
-  totalCustomers: 2135,
-  totalProviders: 324,
-  ltvToCacRatio: 5.2,
-  cacByChannel: [
-    { channel: 'Google Ads', spend: 45000, acquisitions: 620, cac: 72.58 },
-    { channel: 'Facebook Ads', spend: 32000, acquisitions: 485, cac: 65.98 },
-    { channel: 'Referral Program', spend: 15000, acquisitions: 380, cac: 39.47 },
-    { channel: 'Influencer', spend: 28000, acquisitions: 295, cac: 94.92 },
-    { channel: 'SEO/Organic', spend: 12000, acquisitions: 355, cac: 33.80 },
-    { channel: 'Other', spend: 8500, acquisitions: 120, cac: 70.83 },
-  ],
-};
-
 const CHANNEL_COLORS = ['#2563EB', '#7C3AED', '#10B981', '#F59E0B', '#EF4444', '#6B7280'];
 
 export const PlatformCAC: React.FC<PlatformCACProps> = ({
   timeRange = '90d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<CACData[]>(MOCK_DATA);
-  const [stats, setStats] = useState<CACStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<CACData[]>([]);
+  const [stats, setStats] = useState<CACStats>({
+    currentCustomerCAC: 0,
+    currentProviderCAC: 0,
+    currentBlendedCAC: 0,
+    cacTrend: 0,
+    totalSpend: 0,
+    totalCustomers: 0,
+    totalProviders: 0,
+    ltvToCacRatio: 0,
+    cacByChannel: [],
+  });
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'trend' | 'channel'>('trend');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminPlatformCAC(selectedRange);
+        setData(apiData.timeSeries || []);
+        setStats(apiData.stats);
+      } catch (err) {
+        setData([]);
+        setError(err instanceof Error ? err.message : 'Failed to load platform CAC data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [selectedRange]);

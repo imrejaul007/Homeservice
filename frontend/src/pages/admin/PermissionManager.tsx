@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import { useAuthStore } from '@/stores/authStore';
 import {
   Shield,
@@ -208,48 +209,48 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
 
   const variantStyles = {
     danger: {
-      button: 'bg-red-600 hover:bg-red-700 text-white',
-      icon: 'text-red-600',
-      bg: 'bg-red-50',
+      button: 'bg-nilin-rose hover:bg-nilin-rose/90 text-white',
+      icon: 'text-nilin-rose',
+      bg: 'bg-nilin-rose/5',
     },
     warning: {
-      button: 'bg-yellow-600 hover:bg-yellow-700 text-white',
-      icon: 'text-yellow-600',
-      bg: 'bg-yellow-50',
+      button: 'bg-nilin-amber hover:bg-nilin-amber/90 text-white',
+      icon: 'text-nilin-amber',
+      bg: 'bg-nilin-amber/5',
     },
     info: {
-      button: 'bg-blue-600 hover:bg-blue-700 text-white',
-      icon: 'text-blue-600',
-      bg: 'bg-blue-50',
+      button: 'bg-nilin-coral hover:bg-nilin-coral/90 text-white',
+      icon: 'text-nilin-coral',
+      bg: 'bg-nilin-coral/5',
     },
   };
 
   const styles = variantStyles[variant];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden">
+    <div className="fixed inset-0 bg-nilin-charcoal/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
         <div className={`p-6 ${styles.bg}`}>
           <div className="flex items-center gap-4">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center bg-white`}>
+            <div className="w-12 h-12 rounded-full flex items-center justify-center bg-white">
               <AlertTriangle className={`w-6 h-6 ${styles.icon}`} />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-              <p className="text-sm text-gray-600 mt-1">{message}</p>
+              <h3 id="confirm-modal-title" className="text-lg font-semibold text-nilin-charcoal">{title}</h3>
+              <p className="text-sm text-nilin-warmGray mt-1">{message}</p>
             </div>
           </div>
         </div>
-        <div className="p-4 bg-gray-50 flex justify-end gap-3">
+        <div className="p-4 bg-nilin-blush/30 flex justify-end gap-3">
           <button
             onClick={onCancel}
-            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+            className="px-4 py-2 border border-nilin-border text-nilin-charcoal rounded-lg hover:bg-nilin-blush/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
           >
             {cancelLabel}
           </button>
           <button
             onClick={onConfirm}
-            className={`px-4 py-2 rounded-lg transition-colors ${styles.button}`}
+            className={`px-4 py-2 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${styles.button}`}
           >
             {confirmLabel}
           </button>
@@ -272,8 +273,8 @@ const StatusBadge: React.FC<{ status: boolean; activeLabel?: string; inactiveLab
     <span
       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
         status
-          ? 'bg-green-100 text-green-800'
-          : 'bg-gray-100 text-gray-800'
+          ? 'bg-nilin-mint/20 text-nilin-mint'
+          : 'bg-nilin-warmGray/20 text-nilin-warmGray'
       }`}
     >
       {status ? (
@@ -290,7 +291,7 @@ const SystemBadge: React.FC<{ isSystem: boolean }> = ({ isSystem }) => {
   if (!isSystem) return null;
 
   return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-nilin-violet/20 text-nilin-violet">
       <Lock className="w-3 h-3 mr-1" />
       System
     </span>
@@ -342,27 +343,28 @@ const PermissionTree: React.FC<{
         ).length;
 
         return (
-          <div key={key} className="border border-gray-200 rounded-lg overflow-hidden">
+          <div key={key} className="border border-nilin-border rounded-lg overflow-hidden">
             <button
               onClick={() => toggleCategory(key)}
               disabled={disabled}
-              className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 bg-nilin-blush/30 hover:bg-nilin-blush/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-inset"
+              aria-expanded={isExpanded}
             >
               <div className="flex items-center">
                 {isExpanded ? (
-                  <ChevronDown className="w-4 h-4 mr-2 text-gray-500" />
+                  <ChevronDown className="w-4 h-4 mr-2 text-nilin-warmGray" />
                 ) : (
-                  <ChevronRight className="w-4 h-4 mr-2 text-gray-500" />
+                  <ChevronRight className="w-4 h-4 mr-2 text-nilin-warmGray" />
                 )}
-                <Shield className="w-4 h-4 mr-2 text-gray-600" />
-                <span className="font-medium text-gray-900">{category.label}</span>
+                <Shield className="w-4 h-4 mr-2 text-nilin-coral" />
+                <span className="font-medium text-nilin-charcoal">{category.label}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-500">
+                <span className="text-sm text-nilin-warmGray">
                   {selectedCount}/{category.permissions.length}
                 </span>
                 {selectedCount === category.permissions.length && (
-                  <Check className="w-4 h-4 text-green-600" />
+                  <Check className="w-4 h-4 text-nilin-mint" />
                 )}
               </div>
             </button>
@@ -380,7 +382,7 @@ const PermissionTree: React.FC<{
                         className={`flex items-center p-2 rounded cursor-pointer transition-colors ${
                           isSelected
                             ? 'bg-nilin-coral/10 border border-nilin-coral/30'
-                            : 'hover:bg-gray-50 border border-transparent'
+                            : 'hover:bg-nilin-blush/30 border border-transparent'
                         } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
                         <input
@@ -388,9 +390,9 @@ const PermissionTree: React.FC<{
                           checked={isSelected}
                           onChange={() => onPermissionToggle(permission)}
                           disabled={disabled}
-                          className="w-4 h-4 text-nilin-coral border-gray-300 rounded focus:ring-nilin-coral"
+                          className="w-4 h-4 text-nilin-coral border-nilin-border rounded focus:ring-nilin-coral focus:ring-offset-2"
                         />
-                        <span className="ml-2 text-sm text-gray-700 capitalize">
+                        <span className="ml-2 text-sm text-nilin-charcoal capitalize">
                           {permissionName.replace(/:all$/, ' (All)')}
                         </span>
                       </label>
@@ -419,27 +421,27 @@ const RoleCard: React.FC<{
 }> = ({ role, stats, onEdit, onDelete, onViewUsers }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const systemRoles = ['admin', 'customer', 'provider', 'super_admin'];
-  const canModify = !role.isSystem && !systemRoles.includes(role.name);
+  const canModify = false;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="bg-white rounded-xl border border-nilin-border overflow-hidden">
       <div className="p-4">
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-gray-900">{role.name}</h3>
+              <h3 className="text-lg font-semibold text-nilin-charcoal">{role.name}</h3>
               <SystemBadge isSystem={role.isSystem} />
               <StatusBadge status={role.isActive} />
             </div>
-            <p className="text-sm text-gray-500 mt-1">{role.description}</p>
+            <p className="text-sm text-nilin-warmGray mt-1">{role.description}</p>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => onViewUsers(role.name)}
-              className="p-2 text-gray-500 hover:text-nilin-coral hover:bg-gray-100 rounded-lg transition-colors"
+              className="w-10 h-10 flex items-center justify-center text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-blush/50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               title="View users with this role"
+              aria-label="View users with this role"
             >
               <Users className="w-4 h-4" />
             </button>
@@ -447,15 +449,17 @@ const RoleCard: React.FC<{
               <>
                 <button
                   onClick={() => onEdit(role)}
-                  className="p-2 text-gray-500 hover:text-nilin-coral hover:bg-gray-100 rounded-lg transition-colors"
+                  className="w-10 h-10 flex items-center justify-center text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-blush/50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   title="Edit role"
+                  aria-label="Edit role"
                 >
                   <Edit className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => onDelete(role._id)}
-                  className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  className="w-10 h-10 flex items-center justify-center text-nilin-warmGray hover:text-nilin-rose hover:bg-nilin-rose/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose focus-visible:ring-offset-2"
                   title="Delete role"
+                  aria-label="Delete role"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -464,7 +468,7 @@ const RoleCard: React.FC<{
           </div>
         </div>
 
-        <div className="flex items-center gap-4 mt-4 text-sm text-gray-500">
+        <div className="flex items-center gap-4 mt-4 text-sm text-nilin-warmGray">
           <div className="flex items-center">
             <Key className="w-4 h-4 mr-1" />
             <span>{role.permissions.length} permissions</span>
@@ -479,19 +483,19 @@ const RoleCard: React.FC<{
 
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full mt-3 flex items-center justify-center gap-1 text-sm text-nilin-coral hover:text-nilin-rose"
+          className="w-full mt-3 flex items-center justify-center gap-1 text-sm text-nilin-coral hover:text-nilin-rose transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-lg py-1"
         >
           {isExpanded ? 'Hide permissions' : 'Show permissions'}
           {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
 
         {isExpanded && (
-          <div className="mt-3 pt-3 border-t border-gray-100">
+          <div className="mt-3 pt-3 border-t border-nilin-border/50">
             <div className="flex flex-wrap gap-2">
               {role.permissions.map((permission) => (
                 <span
                   key={permission}
-                  className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-700"
+                  className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-nilin-blush/50 text-nilin-charcoal"
                 >
                   <Key className="w-3 h-3 mr-1" />
                   {permission}
@@ -568,16 +572,17 @@ const RoleEditModal: React.FC<{
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="p-6 border-b border-gray-200">
+    <div className="fixed inset-0 bg-nilin-charcoal/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-labelledby="role-modal-title">
+        <div className="p-6 border-b border-nilin-border">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900">
+            <h2 id="role-modal-title" className="text-xl font-semibold text-nilin-charcoal">
               {role ? 'Edit Role' : 'Create New Role'}
             </h2>
             <button
               onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              className="w-10 h-10 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+              aria-label="Close modal"
             >
               <X className="w-5 h-5" />
             </button>
@@ -589,29 +594,31 @@ const RoleEditModal: React.FC<{
             {/* Basic Info */}
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="role-name" className="block text-sm font-medium text-nilin-charcoal mb-1">
                   Role Name
                 </label>
                 <input
                   type="text"
+                  id="role-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   disabled={!!role}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent disabled:bg-gray-50"
+                  className="w-full px-3 py-2 border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent disabled:bg-nilin-blush/30"
                   placeholder="e.g., content_manager"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="role-description" className="block text-sm font-medium text-nilin-charcoal mb-1">
                   Description
                 </label>
                 <textarea
+                  id="role-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
+                  className="w-full px-3 py-2 border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
                   placeholder="Describe the purpose of this role..."
                 />
               </div>
@@ -620,11 +627,12 @@ const RoleEditModal: React.FC<{
                 <label className="flex items-center cursor-pointer">
                   <input
                     type="checkbox"
+                    id="role-active"
                     checked={isActive}
                     onChange={(e) => setIsActive(e.target.checked)}
-                    className="w-4 h-4 text-nilin-coral border-gray-300 rounded focus:ring-nilin-coral"
+                    className="w-4 h-4 text-nilin-coral border-nilin-border rounded focus:ring-nilin-coral focus:ring-offset-2"
                   />
-                  <span className="ml-2 text-sm text-gray-700">Role is active</span>
+                  <span className="ml-2 text-sm text-nilin-charcoal">Role is active</span>
                 </label>
               </div>
             </div>
@@ -632,16 +640,16 @@ const RoleEditModal: React.FC<{
             {/* Permissions */}
             <div>
               <div className="flex items-center justify-between mb-4">
-                <label className="block text-sm font-medium text-gray-700">
+                <span className="block text-sm font-medium text-nilin-charcoal">
                   Permissions
-                </label>
+                </span>
                 <div className="flex gap-2">
                   {Object.keys(PERMISSION_CATEGORIES).map((category) => (
                     <button
                       key={category}
                       type="button"
                       onClick={() => handleSelectAll(category)}
-                      className="px-2 py-1 text-xs text-nilin-coral hover:bg-nilin-coral/10 rounded"
+                      className="px-2 py-1 text-xs text-nilin-coral hover:bg-nilin-coral/10 rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
                     >
                       Select all {PERMISSION_CATEGORIES[category].label}
                     </button>
@@ -657,23 +665,23 @@ const RoleEditModal: React.FC<{
             </div>
           </div>
 
-          <div className="p-6 border-t border-gray-200 bg-gray-50">
+          <div className="p-6 border-t border-nilin-border bg-nilin-blush/30">
             <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-nilin-warmGray">
                 {permissions.length} permission{permissions.length !== 1 ? 's' : ''} selected
               </div>
               <div className="flex gap-3">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100"
+                  className="px-4 py-2 border border-nilin-border text-nilin-charcoal rounded-lg hover:bg-nilin-blush/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving || !name}
-                  className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose disabled:opacity-50"
+                  className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose disabled:opacity-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                 >
                   {isSaving ? (
                     <LoadingSpinner size="sm" />
@@ -736,32 +744,33 @@ const UserListModal: React.FC<{
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-        <div className="p-6 border-b border-gray-200">
+    <div className="fixed inset-0 bg-nilin-charcoal/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-labelledby="users-modal-title">
+        <div className="p-6 border-b border-nilin-border">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">Users with Role</h2>
-              <p className="text-sm text-gray-500 mt-1">Role: {roleName}</p>
+              <h2 id="users-modal-title" className="text-xl font-semibold text-nilin-charcoal">Users with Role</h2>
+              <p className="text-sm text-nilin-warmGray mt-1">Role: {roleName}</p>
             </div>
             <button
               onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              className="w-10 h-10 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+              aria-label="Close modal"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        <div className="p-4 border-b border-gray-100">
+        <div className="p-4 border-b border-nilin-border/50">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search users..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
+              className="w-full pl-10 pr-4 py-2 border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
             />
           </div>
         </div>
@@ -772,27 +781,27 @@ const UserListModal: React.FC<{
               <LoadingSpinner />
             </div>
           ) : filteredUsers.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <Users className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+            <div className="text-center py-12 text-nilin-warmGray">
+              <Users className="w-12 h-12 mx-auto mb-4 text-nilin-border" />
               <p>No users found with this role.</p>
             </div>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-nilin-border/30">
               {filteredUsers.map((user) => (
-                <div key={user._id} className="p-4 hover:bg-gray-50">
+                <div key={user._id} className="p-4 hover:bg-nilin-blush/30 transition-colors">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center">
-                      <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                        <span className="text-sm font-medium text-gray-600">
+                      <div className="w-10 h-10 rounded-full bg-nilin-blush/50 flex items-center justify-center">
+                        <span className="text-sm font-medium text-nilin-charcoal">
                           {user.firstName[0]}
                           {user.lastName[0]}
                         </span>
                       </div>
                       <div className="ml-3">
-                        <p className="font-medium text-gray-900">
+                        <p className="font-medium text-nilin-charcoal">
                           {user.firstName} {user.lastName}
                         </p>
-                        <p className="text-sm text-gray-500">{user.email}</p>
+                        <p className="text-sm text-nilin-warmGray">{user.email}</p>
                       </div>
                     </div>
                     <StatusBadge status={user.isActive} />
@@ -843,24 +852,35 @@ const PermissionManager: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [filterSystem, setFilterSystem] = useState<'all' | 'system' | 'custom'>('all');
 
-  // Fetch roles
+  // Fetch roles (read-only — system roles from GET /admin/rbac/roles)
   const fetchRoles = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const [rolesResponse, statsResponse] = await Promise.all([
         api.get('/admin/rbac/roles'),
-        api.get('/admin/rbac/roles/stats'),
+        api.get('/admin/rbac/roles/stats').catch(() => ({ data: { data: { stats: [] } } })),
       ]);
 
-      setRoles(rolesResponse.data.data.roles || []);
+      const apiRoles = rolesResponse.data.data.roles || [];
+      setRoles(
+        apiRoles.map((role: { name: string; permissions: string[] }) => ({
+          _id: role.name,
+          name: role.name,
+          description: `System role with ${role.permissions.length} permissions`,
+          permissions: role.permissions,
+          isSystem: true,
+          isActive: true,
+          createdAt: '',
+          updatedAt: '',
+        }))
+      );
       setRoleStats(statsResponse.data.data.stats || []);
     } catch (err) {
       console.error('Failed to fetch roles:', err);
       setError('Failed to load roles. Please try again.');
-      // Use mock data for demo
-      setRoles(getMockRoles());
-      setRoleStats(getMockRoleStats());
+      setRoles([]);
+      setRoleStats([]);
     } finally {
       setIsLoading(false);
     }
@@ -976,333 +996,238 @@ const PermissionManager: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <AdminPageShell
+        title="Permission Manager"
+        subtitle="View system roles and permissions (read-only)"
+        wideLayout
+      >
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+        >
+          Skip to main content
+        </a>
+        <main id="main-content" className="space-y-6">
+          {/* Screen reader status announcer */}
+          <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+            {isLoading && 'Loading roles...'}
+            {error && `Error: ${error}`}
+            {!isLoading && !error && filteredRoles.length > 0 && `Showing ${filteredRoles.length} roles`}
+            {!isLoading && !error && filteredRoles.length === 0 && 'No roles found'}
+          </div>
+
+          {/* Read-only notice */}
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            Roles are static and defined in the backend RBAC configuration. Create, edit, and delete are disabled in this viewer.
+          </div>
+
           {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Permission Manager</h1>
-            <p className="text-gray-500 mt-1">
-              Manage roles, permissions, and access control
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleExportRoles}
-              className="flex items-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100"
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export
-            </button>
-            <button
-              onClick={handleCreateRole}
-              className="flex items-center px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Create Role
-            </button>
-          </div>
-        </div>
-
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl p-4 border border-gray-200">
-            <div className="flex items-center">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Shield className="w-6 h-6 text-blue-600" />
-              </div>
-              <div className="ml-4">
-                <p className="text-sm text-gray-500">Total Roles</p>
-                <p className="text-2xl font-bold text-gray-900">{roles.length}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 border border-gray-200">
-            <div className="flex items-center">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-6 h-6 text-green-600" />
-              </div>
-              <div className="ml-4">
-                <p className="text-sm text-gray-500">Active Roles</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {roles.filter((r) => r.isActive).length}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 border border-gray-200">
-            <div className="flex items-center">
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <Lock className="w-6 h-6 text-purple-600" />
-              </div>
-              <div className="ml-4">
-                <p className="text-sm text-gray-500">System Roles</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {roles.filter((r) => r.isSystem).length}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 border border-gray-200">
-            <div className="flex items-center">
-              <div className="p-3 bg-amber-100 rounded-lg">
-                <Users className="w-6 h-6 text-amber-600" />
-              </div>
-              <div className="ml-4">
-                <p className="text-sm text-gray-500">Total Users</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {roleStats.reduce((sum, s) => sum + s.userCount, 0)}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4 mb-6">
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search roles..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
-              />
-            </div>
-
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="flex items-center">
-                <label className="text-sm text-gray-500 mr-2">Status:</label>
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value as any)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral"
-                >
-                  <option value="all">All</option>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
-                </select>
+              <div className="p-3 bg-nilin-coral/10 rounded-xl">
+                <Shield className="w-6 h-6 text-nilin-coral" />
               </div>
-
-              <div className="flex items-center">
-                <label className="text-sm text-gray-500 mr-2">Type:</label>
-                <select
-                  value={filterSystem}
-                  onChange={(e) => setFilterSystem(e.target.value as any)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral"
-                >
-                  <option value="all">All</option>
-                  <option value="system">System</option>
-                  <option value="custom">Custom</option>
-                </select>
+              <div>
+                <h1 className="text-2xl font-bold text-nilin-charcoal">Permission Manager</h1>
+                <p className="text-nilin-warmGray mt-0.5">
+                  View system roles and permissions (read-only)
+                </p>
               </div>
-
+            </div>
+            <div className="flex items-center gap-3">
               <button
-                onClick={fetchRoles}
-                className="p-2 text-gray-500 hover:text-nilin-coral hover:bg-gray-100 rounded-lg"
-                title="Refresh"
+                onClick={handleExportRoles}
+                className="flex items-center px-4 py-2 border border-nilin-border text-nilin-charcoal rounded-lg hover:bg-nilin-blush/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
-                <RefreshCw className="w-5 h-5" />
+                <Download className="w-4 h-4 mr-2" />
+                Export
               </button>
             </div>
           </div>
-        </div>
 
-        {/* Role List */}
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <LoadingSpinner size="lg" />
-          </div>
-        ) : error ? (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
-            <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-            <p className="text-red-700">{error}</p>
-            <button
-              onClick={fetchRoles}
-              className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-            >
-              Try Again
-            </button>
-          </div>
-        ) : filteredRoles.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-            <Shield className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">No roles found matching your filters.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {filteredRoles.map((role) => (
-              <RoleCard
-                key={role._id}
-                role={role}
-                stats={getStatsForRole(role.name)}
-                onEdit={handleEditRole}
-                onDelete={handleDeleteRole}
-                onViewUsers={handleViewUsers}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white rounded-xl p-4 border border-nilin-border">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-nilin-coral/10 rounded-lg">
+                  <Shield className="w-5 h-5 text-nilin-coral" />
+                </div>
+                <div>
+                  <p className="text-sm text-nilin-warmGray">Total Roles</p>
+                  <p className="text-xl font-bold text-nilin-charcoal">{roles.length}</p>
+                </div>
+              </div>
+            </div>
 
-      {/* Edit/Create Modal */}
-      <RoleEditModal
-        role={editingRole}
-        isOpen={isEditModalOpen}
-        onClose={() => {
-          setIsEditModalOpen(false);
-          setEditingRole(null);
-        }}
-        onSave={handleSaveRole}
-      />
+            <div className="bg-white rounded-xl p-4 border border-nilin-border">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-nilin-mint/10 rounded-lg">
+                  <CheckCircle className="w-5 h-5 text-nilin-mint" />
+                </div>
+                <div>
+                  <p className="text-sm text-nilin-warmGray">Active Roles</p>
+                  <p className="text-xl font-bold text-nilin-charcoal">
+                    {roles.filter((r) => r.isActive).length}
+                  </p>
+                </div>
+              </div>
+            </div>
 
-      {/* User List Modal */}
-      <UserListModal
-        roleName={selectedRoleName}
-        isOpen={isUserListOpen}
-        onClose={() => setIsUserListOpen(false)}
-      />
+            <div className="bg-white rounded-xl p-4 border border-nilin-border">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-nilin-violet/10 rounded-lg">
+                  <Lock className="w-5 h-5 text-nilin-violet" />
+                </div>
+                <div>
+                  <p className="text-sm text-nilin-warmGray">System Roles</p>
+                  <p className="text-xl font-bold text-nilin-charcoal">
+                    {roles.filter((r) => r.isSystem).length}
+                  </p>
+                </div>
+              </div>
+            </div>
 
-      {/* Delete Confirmation Modal */}
-      <ConfirmModal
-        isOpen={deleteConfirm.isOpen}
-        title="Delete Role"
-        message="Are you sure you want to delete this role? This action cannot be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
-        variant="danger"
-        onConfirm={confirmDeleteRole}
-        onCancel={() => setDeleteConfirm({ isOpen: false, roleId: null })}
-      />
-    </div>
+            <div className="bg-white rounded-xl p-4 border border-nilin-border">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-nilin-amber/10 rounded-lg">
+                  <Users className="w-5 h-5 text-nilin-amber" />
+                </div>
+                <div>
+                  <p className="text-sm text-nilin-warmGray">Total Users</p>
+                  <p className="text-xl font-bold text-nilin-charcoal">
+                    {roleStats.reduce((sum, s) => sum + s.userCount, 0)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="bg-white rounded-xl border border-nilin-border p-4">
+            <div className="flex flex-col md:flex-row md:items-center gap-4">
+              <div className="flex-1 relative">
+                <label htmlFor="search-roles" className="sr-only">Search roles</label>
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
+                <input
+                  type="text"
+                  id="search-roles"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search roles..."
+                  className="w-full pl-10 pr-4 py-2 border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
+                />
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="flex items-center">
+                  <label htmlFor="filter-status" className="text-sm text-nilin-warmGray mr-2">Status:</label>
+                  <select
+                    id="filter-status"
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value as any)}
+                    className="px-3 py-2 border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
+                  >
+                    <option value="all">All</option>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center">
+                  <label htmlFor="filter-system" className="text-sm text-nilin-warmGray mr-2">Type:</label>
+                  <select
+                    id="filter-system"
+                    value={filterSystem}
+                    onChange={(e) => setFilterSystem(e.target.value as any)}
+                    className="px-3 py-2 border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent"
+                  >
+                    <option value="all">All</option>
+                    <option value="system">System</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={fetchRoles}
+                  className="w-10 h-10 flex items-center justify-center text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-blush/50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                  title="Refresh"
+                  aria-label="Refresh roles"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Role List */}
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <LoadingSpinner size="lg" />
+            </div>
+          ) : error ? (
+            <div className="bg-nilin-rose/5 border border-nilin-rose/20 rounded-xl p-6 text-center">
+              <AlertTriangle className="w-12 h-12 text-nilin-rose mx-auto mb-4" />
+              <p className="text-nilin-rose">{error}</p>
+              <button
+                onClick={fetchRoles}
+                className="mt-4 px-4 py-2 bg-nilin-rose text-white rounded-lg hover:bg-nilin-rose/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose focus-visible:ring-offset-2"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : filteredRoles.length === 0 ? (
+            <div className="bg-white rounded-xl border border-nilin-border p-12 text-center">
+              <Shield className="w-12 h-12 text-nilin-border mx-auto mb-4" />
+              <p className="text-nilin-warmGray">No roles found matching your filters.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {filteredRoles.map((role) => (
+                <RoleCard
+                  key={role._id}
+                  role={role}
+                  stats={getStatsForRole(role.name)}
+                  onEdit={handleEditRole}
+                  onDelete={handleDeleteRole}
+                  onViewUsers={handleViewUsers}
+                />
+              ))}
+            </div>
+          )}
+        </main>
+
+        {/* Edit/Create Modal */}
+        <RoleEditModal
+          role={editingRole}
+          isOpen={isEditModalOpen}
+          onClose={() => {
+            setIsEditModalOpen(false);
+            setEditingRole(null);
+          }}
+          onSave={handleSaveRole}
+        />
+
+        {/* User List Modal */}
+        <UserListModal
+          roleName={selectedRoleName}
+          isOpen={isUserListOpen}
+          onClose={() => setIsUserListOpen(false)}
+        />
+
+        {/* Delete Confirmation Modal */}
+        <ConfirmModal
+          isOpen={deleteConfirm.isOpen}
+          title="Delete Role"
+          message="Are you sure you want to delete this role? This action cannot be undone."
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          variant="danger"
+          onConfirm={confirmDeleteRole}
+          onCancel={() => setDeleteConfirm({ isOpen: false, roleId: null })}
+        />
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };
-
-// ============================================
-// Mock Data for Demo
-// ============================================
-
-function getMockRoles(): Role[] {
-  return [
-    {
-      _id: '1',
-      name: 'admin',
-      description: 'Full administrative access to the platform',
-      permissions: ['*'],
-      isSystem: true,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      _id: '2',
-      name: 'customer',
-      description: 'Regular customer role',
-      permissions: [
-        'booking:create',
-        'booking:read',
-        'booking:update',
-        'service:read',
-        'user:read',
-        'user:update',
-      ],
-      isSystem: true,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      _id: '3',
-      name: 'provider',
-      description: 'Service provider role',
-      permissions: [
-        'booking:read',
-        'booking:update',
-        'service:create',
-        'service:read',
-        'service:update',
-        'service:delete',
-        'user:read',
-        'user:update',
-        'analytics:read',
-      ],
-      isSystem: true,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      _id: '4',
-      name: 'moderator',
-      description: 'Content and user moderation role',
-      permissions: [
-        'booking:read:all',
-        'booking:update:all',
-        'service:read:all',
-        'service:update',
-        'user:read:all',
-        'user:update',
-        'analytics:read',
-        'content:read',
-        'content:update',
-        'compliance:view',
-      ],
-      isSystem: false,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      _id: '5',
-      name: 'support',
-      description: 'Customer support role',
-      permissions: [
-        'booking:read:all',
-        'booking:update:all',
-        'service:read:all',
-        'user:read:all',
-        'user:update',
-        'analytics:read',
-        'compliance:view',
-      ],
-      isSystem: false,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      _id: '6',
-      name: 'analyst',
-      description: 'Data analyst role with read-only access',
-      permissions: [
-        'analytics:read',
-        'analytics:export',
-        'compliance:view',
-        'compliance:reports',
-      ],
-      isSystem: false,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-  ];
-}
-
-function getMockRoleStats(): RoleStats[] {
-  return [
-    { role: 'admin', userCount: 3, isSystem: true, isActive: true, permissionCount: 1 },
-    { role: 'customer', userCount: 1250, isSystem: true, isActive: true, permissionCount: 6 },
-    { role: 'provider', userCount: 87, isSystem: true, isActive: true, permissionCount: 9 },
-    { role: 'moderator', userCount: 5, isSystem: false, isActive: true, permissionCount: 10 },
-    { role: 'support', userCount: 8, isSystem: false, isActive: true, permissionCount: 7 },
-    { role: 'analyst', userCount: 2, isSystem: false, isActive: true, permissionCount: 4 },
-  ];
-}
 
 export default PermissionManager;

@@ -1,9 +1,48 @@
 import mongoose, { Types } from 'mongoose';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import Dispute from '../models/dispute.model';
+import User from '../models/user.model';
+import Booking from '../models/booking.model';
+import { NotificationService } from './notification.service';
+import { eventBus, EVENT_TYPES } from '../event-bus';
 
 // ============================================
-// TYPES & INTERFACES
+// DISPUTE & REFUND ESCALATION CONFIGURATION
+// ============================================
+
+const DISPUTE_REFUND_ESCALATION_CONFIG = {
+  // Dispute escalation thresholds
+  dispute: {
+    amountThreshold: 10000, // AED - above which disputes are auto-escalated
+    unresolvedDaysThreshold: 3, // Days after which unresolved disputes are escalated
+    maxPreviousDisputes: 2, // Maximum previous disputes between same parties before escalation
+  },
+  // Refund escalation thresholds
+  refund: {
+    amountThreshold: 5000, // AED - above which refunds are auto-escalated
+    maxPreviousRefunds: 2, // Maximum previous refunds from same customer before escalation
+  },
+};
+
+// New escalation triggers for dispute/refund specific escalation
+export type DisputeRefundEscalationTrigger =
+  | 'high_amount'
+  | 'unresolved_too_long'
+  | 'banned_user_involved'
+  | 'suspended_user_involved'
+  | 'repeat_disputes'
+  | 'repeat_refunds'
+  | 'chargeback';
+
+export interface EscalationCheckResult {
+  shouldEscalate: boolean;
+  triggers: DisputeRefundEscalationTrigger[];
+  reasons: string[];
+}
+
+// ============================================
+// EXISTING TYPES & INTERFACES
 // ============================================
 
 export type EscalationLevel = 'level1' | 'level2' | 'level3' | 'supervisor' | 'manager';
@@ -661,6 +700,527 @@ export class EscalationService {
     });
 
     return matchingRule?.targetLevel || 'level1';
+  }
+
+  // ========================================
+  // DISPUTE ESCALATION METHODS
+  // ========================================
+
+  /**
+   * Check if a dispute should be escalated based on rules
+   */
+  async checkDisputeEscalation(disputeId: string): Promise<EscalationCheckResult> {
+    const triggers: DisputeRefundEscalationTrigger[] = [];
+    const reasons: string[] = [];
+
+    try {
+      const dispute = await Dispute.findById(disputeId)
+        .populate('bookingId', 'pricing customerId providerId')
+        .lean();
+
+      if (!dispute) {
+        return { shouldEscalate: false, triggers: [], reasons: [] };
+      }
+
+      const booking = dispute.bookingId as any;
+      const amount = booking?.pricing?.totalAmount || 0;
+      const currency = booking?.pricing?.currency || 'AED';
+
+      // Check 1: High amount threshold
+      if (amount > DISPUTE_REFUND_ESCALATION_CONFIG.dispute.amountThreshold) {
+        triggers.push('high_amount');
+        reasons.push(`Amount (${currency} ${amount}) exceeds threshold (${currency} ${DISPUTE_REFUND_ESCALATION_CONFIG.dispute.amountThreshold})`);
+      }
+
+      // Check 2: Unresolved for too long
+      const daysSinceCreation = this.calculateDaysSince(dispute.createdAt);
+      if (daysSinceCreation > DISPUTE_REFUND_ESCALATION_CONFIG.dispute.unresolvedDaysThreshold) {
+        const status = dispute.status;
+        if (status !== 'resolved' && status !== 'closed') {
+          triggers.push('unresolved_too_long');
+          reasons.push(`Unresolved for ${daysSinceCreation} days (threshold: ${DISPUTE_REFUND_ESCALATION_CONFIG.dispute.unresolvedDaysThreshold} days)`);
+        }
+      }
+
+      // Check 3: Banned or suspended user involved
+      const initiatorStatus = await this.checkUserStatus(dispute.initiator.userId);
+      const respondentStatus = await this.checkUserStatus(dispute.respondent.userId);
+
+      if (initiatorStatus.isBanned) {
+        triggers.push('banned_user_involved');
+        reasons.push(`Initiator (${dispute.initiator.name}) is banned`);
+      } else if (initiatorStatus.isSuspended) {
+        triggers.push('suspended_user_involved');
+        reasons.push(`Initiator (${dispute.initiator.name}) is suspended`);
+      }
+
+      if (respondentStatus.isBanned) {
+        triggers.push('banned_user_involved');
+        reasons.push(`Respondent (${dispute.respondent.name}) is banned`);
+      } else if (respondentStatus.isSuspended) {
+        triggers.push('suspended_user_involved');
+        reasons.push(`Respondent (${dispute.respondent.name}) is suspended`);
+      }
+
+      // Check 4: Repeat disputes between same parties
+      const previousDisputesCount = await this.countPreviousDisputesBetweenParties(
+        dispute.initiator.userId,
+        dispute.respondent.userId,
+        disputeId
+      );
+
+      if (previousDisputesCount >= DISPUTE_REFUND_ESCALATION_CONFIG.dispute.maxPreviousDisputes) {
+        triggers.push('repeat_disputes');
+        reasons.push(`${previousDisputesCount + 1} disputes between same parties (threshold: ${DISPUTE_REFUND_ESCALATION_CONFIG.dispute.maxPreviousDisputes})`);
+      }
+
+      return {
+        shouldEscalate: triggers.length > 0,
+        triggers,
+        reasons,
+      };
+
+    } catch (error) {
+      logger.error('Error checking dispute escalation', {
+        disputeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { shouldEscalate: false, triggers: [], reasons: [] };
+    }
+  }
+
+  /**
+   * Escalate a dispute automatically
+   */
+  async escalateDispute(disputeId: string, reasons: DisputeRefundEscalationTrigger[]): Promise<void> {
+    const session = await mongoose.startSession();
+
+    try {
+      session.startTransaction();
+
+      const dispute = await Dispute.findById(disputeId).session(session);
+      if (!dispute) {
+        throw new ApiError(404, 'Dispute not found');
+      }
+
+      // Already escalated
+      if (dispute.status === 'escalated') {
+        await session.commitTransaction();
+        return;
+      }
+
+      const previousStatus = dispute.status;
+      const previousPriority = dispute.priority;
+
+      // Update dispute
+      dispute.status = 'escalated';
+      dispute.escalatedAt = new Date();
+      dispute.priority = 'urgent';
+
+      // Add timeline entry
+      dispute.timeline.push({
+        action: 'auto_escalated',
+        performedBy: new Types.ObjectId('000000000000000000000000'),
+        performedByRole: 'system',
+        timestamp: new Date(),
+        details: `Auto-escalated due to: ${reasons.join(', ')}`,
+        previousStatus,
+        newStatus: 'escalated',
+      });
+
+      await dispute.save({ session });
+      await session.commitTransaction();
+
+      // Publish event
+      eventBus.publish(EVENT_TYPES.DISPUTE_ESCALATED, {
+        disputeId: dispute._id,
+        disputeNumber: dispute.disputeNumber,
+        escalatedBy: 'system',
+        reason: reasons.join(', '),
+        autoEscalated: true,
+      });
+
+      // Notify admins
+      await this.notifyEscalationAdmins({
+        entityType: 'dispute',
+        entityId: dispute._id,
+        entityNumber: dispute.disputeNumber,
+        triggers: reasons,
+      });
+
+      logger.info('Dispute auto-escalated', {
+        disputeId,
+        disputeNumber: dispute.disputeNumber,
+        triggers: reasons,
+      });
+
+    } catch (error) {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
+      throw error;
+    } finally {
+      if (!session.hasEnded) {
+        await session.endSession();
+      }
+    }
+  }
+
+  // ========================================
+  // REFUND ESCALATION METHODS
+  // ========================================
+
+  /**
+   * Check if a refund should be escalated based on rules
+   */
+  async checkRefundEscalation(refundId: string): Promise<EscalationCheckResult> {
+    const triggers: DisputeRefundEscalationTrigger[] = [];
+    const reasons: string[] = [];
+
+    try {
+      const RefundRequest = mongoose.model('RefundRequest');
+      const refund = await RefundRequest.findById(refundId)
+        .populate('bookingId', 'pricing customerId')
+        .lean() as any;
+
+      if (!refund) {
+        return { shouldEscalate: false, triggers: [], reasons: [] };
+      }
+
+      const booking = refund.bookingId as { pricing?: { currency?: string }; customerId?: Types.ObjectId } | null;
+      const amount = (refund as any).amount || 0;
+      const currency = booking?.pricing?.currency || 'AED';
+
+      // Check 1: High amount threshold
+      if (amount > DISPUTE_REFUND_ESCALATION_CONFIG.refund.amountThreshold) {
+        triggers.push('high_amount');
+        reasons.push(`Refund amount (${currency} ${amount}) exceeds threshold (${currency} ${DISPUTE_REFUND_ESCALATION_CONFIG.refund.amountThreshold})`);
+      }
+
+      // Check 2: Repeat refunds from same customer
+      const customerId = booking?.customerId;
+      if (customerId) {
+        const previousRefundsCount = await this.countPreviousRefundsFromCustomer(
+          customerId,
+          refundId
+        );
+
+        if (previousRefundsCount >= DISPUTE_REFUND_ESCALATION_CONFIG.refund.maxPreviousRefunds) {
+          triggers.push('repeat_refunds');
+          reasons.push(`${previousRefundsCount + 1} refunds from same customer (threshold: ${DISPUTE_REFUND_ESCALATION_CONFIG.refund.maxPreviousRefunds})`);
+        }
+      }
+
+      // Check 3: Chargeback
+      const refundAny = refund as any;
+      if (refundAny.type === 'chargeback') {
+        triggers.push('chargeback');
+        reasons.push('Chargeback initiated - requires immediate attention');
+      }
+
+      return {
+        shouldEscalate: triggers.length > 0,
+        triggers,
+        reasons,
+      };
+
+    } catch (error) {
+      logger.error('Error checking refund escalation', {
+        refundId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { shouldEscalate: false, triggers: [], reasons: [] };
+    }
+  }
+
+  /**
+   * Escalate a refund automatically
+   */
+  async escalateRefund(refundId: string, reasons: DisputeRefundEscalationTrigger[]): Promise<void> {
+    const session = await mongoose.startSession();
+
+    try {
+      session.startTransaction();
+
+      const RefundRequest = mongoose.model('RefundRequest');
+      const refund = await RefundRequest.findById(refundId).session(session);
+
+      if (!refund) {
+        throw new ApiError(404, 'Refund not found');
+      }
+
+      const refundAny = refund as any;
+
+      // Add escalation metadata
+      refundAny.escalatedAt = new Date();
+      refundAny.escalationTriggers = reasons;
+      refundAny.isEscalated = true;
+
+      // Add timeline entry
+      refund.timeline.push({
+        action: 'auto_escalated',
+        performedBy: new Types.ObjectId('000000000000000000000000'),
+        performedByRole: 'system',
+        timestamp: new Date(),
+        details: `Auto-escalated due to: ${reasons.join(', ')}`,
+      });
+
+      await refund.save({ session });
+      await session.commitTransaction();
+
+      // Publish event
+      eventBus.publish(EVENT_TYPES.REFUND_ESCALATED, {
+        refundId: refund._id,
+        refundNumber: refundAny.refundNumber,
+        escalatedBy: 'system',
+        reason: reasons.join(', '),
+        autoEscalated: true,
+      });
+
+      // Notify admins
+      await this.notifyEscalationAdmins({
+        entityType: 'refund',
+        entityId: refund._id,
+        entityNumber: refundAny.refundNumber,
+        triggers: reasons,
+      });
+
+      logger.info('Refund auto-escalated', {
+        refundId,
+        refundNumber: refundAny.refundNumber,
+        triggers: reasons,
+      });
+
+    } catch (error) {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
+      throw error;
+    } finally {
+      if (!session.hasEnded) {
+        await session.endSession();
+      }
+    }
+  }
+
+  // ========================================
+  // HELPER METHODS
+  // ========================================
+
+  /**
+   * Notify admins about escalated items
+   */
+  private async notifyEscalationAdmins(context: {
+    entityType: 'dispute' | 'refund';
+    entityId: Types.ObjectId;
+    entityNumber: string;
+    triggers: DisputeRefundEscalationTrigger[];
+  }): Promise<void> {
+    try {
+      const admins = await User.find({ role: 'admin' }).select('_id email firstName lastName');
+      const notificationService = new NotificationService();
+
+      const triggerDescriptions = context.triggers.map(t => this.getTriggerDescription(t)).join(', ');
+
+      const notifications = admins.map(admin => ({
+        recipientId: admin._id.toString(),
+        type: `${context.entityType}_escalated` as any,
+        title: `${context.entityType === 'dispute' ? 'Dispute' : 'Refund'} Escalated`,
+        message: `${context.entityType === 'dispute' ? 'Dispute' : 'Refund'} #${context.entityNumber} has been auto-escalated. Reason: ${triggerDescriptions}`,
+        metadata: {
+          entityType: context.entityType,
+          entityId: context.entityId.toString(),
+          entityNumber: context.entityNumber,
+          triggers: context.triggers,
+          escalatedAt: new Date().toISOString(),
+        },
+      }));
+
+      await Promise.all(
+        notifications.map(notification =>
+          notificationService.createNotification(notification)
+        )
+      );
+
+      logger.info('Escalation notifications sent', {
+        entityType: context.entityType,
+        entityId: context.entityId,
+        adminCount: admins.length,
+      });
+
+    } catch (error) {
+      logger.error('Failed to send escalation notifications', {
+        entityType: context.entityType,
+        entityId: context.entityId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Get human-readable description for escalation trigger
+   */
+  private getTriggerDescription(trigger: DisputeRefundEscalationTrigger): string {
+    const descriptions: Record<DisputeRefundEscalationTrigger, string> = {
+      high_amount: 'High transaction amount',
+      unresolved_too_long: 'Unresolved for too long',
+      banned_user_involved: 'Banned user involved',
+      suspended_user_involved: 'Suspended user involved',
+      repeat_disputes: 'Repeat disputes between parties',
+      repeat_refunds: 'Repeat refunds from customer',
+      chargeback: 'Chargeback initiated',
+    };
+    return descriptions[trigger] || trigger;
+  }
+
+  /**
+   * Check user ban/suspension status
+   */
+  private async checkUserStatus(userId: Types.ObjectId): Promise<{
+    isBanned: boolean;
+    isSuspended: boolean;
+  }> {
+    const user = await User.findById(userId)
+      .select('status suspensionEndsAt')
+      .lean();
+
+    if (!user) {
+      return { isBanned: false, isSuspended: false };
+    }
+
+    const userAny = user as any;
+    const isBanned = userAny.status === 'banned' || userAny.status === 'deactivated';
+    const isSuspended = userAny.status === 'suspended' &&
+      (!userAny.suspensionEndsAt || userAny.suspensionEndsAt > new Date());
+
+    return { isBanned, isSuspended };
+  }
+
+  /**
+   * Count previous disputes between same parties
+   */
+  private async countPreviousDisputesBetweenParties(
+    initiatorId: Types.ObjectId,
+    respondentId: Types.ObjectId,
+    excludeDisputeId: string
+  ): Promise<number> {
+    const count = await Dispute.countDocuments({
+      _id: { $ne: new Types.ObjectId(excludeDisputeId) },
+      status: { $nin: ['resolved', 'closed'] },
+      $or: [
+        {
+          'initiator.userId': initiatorId,
+          'respondent.userId': respondentId,
+        },
+        {
+          'initiator.userId': respondentId,
+          'respondent.userId': initiatorId,
+        },
+      ],
+    });
+
+    return count;
+  }
+
+  /**
+   * Count previous refunds from same customer
+   */
+  private async countPreviousRefundsFromCustomer(
+    customerId: Types.ObjectId,
+    excludeRefundId: string
+  ): Promise<number> {
+    const RefundRequest = mongoose.model('RefundRequest');
+
+    const count = await RefundRequest.countDocuments({
+      _id: { $ne: new Types.ObjectId(excludeRefundId) },
+      requestedBy: customerId,
+      status: { $in: ['pending', 'approved', 'processing', 'completed'] },
+    });
+
+    return count;
+  }
+
+  /**
+   * Calculate days since a date
+   */
+  private calculateDaysSince(date: Date): number {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  }
+
+  // ========================================
+  // BATCH PROCESSING (for cron jobs)
+  // ========================================
+
+  /**
+   * Process all open disputes for potential escalation
+   */
+  async processOpenDisputesForEscalation(): Promise<{ processed: number; escalated: number }> {
+    let processed = 0;
+    let escalated = 0;
+
+    try {
+      const disputes = await Dispute.find({
+        status: { $in: ['open', 'under_review'] },
+        escalatedAt: { $exists: false },
+      }).select('_id disputeNumber');
+
+      for (const dispute of disputes) {
+        processed++;
+        const result = await this.checkDisputeEscalation(dispute._id.toString());
+
+        if (result.shouldEscalate) {
+          await this.escalateDispute(dispute._id.toString(), result.triggers);
+          escalated++;
+        }
+      }
+
+      logger.info('Batch dispute escalation completed', { processed, escalated });
+      return { processed, escalated };
+
+    } catch (error) {
+      logger.error('Error in batch dispute escalation', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { processed, escalated };
+    }
+  }
+
+  /**
+   * Process all pending refunds for potential escalation
+   */
+  async processPendingRefundsForEscalation(): Promise<{ processed: number; escalated: number }> {
+    let processed = 0;
+    let escalated = 0;
+
+    try {
+      const RefundRequest = mongoose.model('RefundRequest');
+
+      const refunds = await RefundRequest.find({
+        status: 'pending',
+        isEscalated: { $ne: true },
+      }).select('_id refundNumber');
+
+      for (const refund of refunds) {
+        processed++;
+        const result = await this.checkRefundEscalation(refund._id.toString());
+
+        if (result.shouldEscalate) {
+          await this.escalateRefund(refund._id.toString(), result.triggers);
+          escalated++;
+        }
+      }
+
+      logger.info('Batch refund escalation completed', { processed, escalated });
+      return { processed, escalated };
+
+    } catch (error) {
+      logger.error('Error in batch refund escalation', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { processed, escalated };
+    }
   }
 }
 

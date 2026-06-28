@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Shield,
@@ -47,6 +48,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface ContentFilter {
   id: string;
@@ -148,197 +152,11 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
         setReports(response.data.data.reports || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setFilters([
-          {
-            id: 'filter-001',
-            name: 'Adult Content Filter',
-            description: 'Blocks adult content and explicit material',
-            category: 'Adult Content',
-            enabled: true,
-            strictness: 'high',
-            blockedCount: 156,
-            lastTriggered: new Date(Date.now() - 3600000).toISOString()
-          },
-          {
-            id: 'filter-002',
-            name: 'Violence Filter',
-            description: 'Blocks violent content and imagery',
-            category: 'Violence',
-            enabled: true,
-            strictness: 'medium',
-            blockedCount: 89,
-            lastTriggered: new Date(Date.now() - 7200000).toISOString()
-          },
-          {
-            id: 'filter-003',
-            name: 'Hate Speech Filter',
-            description: 'Detects and blocks hate speech and discrimination',
-            category: 'Hate Speech',
-            enabled: true,
-            strictness: 'high',
-            blockedCount: 34,
-            lastTriggered: new Date(Date.now() - 86400000).toISOString()
-          },
-          {
-            id: 'filter-004',
-            name: 'Illegal Services Filter',
-            description: 'Blocks listings for illegal services',
-            category: 'Illegal Services',
-            enabled: true,
-            strictness: 'high',
-            blockedCount: 12,
-            lastTriggered: new Date(Date.now() - 172800000).toISOString()
-          },
-          {
-            id: 'filter-005',
-            name: 'Fraud Detection',
-            description: 'AI-powered fraud detection for suspicious listings',
-            category: 'Fraud',
-            enabled: true,
-            strictness: 'medium',
-            blockedCount: 67,
-            lastTriggered: new Date(Date.now() - 3600000 * 4).toISOString()
-          },
-          {
-            id: 'filter-006',
-            name: 'Safety Warnings',
-            description: 'Shows safety warnings for potentially risky services',
-            category: 'Safety',
-            enabled: true,
-            strictness: 'low',
-            blockedCount: 0,
-            lastTriggered: new Date(Date.now() - 3600000 * 2).toISOString()
-          }
-        ]);
-        setAgeRestrictions([
-          {
-            id: 'age-001',
-            category: 'Adult Services',
-            minAge: 18,
-            enabled: true,
-            verificationRequired: true
-          },
-          {
-            id: 'age-002',
-            category: 'Home Repair',
-            minAge: 0,
-            enabled: false,
-            verificationRequired: false
-          },
-          {
-            id: 'age-003',
-            category: 'Cleaning Services',
-            minAge: 0,
-            enabled: false,
-            verificationRequired: false
-          },
-          {
-            id: 'age-004',
-            category: 'Beauty Services',
-            minAge: 16,
-            enabled: true,
-            verificationRequired: false
-          }
-        ]);
-        setCategoryBlocks([
-          {
-            id: 'block-001',
-            category: 'Firearms Services',
-            serviceTypes: ['Gun repair', 'Ammunition sales'],
-            blocked: true,
-            reason: 'Prohibited under local law',
-            since: new Date(Date.now() - 86400000 * 30).toISOString(),
-            blockedBy: 'admin@nilin.com'
-          },
-          {
-            id: 'block-002',
-            category: 'Bail Services',
-            serviceTypes: ['Bail bonds'],
-            blocked: true,
-            reason: 'Prohibited service category',
-            since: new Date(Date.now() - 86400000 * 60).toISOString(),
-            blockedBy: 'admin@nilin.com'
-          },
-          {
-            id: 'block-003',
-            category: 'Content Removal',
-            serviceTypes: ['Reputation management', 'Content deletion'],
-            blocked: false
-          },
-          {
-            id: 'block-004',
-            category: 'Dating Services',
-            serviceTypes: ['Escort services'],
-            blocked: true,
-            reason: 'Prohibited under platform policy',
-            since: new Date(Date.now() - 86400000 * 90).toISOString(),
-            blockedBy: 'admin@nilin.com'
-          }
-        ]);
-        setReports([
-          {
-            id: 'report-001',
-            reportedItem: { type: 'service', id: 'svc-001', name: 'Home Cleaning Service' },
-            reporter: { id: 'cust-001', name: 'Ahmed Hassan' },
-            reason: 'Inappropriate images in service gallery',
-            status: 'pending',
-            createdAt: new Date(Date.now() - 3600000 * 6).toISOString()
-          },
-          {
-            id: 'report-002',
-            reportedItem: { type: 'review', id: 'rev-001', name: 'Review by Sarah K.' },
-            reporter: { id: 'prov-001', name: 'Clean Pro Services' },
-            reason: 'Fake review with defamatory content',
-            status: 'reviewed',
-            createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-            reviewedAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-            action: 'Review removed, reporter warned'
-          },
-          {
-            id: 'report-003',
-            reportedItem: { type: 'provider', id: 'prov-002', name: 'Quick Handyman' },
-            reporter: { id: 'cust-002', name: 'Omar Ali' },
-            reason: 'Provider asking for payment outside platform',
-            status: 'actioned',
-            createdAt: new Date(Date.now() - 3600000 * 48).toISOString(),
-            reviewedAt: new Date(Date.now() - 3600000 * 36).toISOString(),
-            action: 'Provider suspended pending investigation'
-          }
-        ]);
-        setStats({
-          totalFilters: 6,
-          activeFilters: 6,
-          blockedContent: 358,
-          reportsReceived: 45,
-          avgResponseTime: 2.4,
-          filterEffectiveness: 94.5,
-          byCategory: [
-            { category: 'Adult Content', blocked: 156, total: 200 },
-            { category: 'Violence', blocked: 89, total: 150 },
-            { category: 'Hate Speech', blocked: 34, total: 50 },
-            { category: 'Illegal Services', blocked: 12, total: 20 },
-            { category: 'Fraud', blocked: 67, total: 100 }
-          ],
-          trend: [
-            { date: 'Mon', blocked: 45, reports: 5 },
-            { date: 'Tue', blocked: 52, reports: 8 },
-            { date: 'Wed', blocked: 38, reports: 6 },
-            { date: 'Thu', blocked: 61, reports: 7 },
-            { date: 'Fri', blocked: 48, reports: 9 },
-            { date: 'Sat', blocked: 55, reports: 4 },
-            { date: 'Sun', blocked: 59, reports: 6 }
-          ],
-          recentBlocks: [
-            { type: 'Content', count: 12, time: 'Last hour' },
-            { type: 'Listings', count: 5, time: 'Last hour' },
-            { type: 'Reviews', count: 3, time: 'Last hour' }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching safe search data:', err);
-      setError('Failed to load safe search controls');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -355,6 +173,7 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
   };
 
   const handleToggleFilter = async (filterId: string, enabled: boolean) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(filterId);
     try {
       await api.patch(`/admin/safe-search/filters/${filterId}`, { enabled });
@@ -369,6 +188,7 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
   };
 
   const handleUpdateStrictness = async (filterId: string, strictness: 'low' | 'medium' | 'high') => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(filterId);
     try {
       await api.patch(`/admin/safe-search/filters/${filterId}`, { strictness });
@@ -383,6 +203,7 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
   };
 
   const handleToggleBlock = async (blockId: string, blocked: boolean, reason?: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(blockId);
     try {
       await api.patch(`/admin/safe-search/blocks/${blockId}`, { blocked, reason });
@@ -399,6 +220,7 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
   };
 
   const handleUpdateReport = async (reportId: string, status: Report['status'], action?: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(reportId);
     try {
       await api.patch(`/admin/safe-search/reports/${reportId}`, { status, action });
@@ -604,7 +426,8 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
                   <select
                     value={filter.strictness}
                     onChange={(e) => handleUpdateStrictness(filter.id, e.target.value as 'low' | 'medium' | 'high')}
-                    disabled={actionLoading === filter.id}
+                    disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === filter.id}
+                    title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                     className="px-3 py-1.5 border border-nilin-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
                   >
                     <option value="low">Low</option>
@@ -613,7 +436,8 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
                   </select>
                   <button
                     onClick={() => handleToggleFilter(filter.id, !filter.enabled)}
-                    disabled={actionLoading === filter.id}
+                    disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === filter.id}
+                    title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : filter.enabled ? 'Disable filter' : 'Enable filter'}
                     className={cn(
                       'p-2 rounded-lg transition-colors',
                       filter.enabled
@@ -717,16 +541,18 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
                   {block.blocked ? (
                     <button
                       onClick={() => handleToggleBlock(block.id, false)}
-                      disabled={actionLoading === block.id}
-                      className="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors text-sm font-medium"
+                      disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === block.id}
+                      title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Unblock category'}
+                      className="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors text-sm font-medium disabled:opacity-50"
                     >
                       Unblock
                     </button>
                   ) : (
                     <button
                       onClick={() => handleToggleBlock(block.id, true, 'Prohibited under platform policy')}
-                      disabled={actionLoading === block.id}
-                      className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                      disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === block.id}
+                      title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Block category'}
+                      className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium disabled:opacity-50"
                     >
                       Block
                     </button>
@@ -798,15 +624,17 @@ export const SafeSearchControls: React.FC<SafeSearchControlsProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleUpdateReport(report.id, 'dismissed')}
-                        disabled={actionLoading === report.id}
-                        className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === report.id}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Dismiss report'}
+                        className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium disabled:opacity-50"
                       >
                         Dismiss
                       </button>
                       <button
                         onClick={() => handleUpdateReport(report.id, 'actioned', 'Content removed, user warned')}
-                        disabled={actionLoading === report.id}
-                        className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === report.id}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Take action on report'}
+                        className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium disabled:opacity-50"
                       >
                         Take Action
                       </button>

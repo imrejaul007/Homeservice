@@ -20,6 +20,8 @@ import BottomSheet from '../components/mobile/BottomSheet';
 import { CardSkeleton } from '../components/mobile/LoadingSkeleton';
 import AdvancedBookingFilters, { AdvancedFilterOptions } from '../components/customer/AdvancedBookingFilters';
 import { toast } from 'react-hot-toast';
+import { showDeduplicatedError } from '../utils/toastUtils';
+import { useLocationStore } from '../stores/locationStore';
 
 const SAVED_SEARCHES_KEY = 'nilin-saved-searches';
 const MAX_SAVED_SEARCHES = 10;
@@ -66,6 +68,11 @@ const SearchPage: React.FC = () => {
   const [isMapCollapsed, setIsMapCollapsed] = useState(false);
 
   const { categories: apiCategories } = useCategories();
+  const { currentLocation } = useLocationStore();
+
+  // Get user coordinates for distance calculation
+  const userLatitude = currentLocation?.coordinates?.latitude;
+  const userLongitude = currentLocation?.coordinates?.longitude;
 
   // URL-derived state
   const query = searchParams.get('q') || '';
@@ -164,9 +171,10 @@ const SearchPage: React.FC = () => {
           sortBy: sortBy as 'popularity' | 'price' | 'price_desc' | 'rating' | 'distance' | 'newest',
           page,
           limit: pagination.limit,
-          ...(advancedFilters.latitude && { lat: advancedFilters.latitude }),
-          ...(advancedFilters.longitude && { lng: advancedFilters.longitude }),
-          ...(advancedFilters.radiusKm && { radius: advancedFilters.radiusKm }),
+          // Use advanced filters location OR fall back to user's current location
+          ...(advancedFilters.latitude ? { lat: advancedFilters.latitude } : userLatitude ? { lat: userLatitude } : {}),
+          ...(advancedFilters.longitude ? { lng: advancedFilters.longitude } : userLongitude ? { lng: userLongitude } : {}),
+          ...(advancedFilters.radiusKm ? { radius: advancedFilters.radiusKm } : {}),
           ...(advancedFilters.city && { city: advancedFilters.city }),
         };
 
@@ -222,6 +230,7 @@ const SearchPage: React.FC = () => {
           ? err.message
           : err instanceof Error ? err.message : 'Search failed';
         setError(message);
+        showDeduplicatedError('Search failed', message);
         setServices([]);
         setProviders([]);
       } finally {
@@ -235,7 +244,7 @@ const SearchPage: React.FC = () => {
     return () => abortController.abort();
   }, [
     query, categoryParam, subcategoryParam, providerParam, priceRange, effectiveMinRating,
-    sortBy, page, viewMode, advancedFilters, maxPriceLimit, pagination.limit, retryCount,
+    sortBy, page, viewMode, advancedFilters, maxPriceLimit, pagination.limit, retryCount, userLatitude, userLongitude,
   ]);
 
   const handleBookNow = (service: Service) => {
@@ -423,7 +432,7 @@ const SearchPage: React.FC = () => {
                   key={cat.value}
                   onClick={() => handleCategorySelect(cat.value)}
                   aria-pressed={categoryParam === cat.value}
-                  className={`px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap flex-shrink-0 transition-all ${
+                  className={`min-h-11 px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap flex-shrink-0 transition-all ${
                     categoryParam === cat.value
                       ? 'bg-nilin-primary border-nilin-primary text-white'
                       : 'bg-white border-gray-200 text-gray-700 hover:border-nilin-primary/50 hover:bg-nilin-blush/30'
@@ -460,7 +469,7 @@ const SearchPage: React.FC = () => {
                 <button
                   onClick={() => handleViewModeChange('services')}
                   aria-pressed={viewMode === 'services'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  className={`flex items-center gap-1.5 min-h-11 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     viewMode === 'services'
                       ? 'bg-white text-nilin-primary shadow-sm'
                       : 'text-nilin-warmGray hover:text-nilin-charcoal'
@@ -472,7 +481,7 @@ const SearchPage: React.FC = () => {
                 <button
                   onClick={() => handleViewModeChange('providers')}
                   aria-pressed={viewMode === 'providers'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  className={`flex items-center gap-1.5 min-h-11 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     viewMode === 'providers'
                       ? 'bg-white text-nilin-primary shadow-sm'
                       : 'text-nilin-warmGray hover:text-nilin-charcoal'
@@ -484,7 +493,7 @@ const SearchPage: React.FC = () => {
                 <button
                   onClick={() => handleViewModeChange('map')}
                   aria-pressed={viewMode === 'map'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  className={`flex items-center gap-1.5 min-h-11 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     viewMode === 'map'
                       ? 'bg-white text-nilin-primary shadow-sm'
                       : 'text-nilin-warmGray hover:text-nilin-charcoal'
@@ -497,7 +506,7 @@ const SearchPage: React.FC = () => {
 
               <button
                 onClick={handleSaveSearch}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-gray-600 hover:text-nilin-primary transition-colors"
+                className="flex items-center gap-1.5 min-h-11 px-3 py-1.5 text-gray-600 hover:text-nilin-primary transition-colors"
               >
                 <Bookmark className="w-4 h-4" />
                 <span className="hidden sm:inline">Save Search</span>
@@ -505,7 +514,7 @@ const SearchPage: React.FC = () => {
 
               <button
                 onClick={openFilters}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-gray-600 hover:text-nilin-primary transition-colors"
+                className="flex items-center gap-1.5 min-h-11 px-3 py-1.5 text-gray-600 hover:text-nilin-primary transition-colors"
               >
                 <SlidersHorizontal className="w-4 h-4" />
                 Filters
@@ -513,7 +522,7 @@ const SearchPage: React.FC = () => {
 
               <button
                 onClick={() => setShowAdvancedFilters(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-gray-600 hover:text-nilin-primary transition-colors"
+                className="flex items-center gap-1.5 min-h-11 px-3 py-1.5 text-gray-600 hover:text-nilin-primary transition-colors"
               >
                 <SlidersHorizontal className="w-4 h-4" />
                 Advanced
@@ -576,6 +585,7 @@ const SearchPage: React.FC = () => {
               className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-nilin-primary/20"
             >
               <option value="popularity">Most Popular</option>
+              <option value="distance">Nearest First</option>
               <option value="price">Price: Low to High</option>
               <option value="price_desc">Price: High to Low</option>
               <option value="rating">Highest Rated</option>
@@ -629,6 +639,7 @@ const SearchPage: React.FC = () => {
                       <ServiceCard
                         service={service}
                         variant="default"
+                        showDistance={true}
                         onBookNow={handleBookNow}
                         showBookNow={true}
                       />

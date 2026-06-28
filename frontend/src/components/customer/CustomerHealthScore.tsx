@@ -1,11 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { Activity, TrendingUp, TrendingDown, Minus, Heart, Star, Calendar, CreditCard, AlertCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Skeleton } from '../common/Skeleton';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
-import { useAuthStore } from '../../stores/authStore';
-import { useBookingStore } from '../../stores/bookingStore';
+import { authService } from '../../services/AuthService';
 
 // =============================================================================
 // NILIN Customer Dashboard - Customer Health Score Component
@@ -252,92 +251,82 @@ const MetricCard: React.FC<MetricCardProps> = ({ metric, compact }) => {
 };
 
 // =============================================================================
-// Generate Mock Health Score Data
+// Default Health Score (shown while loading)
 // =============================================================================
 
-const generateHealthScoreData = (): HealthScoreData => {
-  return {
-    overall: 78,
-    metrics: [
-      {
-        id: 'booking_frequency',
-        label: 'Booking Frequency',
-        description: 'How often you book services',
-        value: 8,
-        maxValue: 10,
-        weight: 0.2,
-        icon: <Calendar className="h-6 w-6" />,
-        trend: 'up',
-        trendValue: 12,
-        color: 'text-blue-500',
-        bgColor: 'bg-blue-50',
-      },
-      {
-        id: 'satisfaction',
-        label: 'Satisfaction Score',
-        description: 'Based on your reviews and ratings',
-        value: 9.2,
-        maxValue: 10,
-        weight: 0.25,
-        icon: <Star className="h-6 w-6" />,
-        trend: 'up',
-        trendValue: 5,
-        color: 'text-amber-500',
-        bgColor: 'bg-amber-50',
-      },
-      {
-        id: 'engagement',
-        label: 'Engagement',
-        description: 'App usage and interaction',
-        value: 7,
-        maxValue: 10,
-        weight: 0.2,
-        icon: <Activity className="h-6 w-6" />,
-        trend: 'neutral',
-        trendValue: 0,
-        color: 'text-purple-500',
-        bgColor: 'bg-purple-50',
-      },
-      {
-        id: 'payment_history',
-        label: 'Payment Reliability',
-        description: 'Payment history and disputes',
-        value: 10,
-        maxValue: 10,
-        weight: 0.2,
-        icon: <CreditCard className="h-6 w-6" />,
-        trend: 'up',
-        trendValue: 0,
-        color: 'text-green-500',
-        bgColor: 'bg-green-50',
-      },
-      {
-        id: 'loyalty',
-        label: 'Loyalty Tenure',
-        description: 'How long you\'ve been a customer',
-        value: 6,
-        maxValue: 10,
-        weight: 0.15,
-        icon: <Heart className="h-6 w-6" />,
-        trend: 'up',
-        trendValue: 8,
-        color: 'text-pink-500',
-        bgColor: 'bg-pink-50',
-      },
-    ],
-    tier: 'gold',
-    insights: [
-      'You\'re in the top 20% of customers!',
-      'Your satisfaction score is exceptional',
-      'Try booking more frequently to unlock Platinum benefits',
-    ],
-    recommendations: [
-      'Leave reviews after each service to boost your score',
-      'Book your next cleaning service to maintain your streak',
-      'Explore new categories to discover more providers',
-    ],
-  };
-};
+const getDefaultHealthScoreData = (): HealthScoreData => ({
+  overall: 0,
+  metrics: [
+    {
+      id: 'booking_frequency',
+      label: 'Booking Frequency',
+      description: 'How often you book services',
+      value: 0,
+      maxValue: 10,
+      weight: 0.2,
+      icon: <Calendar className="h-6 w-6" />,
+      trend: 'neutral',
+      trendValue: 0,
+      color: 'text-blue-500',
+      bgColor: 'bg-blue-50',
+    },
+    {
+      id: 'satisfaction',
+      label: 'Satisfaction Score',
+      description: 'Based on your reviews and ratings',
+      value: 0,
+      maxValue: 10,
+      weight: 0.25,
+      icon: <Star className="h-6 w-6" />,
+      trend: 'neutral',
+      trendValue: 0,
+      color: 'text-amber-500',
+      bgColor: 'bg-amber-50',
+    },
+    {
+      id: 'engagement',
+      label: 'Engagement',
+      description: 'Recent activity and interaction',
+      value: 0,
+      maxValue: 10,
+      weight: 0.2,
+      icon: <Activity className="h-6 w-6" />,
+      trend: 'neutral',
+      trendValue: 0,
+      color: 'text-purple-500',
+      bgColor: 'bg-purple-50',
+    },
+    {
+      id: 'payment_history',
+      label: 'Payment Reliability',
+      description: 'Payment history and disputes',
+      value: 10,
+      maxValue: 10,
+      weight: 0.2,
+      icon: <CreditCard className="h-6 w-6" />,
+      trend: 'up',
+      trendValue: 0,
+      color: 'text-green-500',
+      bgColor: 'bg-green-50',
+    },
+    {
+      id: 'loyalty',
+      label: 'Loyalty Tenure',
+      description: 'How long you\'ve been a customer',
+      value: 0,
+      maxValue: 10,
+      weight: 0.15,
+      icon: <Heart className="h-6 w-6" />,
+      trend: 'neutral',
+      trendValue: 0,
+      color: 'text-pink-500',
+      bgColor: 'bg-pink-50',
+    },
+  ],
+  tier: 'bronze',
+  insights: [],
+  recommendations: [],
+});
 
 // =============================================================================
 // Main Component
@@ -351,32 +340,100 @@ export const CustomerHealthScore: React.FC<CustomerHealthScoreProps> = ({
 }) => {
   const [mounted, setMounted] = useState(false);
   const [healthData, setHealthData] = useState<HealthScoreData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const customerProfile = useAuthStore((state) => state.customerProfile);
-  const customerBookings = useBookingStore((state) => state.customerBookings);
-
-  // Generate or fetch health score data
+  // Fetch health score data from API
   React.useEffect(() => {
     const loadHealthScore = async () => {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      setLoading(true);
+      setError(null);
 
-      // In real app, fetch from API
-      const data = generateHealthScoreData();
+      try {
+        const response = await authService.get<{ success: boolean; data: HealthScoreData }>('/customers/health-score');
 
-      // Adjust based on profile data
-      if (customerProfile) {
-        const bookingsCount = customerBookings?.length || customerProfile.bookingStats?.totalBookings || 0;
-        data.overall = Math.min(100, 50 + (bookingsCount * 2));
-        data.metrics[0].value = Math.min(10, bookingsCount);
+        if (response.success && response.data) {
+          // Add icons to metrics from API
+          const dataWithIcons: HealthScoreData = {
+            ...response.data,
+            metrics: response.data.metrics.map((metric) => {
+              let icon: React.ReactNode;
+              switch (metric.id) {
+                case 'booking_frequency':
+                  icon = <Calendar className="h-6 w-6" />;
+                  break;
+                case 'satisfaction':
+                  icon = <Star className="h-6 w-6" />;
+                  break;
+                case 'engagement':
+                  icon = <Activity className="h-6 w-6" />;
+                  break;
+                case 'payment_history':
+                  icon = <CreditCard className="h-6 w-6" />;
+                  break;
+                case 'loyalty':
+                  icon = <Heart className="h-6 w-6" />;
+                  break;
+                default:
+                  icon = <Activity className="h-6 w-6" />;
+              }
+
+              let color: string;
+              let bgColor: string;
+              switch (metric.id) {
+                case 'booking_frequency':
+                  color = 'text-blue-500';
+                  bgColor = 'bg-blue-50';
+                  break;
+                case 'satisfaction':
+                  color = 'text-amber-500';
+                  bgColor = 'bg-amber-50';
+                  break;
+                case 'engagement':
+                  color = 'text-purple-500';
+                  bgColor = 'bg-purple-50';
+                  break;
+                case 'payment_history':
+                  color = 'text-green-500';
+                  bgColor = 'bg-green-50';
+                  break;
+                case 'loyalty':
+                  color = 'text-pink-500';
+                  bgColor = 'bg-pink-50';
+                  break;
+                default:
+                  color = 'text-gray-500';
+                  bgColor = 'bg-gray-50';
+              }
+
+              return {
+                ...metric,
+                icon,
+                color,
+                bgColor,
+              };
+            }),
+          };
+
+          setHealthData(dataWithIcons);
+        } else {
+          // Fallback to default data
+          setHealthData(getDefaultHealthScoreData());
+        }
+      } catch (err) {
+        console.error('Failed to fetch health score:', err);
+        setError('Failed to load health score');
+        // Use default data on error
+        setHealthData(getDefaultHealthScoreData());
+      } finally {
+        setLoading(false);
+        // Trigger animation after data is loaded
+        setTimeout(() => setMounted(true), 100);
       }
-
-      setHealthData(data);
-      setMounted(true);
     };
 
     loadHealthScore();
-  }, [customerProfile, customerBookings]);
+  }, []);
 
   // Get tier color
   const getTierColor = (tier: HealthScoreData['tier']): string => {
@@ -390,13 +447,33 @@ export const CustomerHealthScore: React.FC<CustomerHealthScoreProps> = ({
   };
 
   // Loading State
-  if (!healthData) {
+  if (loading) {
     return (
       <div className={cn('bg-white rounded-2xl p-6 shadow-sm border border-nilin-blush/30', className)}>
         <div className="flex flex-col items-center">
           <Skeleton className="w-32 h-32 rounded-full" />
           <Skeleton className="h-6 w-24 mt-4" />
           <Skeleton className="h-4 w-32 mt-2" />
+        </div>
+      </div>
+    );
+  }
+
+  // Error State - show with default data
+  if (error && !healthData) {
+    return (
+      <div className={cn('bg-white rounded-2xl p-6 shadow-sm border border-nilin-blush/30', className)}>
+        <div className="flex flex-col items-center text-center">
+          <AlertCircle className="w-12 h-12 text-nilin-warmGray mb-4" />
+          <p className="text-nilin-warmGray">{error}</p>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-4"
+            onClick={() => window.location.reload()}
+          >
+            Retry
+          </Button>
         </div>
       </div>
     );

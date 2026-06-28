@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users,
@@ -132,118 +133,11 @@ export const WinBackCampaignDashboard: React.FC<WinBackCampaignDashboardProps> =
         setCampaigns(response.data.data.campaigns || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setCampaigns([
-          {
-            _id: 'camp-001',
-            campaignId: 'WB-dormant_30-abc123',
-            campaignType: 'dormant_30',
-            status: 'converted',
-            userId: 'user-001',
-            userName: 'Ahmed Hassan',
-            userEmail: 'ahmed@email.com',
-            offerValue: 10,
-            offerCode: 'WELCOME_BACK10',
-            expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-            channels: [
-              { channel: 'email', status: 'opened' },
-              { channel: 'push', status: 'clicked' },
-              { channel: 'sms', status: 'sent' },
-            ],
-            conversion: {
-              convertedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-              bookingId: 'booking-001',
-              revenue: 450,
-            },
-            detectionDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-            createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-          },
-          {
-            _id: 'camp-002',
-            campaignId: 'WB-churn_risk-def456',
-            campaignType: 'churn_risk',
-            status: 'engaged',
-            userId: 'user-002',
-            userName: 'Sarah Khan',
-            userEmail: 'sarah@email.com',
-            offerValue: 25,
-            offerCode: 'STAY_WITH_US25',
-            expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-            channels: [
-              { channel: 'email', status: 'opened' },
-              { channel: 'push', status: 'sent' },
-            ],
-            detectionDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-          },
-          {
-            _id: 'camp-003',
-            campaignId: 'WB-dormant_60-ghi789',
-            campaignType: 'dormant_60',
-            status: 'pending',
-            userId: 'user-003',
-            userName: 'Mohammed Ali',
-            userEmail: 'mohammed@email.com',
-            offerValue: 15,
-            offerCode: 'WE_MISS_YOU15',
-            expiresAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString(),
-            channels: [
-              { channel: 'email', status: 'pending' },
-              { channel: 'push', status: 'pending' },
-            ],
-            detectionDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-            createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-          },
-          {
-            _id: 'camp-004',
-            campaignId: 'WB-dormant_90-jkl012',
-            campaignType: 'dormant_90',
-            status: 'failed',
-            userId: 'user-004',
-            userName: 'Fatima Omar',
-            userEmail: 'fatima@email.com',
-            offerValue: 20,
-            offerCode: 'COME_BACK20',
-            expiresAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            channels: [
-              { channel: 'email', status: 'failed' },
-            ],
-            detectionDate: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-            createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-          },
-        ]);
-
-        setStats({
-          totalCampaigns: 1247,
-          byStatus: { pending: 234, engaged: 456, converted: 312, failed: 145, skipped: 100 },
-          byType: {
-            dormant_30: { total: 523, converted: 89, conversionRate: 17.0 },
-            dormant_60: { total: 345, converted: 45, conversionRate: 13.0 },
-            dormant_90: { total: 234, converted: 23, conversionRate: 9.8 },
-            churn_risk: { total: 89, converted: 34, conversionRate: 38.2 },
-            win_back: { total: 56, converted: 12, conversionRate: 21.4 },
-          },
-          averageConversionTime: 48,
-          totalRevenue: 456789,
-          roi: 3.5,
-          campaignsTrend: [
-            { date: 'Jan', sent: 180, converted: 28 },
-            { date: 'Feb', sent: 195, converted: 32 },
-            { date: 'Mar', sent: 210, converted: 38 },
-            { date: 'Apr', sent: 225, converted: 42 },
-            { date: 'May', sent: 198, converted: 35 },
-            { date: 'Jun', sent: 239, converted: 45 },
-          ],
-          channelPerformance: [
-            { channel: 'Email', sent: 1247, opened: 623, clicked: 187, rate: 50 },
-            { channel: 'Push', sent: 1105, opened: 442, clicked: 89, rate: 40 },
-            { channel: 'SMS', sent: 523, opened: 0, clicked: 45, rate: 8.6 },
-          ],
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching win-back data:', err);
-      setError('Failed to load win-back campaign data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

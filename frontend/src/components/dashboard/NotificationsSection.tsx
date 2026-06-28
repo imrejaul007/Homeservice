@@ -22,6 +22,7 @@ import {
   ArrowRight,
   AlertCircle
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { notificationApi, type Notification } from '../../services/notificationApi';
 import { cn } from '../../lib/utils';
 import { FadeSection } from '../ui/FadeSection';
@@ -354,7 +355,7 @@ const NotificationsSection: React.FC<NotificationsSectionProps> = ({
         setNotifications(mappedNotifications);
         setUnreadCount(response.data.unreadCount || 0);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching notifications:', err);
       setError(err.response?.data?.message || 'Failed to load notifications');
     } finally {
@@ -398,6 +399,7 @@ const NotificationsSection: React.FC<NotificationsSectionProps> = ({
       setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (err) {
       console.error('Failed to mark as read:', err);
+      toast.error('Failed to mark as read');
       throw err;
     }
   }, []);

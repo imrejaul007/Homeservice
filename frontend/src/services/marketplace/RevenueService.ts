@@ -307,12 +307,12 @@ export const useRevenueStore = create<RevenueState>()(
         }
 
         // Update with actual balance from backend
-        set({
+        set((s) => ({
           wallet: {
-            ...state.wallet,
+            ...s.wallet,
             balance: response.data.newBalance,
           },
-        });
+        }));
 
         // Clean up pending update on success
         pendingOptimisticUpdates.delete(updateId);
@@ -325,13 +325,13 @@ export const useRevenueStore = create<RevenueState>()(
         // Rollback on failure
         const errorMessage = error instanceof Error ? error.message : 'Failed to deduct credits';
 
-        set({
+        set((s) => ({
           wallet: {
-            ...state.wallet,
+            ...s.wallet,
             balance: previousBalance,
           },
           walletError: errorMessage,
-        });
+        }));
 
         pendingOptimisticUpdates.delete(updateId);
 
@@ -523,15 +523,18 @@ export function useWallet(context: WalletContext = 'customer') {
   const walletContext = useRevenueStore((state) => state.walletContext);
   const loading = useRevenueStore((state) => state.walletLoading);
 
-  // Auto-fetch on first access if never fetched - use useEffect to prevent infinite loops
+  // Auto-fetch on first access if never fetched - use useRef to prevent stale closure
+  const fetchWalletRef = React.useRef(fetchWallet);
+  fetchWalletRef.current = fetchWallet;
+
   React.useEffect(() => {
     if (walletContext !== context) {
       setWalletContext(context);
     }
     if ((!lastFetch || walletContext !== context) && !loading) {
-      fetchWallet({ context });
+      fetchWalletRef.current({ context });
     }
-  }, [lastFetch, loading, fetchWallet, context, walletContext, setWalletContext]);
+  }, [lastFetch, loading, context, walletContext, setWalletContext]);
 
   return { ...wallet, monthlyEarnings };
 }

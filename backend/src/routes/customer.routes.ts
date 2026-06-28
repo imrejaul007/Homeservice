@@ -122,4 +122,9 @@ router.get('/analytics',
   customerAnalyticsController.getCustomerAnalytics
 );
 
+router.get('/health-score',
+  authMiddleware.authenticate,
+  customerAnalyticsController.getCustomerHealthScore
+);
+
 export default router;

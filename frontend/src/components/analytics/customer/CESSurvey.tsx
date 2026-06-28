@@ -10,8 +10,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { ThumbsUp, ThumbsDown, Loader, Send, Clock } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Loader, Send, Clock, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface CESSurveyProps {
   customerId?: string;
@@ -40,28 +41,57 @@ interface CESStats {
   responseRate: number;
 }
 
-const MOCK_TREND_DATA: CESData[] = [
-  { date: 'Jan', score: 5.2, responses: 45 },
-  { date: 'Feb', score: 5.4, responses: 52 },
-  { date: 'Mar', score: 5.3, responses: 48 },
-  { date: 'Apr', score: 5.6, responses: 61 },
-  { date: 'May', score: 5.8, responses: 58 },
-  { date: 'Jun', score: 6.0, responses: 72 },
-];
-
-const MOCK_STATS: CESStats = {
-  currentScore: 6.0,
+const EMPTY_STATS: CESStats = {
+  currentScore: 0,
   benchmark: 5.5,
-  change: 0.4,
-  changePercent: 7.1,
-  trend: 'up',
-  totalResponses: 336,
-  veryEasy: 156,
-  easy: 112,
-  neutral: 48,
-  difficult: 14,
-  veryDifficult: 6,
-  responseRate: 72,
+  change: 0,
+  changePercent: 0,
+  trend: 'stable',
+  totalResponses: 0,
+  veryEasy: 0,
+  easy: 0,
+  neutral: 0,
+  difficult: 0,
+  veryDifficult: 0,
+  responseRate: 0,
+};
+
+const buildTrendData = (scores: Array<{ score: number; date: string }>): CESData[] => {
+  const buckets = new Map<string, { total: number; count: number }>();
+
+  scores.forEach((entry) => {
+    const date = new Date(entry.date);
+    const label = date.toLocaleDateString('en-US', { month: 'short' });
+    const current = buckets.get(label) || { total: 0, count: 0 };
+    current.total += entry.score;
+    current.count += 1;
+    buckets.set(label, current);
+  });
+
+  return Array.from(buckets.entries()).map(([date, bucket]) => ({
+    date,
+    score: bucket.count > 0 ? bucket.total / bucket.count : 0,
+    responses: bucket.count,
+  }));
+};
+
+const mapCESHistoryToStats = (data: Awaited<ReturnType<typeof analyticsApi.getCustomerCESHistory>>): CESStats => {
+  const totalResponses = Object.values(data.distribution).reduce((sum, count) => sum + count, 0);
+
+  return {
+    currentScore: data.averageScore,
+    benchmark: data.benchmark,
+    change: data.trend,
+    changePercent: data.benchmark > 0 ? (data.trend / data.benchmark) * 100 : 0,
+    trend: data.trend > 0 ? 'up' : data.trend < 0 ? 'down' : 'stable',
+    totalResponses,
+    veryEasy: data.distribution.veryEasy,
+    easy: data.distribution.easy,
+    neutral: data.distribution.neutral,
+    difficult: data.distribution.difficult,
+    veryDifficult: data.distribution.veryDifficult,
+    responseRate: Math.round(data.responseRate * 100),
+  };
 };
 
 const SCORE_LABELS: Record<number, { label: string; color: string; bgColor: string }> = {
@@ -80,21 +110,34 @@ export const CESSurvey: React.FC<CESSurveyProps> = ({
   autoShow = false,
 }) => {
   const [loading, setLoading] = useState(true);
-  const [trendData, setTrendData] = useState<CESData[]>(MOCK_TREND_DATA);
-  const [stats, setStats] = useState<CESStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [trendData, setTrendData] = useState<CESData[]>([]);
+  const [stats, setStats] = useState<CESStats>(EMPTY_STATS);
   const [currentScore, setCurrentScore] = useState<number | null>(null);
   const [feedback, setFeedback] = useState('');
   const [showSurvey, setShowSurvey] = useState(autoShow);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 600));
+  const loadCESHistory = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await analyticsApi.getCustomerCESHistory(customerId);
+      setTrendData(buildTrendData(data.scores || []));
+      setStats(mapCESHistoryToStats(data));
+    } catch (err) {
+      setTrendData([]);
+      setStats(EMPTY_STATS);
+      setError(err instanceof Error ? err.message : 'Failed to load CES history');
+    } finally {
       setLoading(false);
-    };
-    fetchData();
+    }
+  };
+
+  useEffect(() => {
+    loadCESHistory();
   }, [customerId]);
 
   const handleScoreSelect = (score: number) => {
@@ -105,42 +148,22 @@ export const CESSurvey: React.FC<CESSurveyProps> = ({
     if (currentScore === null) return;
 
     setIsSubmitting(true);
+    setError(null);
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      await analyticsApi.submitCustomerCES({
+        score: currentScore,
+        feedback: feedback || undefined,
+      });
 
-    onSubmit?.(currentScore, feedback);
-    setIsSubmitting(false);
-    setIsSubmitted(true);
-
-    // Update local stats
-    const newResponses = stats.totalResponses + 1;
-    let newVeryEasy = stats.veryEasy;
-    let newEasy = stats.easy;
-    let newNeutral = stats.neutral;
-    let newDifficult = stats.difficult;
-    let newVeryDifficult = stats.veryDifficult;
-
-    if (currentScore === 7) newVeryEasy++;
-    else if (currentScore === 6) newEasy++;
-    else if (currentScore === 4) newNeutral++;
-    else if (currentScore === 2) newDifficult++;
-    else if (currentScore === 1) newVeryDifficult++;
-
-    // Recalculate score
-    const newTotal = newVeryEasy * 7 + newEasy * 6 + newNeutral * 4 + newDifficult * 2 + newVeryDifficult * 1;
-    const newScore = newTotal / newResponses;
-
-    setStats({
-      ...stats,
-      currentScore: newScore,
-      totalResponses: newResponses,
-      veryEasy: newVeryEasy,
-      easy: newEasy,
-      neutral: newNeutral,
-      difficult: newDifficult,
-      veryDifficult: newVeryDifficult,
-    });
+      onSubmit?.(currentScore, feedback);
+      setIsSubmitted(true);
+      await loadCESHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit CES score');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const renderScoreButton = (score: number) => {
@@ -230,6 +253,19 @@ export const CESSurvey: React.FC<CESSurveyProps> = ({
         </div>
       </div>
 
+      {error && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="py-10 flex items-center justify-center">
+          <Loader className="h-8 w-8 text-purple-600 animate-spin" />
+        </div>
+      ) : (
+        <>
       {/* Survey Section */}
       <AnimatePresence mode="wait">
         {!showSurvey && !isSubmitted ? (
@@ -451,6 +487,8 @@ export const CESSurvey: React.FC<CESSurveyProps> = ({
           </span>
         </div>
       </div>
+        </>
+      )}
     </motion.div>
   );
 };

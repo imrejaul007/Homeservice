@@ -335,9 +335,11 @@ export const readinessProbe = async (req: Request, res: Response) => {
     const isDbReady = mongoose.connection.readyState === 1;
 
     // Check if critical services are available (use actual circuit names from CIRCUIT_NAMES)
+    // A circuit is healthy if it's CLOSED (working normally) or HALF_OPEN (recovering)
+    // Unhealthy if OPEN (failing)
     const criticalHealthy = health.circuitBreakers
       .filter(cb => [CIRCUIT_NAMES.PAYMENT, CIRCUIT_NAMES.NOTIFICATION, CIRCUIT_NAMES.SMS].includes(cb.name as any))
-      .every(cb => cb.state !== CircuitState.CLOSED || cb.totalRequests > 0);
+      .every(cb => cb.state === CircuitState.CLOSED || cb.state === CircuitState.HALF_OPEN);
 
     // Check if system is ready: both DB and critical circuits must be healthy
     const isReady = isDbReady && criticalHealthy;
@@ -377,8 +379,8 @@ export const readinessProbe = async (req: Request, res: Response) => {
 /**
  * Get dead letter queue status
  */
-export const getDLQStatus = () => {
-  const stats = getDeadLetterStats();
+export const getDLQStatus = async () => {
+  const stats = await getDeadLetterStats();
 
   return {
     totalQueues: 1,
@@ -393,8 +395,8 @@ export const getDLQStatus = () => {
 /**
  * DLQ status endpoint handler
  */
-export const dlqStatusHandler = (req: Request, res: Response) => {
-  const status = getDLQStatus();
+export const dlqStatusHandler = async (req: Request, res: Response) => {
+  const status = await getDLQStatus();
 
   res.status(200).json({
     success: true,

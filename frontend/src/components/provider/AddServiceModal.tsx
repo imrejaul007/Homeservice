@@ -19,40 +19,13 @@ import { useCategories } from '../../hooks/useCategories';
 import { useToastActions } from '../common/Toast';
 import { parseApiValidationError } from '../../utils/apiError';
 import type { Subcategory } from '../../types/category';
+import type { DurationVariant, AddOn, ServiceFormData } from '../../types/service';
+import { ImageUpload } from '../common/ImageUpload';
 
 interface AddServiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onServiceAdded: () => void;
-}
-
-interface DurationVariant {
-  duration: number;
-  price: number;
-  label: string;
-}
-
-interface AddOn {
-  name: string;
-  price: number;
-  description?: string;
-}
-
-interface ServiceFormData {
-  name: string;
-  category: string;
-  subcategory: string;
-  description: string;
-  shortDescription: string;
-  duration: number;
-  price: {
-    amount: number;
-    currency: string;
-    type: 'fixed' | 'hourly' | 'custom';
-  };
-  tags: string[];
-  durationOptions: DurationVariant[];
-  addOns: AddOn[];
 }
 
 export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClose, onServiceAdded }) => {
@@ -76,7 +49,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
     },
     tags: [],
     durationOptions: [],
-    addOns: []
+    addOns: [],
+    images: []
   });
 
   // UI state for collapsible sections
@@ -92,6 +66,16 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   // Validation error states for better UX feedback
   const [variantError, setVariantError] = useState<string | null>(null);
   const [addOnError, setAddOnError] = useState<string | null>(null);
+
+  // Max limits for items
+  const MAX_TAGS = 10;
+  const MAX_DURATION_VARIANTS = 10;
+  const MAX_ADD_ONS = 10;
+  const DRAFT_KEY = 'draft-service-new';
+
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showDraftPrompt, setShowDraftPrompt] = useState(false);
 
   // Fetch categories from API (single source of truth)
   const { categories, isLoading: categoriesLoading, error: categoriesError, refetch: refetchCategories } = useCategories();
@@ -114,6 +98,27 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   // Focus trap ref
   const modalRef = useRef<HTMLDivElement>(null);
   const firstFocusableRef = useRef<HTMLButtonElement>(null);
+
+  // Focus trap for keyboard accessibility
+  const handleTabKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Tab') {
+      const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable || focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }, []);
 
   // Scroll lock and focus trap
   useEffect(() => {
@@ -145,6 +150,56 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
+  // Restore draft when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const saved = localStorage.getItem(DRAFT_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { formData?: ServiceFormData };
+      if (parsed.formData?.name?.trim()) {
+        setShowDraftPrompt(true);
+      }
+    } catch {
+      localStorage.removeItem(DRAFT_KEY);
+    }
+  }, [isOpen]);
+
+  // Debounced auto-save
+  useEffect(() => {
+    if (!isOpen || !hasUnsavedChanges) return;
+    const timer = setTimeout(() => {
+      localStorage.setItem(
+        DRAFT_KEY,
+        JSON.stringify({ formData, savedAt: new Date().toISOString() }),
+      );
+      setLastSaved(new Date());
+      setHasUnsavedChanges(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [formData, hasUnsavedChanges, isOpen]);
+
+  const restoreDraft = () => {
+    try {
+      const saved = localStorage.getItem(DRAFT_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { formData?: ServiceFormData };
+      if (parsed.formData) {
+        setFormData(parsed.formData);
+        setHasUnsavedChanges(false);
+      }
+    } catch {
+      localStorage.removeItem(DRAFT_KEY);
+    } finally {
+      setShowDraftPrompt(false);
+    }
+  };
+
+  const dismissDraft = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    setShowDraftPrompt(false);
+  };
+
   if (!isOpen) return null;
 
   const validateForm = (): boolean => {
@@ -165,7 +220,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleInputChange = (field: string, value: any) => {
+  const handleInputChange = (field: string, value: string | number | string[] | DurationVariant[] | AddOn[]) => {
     setFormData(prev => {
       const keys = field.split('.');
       if (keys.length === 1) {
@@ -200,6 +255,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
       }
       return prev;
     });
+    setHasUnsavedChanges(true);
 
     // Clear error when user starts typing
     if (errors[field]) {
@@ -214,6 +270,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
       category: value,
       subcategory: '' // Clear subcategory when category changes
     }));
+    setHasUnsavedChanges(true);
     if (errors.category) {
       setErrors(prev => ({ ...prev, category: '' }));
     }
@@ -222,8 +279,12 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   const addTag = () => {
     const normalizedTag = currentTag.trim().toLowerCase();
     if (!normalizedTag) return;
+    if (formData.tags.length >= MAX_TAGS) {
+      toast.warning('Tag limit reached', `Maximum ${MAX_TAGS} tags allowed`);
+      return;
+    }
     if (formData.tags.some(tag => tag.toLowerCase() === normalizedTag)) {
-      toast.error('Duplicate tag', 'This tag has already been added');
+      toast.error('Duplicate tag', { description: 'This tag has already been added' });
       return;
     }
     handleInputChange('tags', [...formData.tags, normalizedTag]);
@@ -237,6 +298,10 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   // Duration Variants Management
   const addDurationVariant = () => {
     setVariantError(null);
+    if (formData.durationOptions.length >= MAX_DURATION_VARIANTS) {
+      setVariantError(`Maximum ${MAX_DURATION_VARIANTS} variants allowed`);
+      return;
+    }
     if (!newVariant.label.trim()) {
       setVariantError('Label is required');
       return;
@@ -266,6 +331,10 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   // Add-Ons Management
   const addAddOn = () => {
     setAddOnError(null);
+    if (formData.addOns.length >= MAX_ADD_ONS) {
+      setAddOnError(`Maximum ${MAX_ADD_ONS} add-ons allowed`);
+      return;
+    }
     if (!newAddOn.name.trim()) {
       setAddOnError('Add-on name is required');
       return;
@@ -308,11 +377,15 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
         tags: formData.tags,
         durationOptions: formData.durationOptions.length > 0 ? formData.durationOptions : undefined,
         addOns: formData.addOns.length > 0 ? formData.addOns : undefined,
+        images: formData.images, // Include existing images (uploaded before service creation)
       };
 
-      const data = await authService.post<{success: boolean}>('/provider/services', serviceData);
+      const data = await authService.post<{success: boolean, data?: {service?: {_id: string}}}>('/provider/services', serviceData);
 
       if (data.success) {
+        localStorage.removeItem(DRAFT_KEY);
+        setHasUnsavedChanges(false);
+        setLastSaved(null);
         toast.success(
           'Service created',
           'Submitted for review. You can activate it from the list or edit screen when ready.'
@@ -330,12 +403,17 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
           price: { amount: 0, currency: 'AED', type: 'fixed' },
           tags: [],
           durationOptions: [],
-          addOns: []
+          addOns: [],
+          images: []
         });
         setErrors({});
+        setVariantError(null);
+        setAddOnError(null);
+        setCurrentTag('');
+        setShowDurationVariants(false);
+        setShowAddOns(false);
       }
     } catch (error) {
-      console.error('Error creating service:', error);
       const { submit, fields } = parseApiValidationError(error);
       setErrors({ submit, ...fields });
       toast.error(
@@ -349,6 +427,9 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-service-modal-title"
       className="fixed inset-0 bg-nilin-charcoal/40 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -359,16 +440,17 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
       <div
         ref={modalRef}
         className="glass-nilin-strong rounded-nilin-lg max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-nilin-lg border border-nilin-border animate-modal-enter"
+        onKeyDown={handleTabKey}
       >
         <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral px-6 py-4 flex items-center justify-between relative overflow-hidden">
           {/* Animated shine effect */}
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
-          <h2 className="text-xl font-serif text-white relative z-10">Add New Service</h2>
+          <h2 id="add-service-modal-title" className="text-xl font-serif text-white relative z-10">Add New Service</h2>
           <button
             ref={firstFocusableRef}
             onClick={onClose}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 relative z-10"
-            aria-label="Close modal"
+            className="w-11 h-11 flex items-center justify-center rounded-nilin-lg hover:bg-white/10 transition-colors text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 relative z-10"
+            aria-label="Close add service modal"
           >
             <X className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -384,23 +466,43 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
 
         {(categoriesError || (!categoriesLoading && categoryOptions.length === 0)) && !errors.submit && (
           <div className="px-6 pt-4">
-            <div className="flex items-center p-4 rounded-xl bg-red-50 border border-red-200">
-              <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
+            <div className="flex items-center p-4 rounded-nilin-lg bg-nilin-coral/10 border border-nilin-coral/20">
+              <AlertCircle className="w-5 h-5 text-nilin-rose mr-3 flex-shrink-0" />
               <div className="flex-1">
-                <p className="text-sm text-red-600 font-medium">Unable to load categories</p>
-                <p className="text-xs text-red-500/80 mt-0.5">
+                <p className="text-sm text-nilin-rose font-medium">Unable to load categories</p>
+                <p className="text-xs text-nilin-rose/80 mt-0.5">
                   {categoriesError || 'No categories available. Please try again later.'}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => refetchCategories()}
-                className="ml-3 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                className="ml-3 px-3 py-1.5 text-sm font-medium text-nilin-coral hover:bg-nilin-coral/10 rounded-nilin-lg transition-colors"
               >
                 Retry
               </button>
             </div>
           </div>
+        )}
+
+        {showDraftPrompt && (
+          <div className="mx-6 mt-4 p-4 rounded-nilin-lg bg-nilin-coral/10 border border-nilin-coral/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-nilin-charcoal">You have an unsaved service draft. Restore it?</p>
+            <div className="flex gap-2">
+              <button type="button" onClick={restoreDraft} className="px-3 py-1.5 text-sm font-medium bg-nilin-coral text-white rounded-nilin-lg">
+                Restore draft
+              </button>
+              <button type="button" onClick={dismissDraft} className="px-3 py-1.5 text-sm font-medium text-nilin-warmGray hover:text-nilin-charcoal">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {lastSaved && (
+          <p className="px-6 pt-2 text-xs text-nilin-warmGray" aria-live="polite">
+            Draft saved {lastSaved.toLocaleTimeString()}
+          </p>
         )}
 
         <form onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[calc(90vh-120px)] overflow-y-auto animate-slide-up">
@@ -419,30 +521,36 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Service Name */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-name" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Service Name *
               </label>
               <input
                 type="text"
+                id="add-service-name"
                 maxLength={100}
                 value={formData.name}
                 onChange={(e) => handleInputChange('name', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
+                aria-invalid={!!errors.name}
+                aria-describedby={errors.name ? 'add-service-name-error' : undefined}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 focus:shadow-[0_0_0_3px_rgba(232,180,168,0.1)] outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
                 placeholder="e.g., Professional House Cleaning"
               />
-              {errors.name && <p className="mt-1.5 text-sm text-red-500">{errors.name}</p>}
+              {errors.name && <p id="add-service-name-error" role="alert" className="mt-1.5 text-sm text-red-500 animate-slide-down">{errors.name}</p>}
             </div>
 
             {/* Category Dropdown */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-category" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Category *
               </label>
               <select
+                id="add-service-category"
                 value={formData.category}
                 onChange={(e) => handleCategoryChange(e.target.value)}
                 disabled={categoriesLoading}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer dropdown-arrow"
+                aria-invalid={!!errors.category}
+                aria-describedby={errors.category ? 'add-service-category-error' : undefined}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 focus:shadow-[0_0_0_3px_rgba(232,180,168,0.1)] outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer dropdown-arrow"
               >
                 <option value="">{categoriesLoading ? 'Loading categories...' : 'Select a category'}</option>
                 {categoryOptions.map(category => (
@@ -451,19 +559,20 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                   </option>
                 ))}
               </select>
-              {errors.category && <p className="mt-1.5 text-sm text-red-500">{errors.category}</p>}
+              {errors.category && <p id="add-service-category-error" role="alert" className="mt-1.5 text-sm text-red-500 animate-slide-down">{errors.category}</p>}
             </div>
 
             {/* Subcategory Dropdown - Only show when category is selected */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-subcategory" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Subcategory
               </label>
               <select
+                id="add-service-subcategory"
                 value={formData.subcategory}
                 onChange={(e) => handleInputChange('subcategory', e.target.value)}
                 disabled={!formData.category || categoriesLoading}
-                className={`w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer ${formData.category ? 'dropdown-arrow' : ''}`}
+                className={`w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal disabled:opacity-50 disabled:cursor-not-allowed appearance-none cursor-pointer ${formData.category ? 'dropdown-arrow' : ''}`}
               >
                 <option value="">
                   {!formData.category ? 'Select a category first' : selectedCategory?.subcategories.length ? 'Select a subcategory (optional)' : 'No subcategories available'}
@@ -476,39 +585,43 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
 
             {/* Duration with Minutes Label */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-duration" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Duration *
               </label>
               <div className="relative">
                 <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray w-4 h-4" />
                 <input
                   type="number"
+                  id="add-service-duration"
                   min="15"
                   max="480"
                   step="15"
                   value={formData.duration}
                   onChange={(e) => handleInputChange('duration', parseInt(e.target.value) || 0)}
-                  className="w-full pl-12 pr-16 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
+                  aria-invalid={!!errors.duration}
+                  aria-describedby={errors.duration ? 'add-service-duration-error' : undefined}
+                  className="w-full pl-12 pr-16 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
                 />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-nilin-warmGray">
                   minutes
                 </span>
               </div>
-              {errors.duration && <p className="mt-1.5 text-sm text-red-500">{errors.duration}</p>}
+              {errors.duration && <p id="add-service-duration-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.duration}</p>}
             </div>
           </div>
 
           {/* Pricing */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Price Type */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-price-type" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Price Type *
               </label>
               <select
+                id="add-service-price-type"
                 value={formData.price.type}
                 onChange={(e) => handleInputChange('price.type', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
               >
                 <option value="fixed">Fixed Price</option>
                 <option value="hourly">Per Hour</option>
@@ -519,36 +632,40 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
             {/* Price Amount with AED Symbol */}
             {formData.price.type !== 'custom' && (
               <div>
-                <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                <label htmlFor="add-service-price-amount" className="block text-sm font-medium text-nilin-charcoal mb-2">
                   Price Amount *
                 </label>
                 <div className="relative">
                   <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray w-4 h-4" />
                   <input
                     type="number"
+                    id="add-service-price-amount"
                     min="1"
                     step="0.01"
                     value={formData.price.amount}
                     onChange={(e) => handleInputChange('price.amount', parseFloat(e.target.value) || 0)}
-                    className="w-full pl-12 pr-16 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
+                    aria-invalid={!!errors.price}
+                    aria-describedby={errors.price ? 'add-service-price-error' : undefined}
+                    className="w-full pl-12 pr-16 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal"
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-nilin-coral">
                     AED
                   </span>
                 </div>
-                {errors.price && <p className="mt-1.5 text-sm text-red-500">{errors.price}</p>}
+                {errors.price && <p id="add-service-price-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.price}</p>}
               </div>
             )}
 
             {/* Currency (only show when not custom or as placeholder) */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-price-currency" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Currency
               </label>
               <select
+                id="add-service-price-currency"
                 value={formData.price.currency}
                 onChange={(e) => handleInputChange('price.currency', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer dropdown-arrow"
               >
                 <option value="AED">AED (UAE Dirham)</option>
                 <option value="USD">USD ($)</option>
@@ -563,56 +680,62 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
           <div className="space-y-4">
             {/* Short Description */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-short-description" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Short Description *
               </label>
               <input
                 type="text"
+                id="add-service-short-description"
                 maxLength={150}
                 value={formData.shortDescription}
                 onChange={(e) => handleInputChange('shortDescription', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
+                aria-invalid={!!errors.shortDescription}
+                aria-describedby={errors.shortDescription ? 'add-service-short-description-error' : 'add-service-short-description-hint'}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
                 placeholder="Brief description for search results"
               />
-              <p className="mt-1.5 text-xs text-nilin-warmGray">{formData.shortDescription.length}/150 characters</p>
-              {errors.shortDescription && <p className="mt-1.5 text-sm text-red-500">{errors.shortDescription}</p>}
+              <p id="add-service-short-description-hint" className="mt-1.5 text-xs text-nilin-warmGray">{formData.shortDescription.length}/150 characters</p>
+              {errors.shortDescription && <p id="add-service-short-description-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.shortDescription}</p>}
             </div>
 
             {/* Detailed Description */}
             <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              <label htmlFor="add-service-description" className="block text-sm font-medium text-nilin-charcoal mb-2">
                 Detailed Description *
               </label>
               <textarea
+                id="add-service-description"
                 rows={4}
                 maxLength={1000}
                 value={formData.description}
                 onChange={(e) => handleInputChange('description', e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray resize-y min-h-[100px]"
+                aria-invalid={!!errors.description}
+                aria-describedby={errors.description ? 'add-service-description-error' : 'add-service-description-hint'}
+                className="w-full px-4 py-3 rounded-nilin-lg bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray resize-y min-h-[100px]"
                 placeholder="Describe your service in detail..."
               />
-              <p className={`mt-1.5 text-xs ${formData.description.length > 900 ? 'text-red-500' : 'text-nilin-warmGray'}`}>{formData.description.length}/1000 characters (minimum 50)</p>
-              {errors.description && <p className="mt-1.5 text-sm text-red-500">{errors.description}</p>}
+              <p id="add-service-description-hint" className={`mt-1.5 text-xs ${formData.description.length > 900 ? 'text-red-500' : 'text-nilin-warmGray'}`}>{formData.description.length}/1000 characters (minimum 50)</p>
+              {errors.description && <p id="add-service-description-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.description}</p>}
             </div>
           </div>
 
           {/* Tags */}
           <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+            <label htmlFor="add-service-tags" className="block text-sm font-medium text-nilin-charcoal mb-2">
               Tags * <span className="text-nilin-warmGray font-normal">(help customers find your service)</span>
             </label>
             <div className="flex flex-wrap gap-2 mb-3 min-h-[32px]">
               {formData.tags.map((tag, index) => (
                 <span
                   key={index}
-                  className="inline-flex items-center px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20"
+                  className="inline-flex items-center px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20 animate-tag-appear"
                 >
                   <TagIcon className="w-3 h-3 mr-1" />
                   {tag}
                   <button
                     type="button"
                     onClick={() => removeTag(tag)}
-                    className="ml-2 p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                    className="ml-2 w-5 h-5 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 hover:scale-110 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
                     aria-label={`Remove tag ${tag}`}
                   >
                     <X className="w-3 h-3" aria-hidden="true" />
@@ -623,9 +746,12 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
             <div className="flex">
               <input
                 type="text"
+                id="add-service-tags"
                 value={currentTag}
                 onChange={(e) => setCurrentTag(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+                aria-invalid={!!errors.tags}
+                aria-describedby={errors.tags ? 'add-service-tags-error' : undefined}
                 className="flex-1 px-4 py-3 rounded-l-xl bg-white/60 border border-nilin-border border-r-0 focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal placeholder:text-nilin-lightGray"
                 placeholder="Add a tag and press Enter"
               />
@@ -638,7 +764,20 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                 <Plus className="w-5 h-5" aria-hidden="true" />
               </button>
             </div>
-            {errors.tags && <p className="mt-1.5 text-sm text-red-500">{errors.tags}</p>}
+            {errors.tags && <p id="add-service-tags-error" role="alert" className="mt-1.5 text-sm text-red-500">{errors.tags}</p>}
+          </div>
+
+          {/* Service Images */}
+          <div className="border-t border-nilin-border pt-6">
+            <ImageUpload
+              images={formData.images}
+              onImagesChange={(images) => handleInputChange('images', images)}
+              maxImages={5}
+              disabled={isLoading}
+              uploadEndpoint="/provider/services/upload-images"
+              label="Service Images"
+              helpText="Add up to 5 images to showcase your service"
+            />
           </div>
 
           {/* Duration Variants */}
@@ -646,6 +785,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
             <button
               type="button"
               onClick={() => setShowDurationVariants(!showDurationVariants)}
+              aria-expanded={showDurationVariants}
+              aria-controls="duration-variants-content"
               className="w-full flex items-center justify-between text-left"
             >
               <div className="flex items-center gap-2">
@@ -667,7 +808,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
             </button>
 
             {showDurationVariants && (
-              <div className="mt-4 space-y-4">
+              <div id="duration-variants-content" className="mt-4 space-y-4">
                 <p className="text-xs text-nilin-warmGray">
                   Offer multiple service options with different durations and prices (e.g., Express, Standard, Premium).
                 </p>
@@ -676,14 +817,14 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                 {formData.durationOptions.length > 0 && (
                   <div className="space-y-2">
                     {formData.durationOptions.map((variant, index) => (
-                      <div key={index} className="flex items-center gap-3 p-3 bg-nilin-muted/30 rounded-xl">
+                      <div key={index} className="flex items-center gap-3 p-3 bg-nilin-muted/30 rounded-nilin-lg">
                         <div className="flex-1 grid grid-cols-3 gap-2">
                           <input
                             type="text"
                             value={variant.label}
                             onChange={(e) => updateDurationVariant(index, 'label', e.target.value)}
                             placeholder="Label (e.g., Express)"
-                            className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            className="px-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                           />
                           <div className="relative">
                             <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -694,7 +835,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                               min="15"
                               max="480"
                               placeholder="Minutes"
-                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                              className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                             />
                           </div>
                           <div className="relative">
@@ -706,14 +847,14 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                               min="0"
                               step="0.01"
                               placeholder="Price"
-                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                              className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                             />
                           </div>
                         </div>
                         <button
                           type="button"
                           onClick={() => removeDurationVariant(index)}
-                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                          className="p-2 text-nilin-rose hover:bg-nilin-rose/10 rounded-nilin-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose"
                           aria-label={`Remove ${variant.label || 'variant'}`}
                         >
                           <Trash2 className="w-4 h-4" aria-hidden="true" />
@@ -731,7 +872,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                       value={newVariant.label}
                       onChange={(e) => setNewVariant({ ...newVariant, label: e.target.value })}
                       placeholder="Label (e.g., Premium)"
-                      className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      className="px-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                     />
                     <div className="relative">
                       <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -742,7 +883,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                         min="15"
                         max="480"
                         placeholder="Minutes"
-                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                        className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                       />
                     </div>
                     <div className="relative">
@@ -754,7 +895,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                         min="0"
                         step="0.01"
                         placeholder="Price"
-                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                        className="w-full pl-10 pr-3 py-2 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
                       />
                     </div>
                   </div>
@@ -762,7 +903,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                     type="button"
                     onClick={addDurationVariant}
                     disabled={!newVariant.label.trim()}
-                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-nilin-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
                     aria-label="Add duration variant"
                   >
                     <Plus className="w-4 h-4" aria-hidden="true" />
@@ -785,6 +926,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
             <button
               type="button"
               onClick={() => setShowAddOns(!showAddOns)}
+              aria-expanded={showAddOns}
+              aria-controls="addons-content"
               className="w-full flex items-center justify-between text-left"
             >
               <div className="flex items-center gap-2">
@@ -806,7 +949,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
             </button>
 
             {showAddOns && (
-              <div className="mt-4 space-y-4">
+              <div id="addons-content" className="mt-4 space-y-4">
                 <p className="text-xs text-nilin-warmGray">
                   Offer optional extras that customers can add to their booking (e.g., Extra cleaning supplies, Express delivery).
                 </p>
@@ -815,14 +958,14 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                 {formData.addOns.length > 0 && (
                   <div className="space-y-2">
                     {formData.addOns.map((addon, index) => (
-                      <div key={index} className="flex items-start gap-3 p-4 bg-nilin-muted/30 rounded-xl border border-nilin-border/50">
+                      <div key={index} className="flex items-start gap-3 p-4 bg-nilin-muted/30 rounded-nilin-lg border border-nilin-border/50">
                         <div className="flex-1 grid grid-cols-3 gap-3">
                           <input
                             type="text"
                             value={addon.name}
                             onChange={(e) => updateAddOn(index, 'name', e.target.value)}
                             placeholder="Add-on name"
-                            className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                            className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                           />
                           <div className="relative">
                             <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -833,7 +976,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                               min="0"
                               step="0.01"
                               placeholder="Price"
-                              className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                              className="w-full pl-10 pr-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                             />
                           </div>
                           <input
@@ -841,13 +984,13 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                             value={addon.description || ''}
                             onChange={(e) => updateAddOn(index, 'description', e.target.value)}
                             placeholder="Description (optional)"
-                            className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                            className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                           />
                         </div>
                         <button
                           type="button"
                           onClick={() => removeAddOn(index)}
-                          className="p-2.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                          className="p-2.5 text-nilin-rose hover:bg-nilin-rose/10 rounded-nilin-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose"
                           aria-label={`Remove ${addon.name || 'add-on'}`}
                         >
                           <Trash2 className="w-4 h-4" aria-hidden="true" />
@@ -868,7 +1011,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                         setAddOnError(null);
                       }}
                       placeholder="Add-on name"
-                      className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                      className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                     />
                     <div className="relative">
                       <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
@@ -882,7 +1025,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                         min="0"
                         step="0.01"
                         placeholder="Price"
-                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                        className="w-full pl-10 pr-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                       />
                     </div>
                     <input
@@ -890,14 +1033,14 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                       value={newAddOn.description}
                       onChange={(e) => setNewAddOn({ ...newAddOn, description: e.target.value })}
                       placeholder="Description (optional)"
-                      className="px-3 py-2.5 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
+                      className="px-3 py-2.5 rounded-nilin-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-sm"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={addAddOn}
                     disabled={!newAddOn.name.trim()}
-                    className="px-4 py-2.5 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                    className="px-4 py-2.5 bg-nilin-coral/10 text-nilin-coral rounded-nilin-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
                     aria-label="Add add-on"
                   >
                     <Plus className="w-4 h-4" aria-hidden="true" />
@@ -906,7 +1049,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
                 </div>
                 {/* Validation error for add-ons */}
                 {addOnError && (
-                  <p className="mt-2 text-sm text-red-500 flex items-center gap-1">
+                  <p id="add-service-addon-error" role="alert" className="mt-2 text-sm text-red-500 flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     {addOnError}
                   </p>
@@ -917,25 +1060,30 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
 
           {/* Error Messages */}
           {errors.submit && (
-            <div className="flex items-center p-4 rounded-xl bg-red-50 border border-red-200">
-              <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
-              <p className="text-sm text-red-600">{errors.submit}</p>
+            <div role="alert" className="flex items-center p-4 rounded-nilin-lg bg-nilin-coral/10 border border-nilin-coral/20">
+              <AlertCircle className="w-5 h-5 text-nilin-rose mr-3 flex-shrink-0" />
+              <p className="text-sm text-nilin-rose">{errors.submit}</p>
             </div>
           )}
+
+          {/* Screen reader announcements */}
+          <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+            {isLoading && 'Submitting service...'}
+          </div>
 
           {/* Footer */}
           <div className="flex justify-end gap-4 pt-4 border-t border-nilin-border">
             <button
               type="button"
               onClick={onClose}
-              className="px-6 py-3 rounded-xl border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
+              className="px-6 py-3 rounded-nilin-lg border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isLoading || categoriesLoading}
-              className="px-8 py-3 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium shadow-lg shadow-nilin-rose/20 hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="px-8 py-3 rounded-nilin-lg bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium shadow-lg shadow-nilin-rose/20 hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {isLoading ? (
                 <>

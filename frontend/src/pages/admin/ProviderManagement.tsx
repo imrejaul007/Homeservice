@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import { ExportDropdown } from '../../components/admin/ExportDropdown';
 import {
   ProviderListPanel,
   ProviderKpiStrip,
@@ -34,7 +35,6 @@ import {
   Calendar,
   Check,
   X,
-  Download,
   CheckSquare,
   Square,
   Clock3,
@@ -49,7 +49,22 @@ import {
   UserCheck,
   ChevronDown,
   Loader2,
+  MessageSquare,
+  Send,
+  DollarSign,
+  BarChart3,
+  Package,
+  Users,
+  Eye,
+  UserX,
 } from 'lucide-react';
+import {
+  BulkActionToolbar,
+  type BulkAction,
+} from '../../components/admin/BulkActionToolbar';
+import { withRetry } from '../../lib/errorHandler';
+import { ActivityTimeline } from '../../components/admin/ActivityTimeline';
+import type { Activity, ActivityType } from '../../types/activity';
 import providerOpsApi from '../../services/providerOpsApi';
 import type {
   ProviderWithUser,
@@ -58,6 +73,9 @@ import type {
   ProviderMetrics,
   FraudFlag,
   SLAMetrics,
+  ProviderService,
+  ProviderBooking,
+  EarningsBreakdown,
 } from '../../services/providerOpsApi';
 
 // ============================================
@@ -207,12 +225,23 @@ const ProviderDetail: React.FC<{
   onReject: (provider: any, reason: string, notes: string) => void;
   onSuspend: (provider: ProviderWithUser, reason: string) => void;
   detailLoading?: boolean;
+  lastUpdated?: Date | null;
   fraudRiskLevel?: string;
   lastFraudReport?: { riskScore: number; riskLevel: string; activityCount: number } | null;
   onResolveFraudFlag: (provider: ProviderWithUser, flagId: string, resolution: string) => void;
   onReactivate: (provider: any) => void;
   onVerifyDocument: (provider: ProviderWithUser, docId: string, verified: boolean, notes?: string) => void;
   onRunFraudCheck: (provider: ProviderWithUser) => void;
+  onSendMessage?: (providerId: string, message: string, subject?: string) => Promise<void>;
+  services?: ProviderService[];
+  bookings?: ProviderBooking[];
+  earnings?: EarningsBreakdown | null;
+  onLoadServices?: (providerId: string) => void;
+  onLoadBookings?: (providerId: string, filters?: any) => void;
+  onLoadEarnings?: (providerId: string) => void;
+  servicesLoading?: boolean;
+  bookingsLoading?: boolean;
+  earningsLoading?: boolean;
 }> = ({
   provider,
   verification,
@@ -220,6 +249,7 @@ const ProviderDetail: React.FC<{
   slaMetrics,
   fraudFlags,
   detailLoading = false,
+  lastUpdated,
   fraudRiskLevel,
   lastFraudReport,
   onClose,
@@ -229,18 +259,57 @@ const ProviderDetail: React.FC<{
   onReactivate,
   onVerifyDocument,
   onRunFraudCheck,
-  onResolveFraudFlag,
+  onSendMessage,
+  services,
+  bookings,
+  earnings,
+  onLoadServices,
+  onLoadBookings,
+  onLoadEarnings,
+  servicesLoading = false,
+  bookingsLoading = false,
+  earningsLoading = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'documents' | 'sla' | 'fraud'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'documents' | 'sla' | 'fraud' | 'services' | 'bookings' | 'earnings' | 'activity'>('overview');
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showSuspendModal, setShowSuspendModal] = useState(false);
   const [showRejectDocModal, setShowRejectDocModal] = useState(false);
+  const [showMessageModal, setShowMessageModal] = useState(false);
   const [rejectDocId, setRejectDocId] = useState<string | null>(null);
   const [suspendNotes, setSuspendNotes] = useState('');
   const [actionNotes, setActionNotes] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [resolveFlagId, setResolveFlagId] = useState<string | null>(null);
   const [resolveNotes, setResolveNotes] = useState('');
+  const [messageContent, setMessageContent] = useState('');
+  const [messageSubject, setMessageSubject] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [selectedService, setSelectedService] = useState<ProviderService | null>(null);
+  const [bookingStatusFilter, setBookingStatusFilter] = useState<string>('all');
+  const [bookingPage, setBookingPage] = useState(1);
+
+  // Get provider user ID helper
+  const getProviderUserId = (): string => {
+    const uid = provider.userId;
+    if (typeof uid === 'string') return uid;
+    return uid?._id ?? '';
+  };
+
+  // Load data when tabs change
+  useEffect(() => {
+    const providerId = getProviderUserId();
+    if (!providerId) return;
+
+    if (activeTab === 'services' && onLoadServices && !services?.length) {
+      onLoadServices(providerId);
+    }
+    if (activeTab === 'bookings' && onLoadBookings && !bookings?.length) {
+      onLoadBookings(providerId);
+    }
+    if (activeTab === 'earnings' && onLoadEarnings && !earnings) {
+      onLoadEarnings(providerId);
+    }
+  }, [activeTab, onLoadServices, onLoadBookings, onLoadEarnings, services?.length, bookings?.length, earnings, provider]);
 
   const accountStatus =
     typeof provider.userId === 'object' ? provider.userId?.accountStatus : undefined;
@@ -250,8 +319,12 @@ const ProviderDetail: React.FC<{
   const tabs = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
     { id: 'documents', label: 'Documents', icon: <FileText className="w-4 h-4" /> },
+    { id: 'services', label: 'Services', icon: <Package className="w-4 h-4" /> },
+    { id: 'bookings', label: 'Bookings', icon: <Calendar className="w-4 h-4" /> },
+    { id: 'earnings', label: 'Earnings', icon: <DollarSign className="w-4 h-4" /> },
     { id: 'sla', label: 'Performance', icon: <Activity className="w-4 h-4" /> },
     { id: 'fraud', label: 'Security', icon: <ShieldAlert className="w-4 h-4" />, badge: fraudFlags.length },
+    { id: 'activity', label: 'Activity', icon: <Activity className="w-4 h-4" /> },
   ];
 
   const documentTypes: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -344,22 +417,38 @@ const ProviderDetail: React.FC<{
                     <Calendar className="w-4 h-4" />
                     Joined {new Date(provider.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
                   </span>
+                  {lastUpdated && (
+                    <span className="text-gray-300">|</span>
+                  )}
+                  {lastUpdated && (
+                    <span className="text-xs text-gray-400">
+                      Updated {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
-            <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-all">
+            <button
+              onClick={onClose}
+              aria-label="Close provider details"
+              className="w-11 h-11 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+            >
               <X className="w-6 h-6" />
             </button>
           </div>
         </div>
 
         {/* Enhanced Tabs */}
-        <div className="flex bg-gray-50 border-b border-gray-200">
+        <div role="tablist" aria-label="Provider details tabs" className="flex bg-gray-50 border-b border-gray-200">
           {tabs.map((tab) => (
             <button
               key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              aria-controls={`provider-tab-${tab.id}`}
+              tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all relative ${
+              className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all relative focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                 activeTab === tab.id
                   ? 'border-nilin-coral text-nilin-coral bg-white'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
@@ -922,6 +1011,420 @@ const ProviderDetail: React.FC<{
               )}
             </div>
           )}
+
+          {activeTab === 'activity' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Activity History</h3>
+              </div>
+              <ActivityTimeline
+                activities={[]}
+                loading={false}
+                emptyMessage="No activity recorded for this provider"
+              />
+            </div>
+          )}
+
+          {activeTab === 'services' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Provider Services</h3>
+                <span className="text-sm text-gray-500">
+                  {services?.length || 0} services
+                </span>
+              </div>
+              {servicesLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-nilin-coral" />
+                </div>
+              ) : services && services.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {services.map((service) => (
+                    <div
+                      key={service._id}
+                      className="bg-gradient-to-br from-gray-50 to-white rounded-2xl p-5 border border-gray-100 hover:shadow-md transition-shadow cursor-pointer"
+                      onClick={() => setSelectedService(service)}
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+                            <Package className="w-6 h-6 text-nilin-coral" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-gray-900">{service.name}</p>
+                            <p className="text-xs text-gray-500">{service.category}</p>
+                          </div>
+                        </div>
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                          service.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
+                          service.status === 'draft' ? 'bg-gray-100 text-gray-700' :
+                          service.status === 'inactive' ? 'bg-amber-100 text-amber-700' :
+                          service.status === 'pending_review' ? 'bg-sky-100 text-sky-700' :
+                          'bg-red-100 text-red-700'
+                        }`}>
+                          {service.status.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-900 font-semibold">
+                          {service.price.currency} {service.price.amount.toFixed(2)}
+                        </span>
+                        <span className="text-gray-500">
+                          {service.duration} {service.durationUnit}
+                        </span>
+                        {service.rating && (
+                          <span className="flex items-center gap-1 text-amber-600">
+                            <Star className="w-4 h-4" />
+                            {service.rating.average.toFixed(1)} ({service.rating.count})
+                          </span>
+                        )}
+                      </div>
+                      {service.tags && service.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-3">
+                          {service.tags.slice(0, 3).map((tag, idx) => (
+                            <span key={idx} className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
+                              {tag}
+                            </span>
+                          ))}
+                          {service.tags.length > 3 && (
+                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
+                              +{service.tags.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12 bg-gray-50 rounded-2xl">
+                  <Package className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p className="text-gray-500">No services found for this provider</p>
+                </div>
+              )}
+
+              {/* Service Detail Modal */}
+              {selectedService && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[80vh] overflow-y-auto">
+                    <div className="p-6 border-b border-gray-100">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold text-gray-900">{selectedService.name}</h3>
+                        <button
+                          onClick={() => setSelectedService(null)}
+                          className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-gray-50 p-3 rounded-xl">
+                          <p className="text-xs text-gray-500">Category</p>
+                          <p className="font-medium text-gray-900">{selectedService.category}</p>
+                        </div>
+                        <div className="bg-gray-50 p-3 rounded-xl">
+                          <p className="text-xs text-gray-500">Status</p>
+                          <p className="font-medium capitalize">{selectedService.status.replace('_', ' ')}</p>
+                        </div>
+                        <div className="bg-gray-50 p-3 rounded-xl">
+                          <p className="text-xs text-gray-500">Price</p>
+                          <p className="font-medium text-gray-900">
+                            {selectedService.price.currency} {selectedService.price.amount.toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="bg-gray-50 p-3 rounded-xl">
+                          <p className="text-xs text-gray-500">Duration</p>
+                          <p className="font-medium text-gray-900">
+                            {selectedService.duration} {selectedService.durationUnit}
+                          </p>
+                        </div>
+                      </div>
+                      {selectedService.shortDescription && (
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Short Description</p>
+                          <p className="text-sm text-gray-700">{selectedService.shortDescription}</p>
+                        </div>
+                      )}
+                      {selectedService.description && (
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Full Description</p>
+                          <p className="text-sm text-gray-700">{selectedService.description}</p>
+                        </div>
+                      )}
+                      {selectedService.rating && (
+                        <div className="flex items-center gap-2">
+                          <Star className="w-5 h-5 text-amber-500" />
+                          <span className="font-medium">{selectedService.rating.average.toFixed(1)}</span>
+                          <span className="text-gray-500">({selectedService.rating.count} reviews)</span>
+                        </div>
+                      )}
+                      {selectedService.tags && selectedService.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedService.tags.map((tag, idx) => (
+                            <span key={idx} className="px-2.5 py-1 bg-gray-100 text-gray-700 rounded-full text-xs">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="text-xs text-gray-400">
+                        Created: {new Date(selectedService.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'bookings' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <h3 className="font-semibold text-gray-900">Booking History</h3>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={bookingStatusFilter}
+                    onChange={(e) => {
+                      setBookingStatusFilter(e.target.value);
+                      setBookingPage(1);
+                      if (onLoadBookings) {
+                        onLoadBookings(getProviderUserId(), {
+                          status: e.target.value === 'all' ? undefined : e.target.value,
+                          page: 1,
+                        });
+                      }
+                    }}
+                    className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral/25"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="pending">Pending</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                    <option value="cancelled">Cancelled</option>
+                    <option value="no_show">No Show</option>
+                  </select>
+                </div>
+              </div>
+              {bookingsLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-nilin-coral" />
+                </div>
+              ) : bookings && bookings.length > 0 ? (
+                <div className="space-y-3">
+                  {bookings.map((booking) => (
+                    <div
+                      key={booking._id}
+                      className="bg-gradient-to-br from-gray-50 to-white rounded-2xl p-4 border border-gray-100 hover:shadow-sm transition-shadow"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                            booking.status === 'completed' ? 'bg-emerald-100' :
+                            booking.status === 'cancelled' ? 'bg-red-100' :
+                            booking.status === 'no_show' ? 'bg-amber-100' :
+                            booking.status === 'in_progress' ? 'bg-sky-100' :
+                            'bg-gray-100'
+                          }`}>
+                            <Calendar className={`w-5 h-5 ${
+                              booking.status === 'completed' ? 'text-emerald-600' :
+                              booking.status === 'cancelled' ? 'text-red-600' :
+                              booking.status === 'no_show' ? 'text-amber-600' :
+                              booking.status === 'in_progress' ? 'text-sky-600' :
+                              'text-gray-600'
+                            }`} />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-gray-900">
+                              {typeof booking.serviceId === 'object' ? booking.serviceId.name : 'Service'}
+                            </p>
+                            <p className="text-sm text-gray-500">
+                              Customer: {typeof booking.customerId === 'object' ?
+                                `${booking.customerId.firstName} ${booking.customerId.lastName}` : 'Unknown'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                            booking.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                            booking.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                            booking.status === 'no_show' ? 'bg-amber-100 text-amber-700' :
+                            booking.status === 'in_progress' ? 'bg-sky-100 text-sky-700' :
+                            booking.status === 'confirmed' ? 'bg-blue-100 text-blue-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {booking.status.replace('_', ' ')}
+                          </span>
+                          <p className="text-sm font-semibold text-gray-900 mt-1">
+                            {booking.totalAmount.currency} {booking.totalAmount.amount.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {new Date(booking.scheduledDate).toLocaleDateString()}
+                        </span>
+                        <span>{booking.scheduledTime}</span>
+                        {booking.completedAt && (
+                          <span className="text-emerald-600">
+                            Completed: {new Date(booking.completedAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                      {booking.cancellationReason && (
+                        <div className="mt-2 p-2 bg-red-50 rounded-lg text-xs text-red-700">
+                          Reason: {booking.cancellationReason}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12 bg-gray-50 rounded-2xl">
+                  <Calendar className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p className="text-gray-500">No bookings found for this provider</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'earnings' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Earnings Overview</h3>
+              </div>
+              {earningsLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-nilin-coral" />
+                </div>
+              ) : earnings ? (
+                <div className="space-y-6">
+                  {/* Total Earnings Card */}
+                  <div className="bg-gradient-to-br from-nilin-coral/10 to-nilin-rose/10 rounded-2xl p-6 border border-nilin-coral/20">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500 font-medium">Total Earnings</p>
+                        <p className="text-4xl font-bold text-gray-900 mt-1">
+                          {earnings.currency} {earnings.totalEarnings.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {new Date(earnings.period.start).toLocaleDateString()} - {new Date(earnings.period.end).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center shadow-sm">
+                        <DollarSign className="w-8 h-8 text-nilin-coral" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Status Breakdown */}
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
+                      <p className="text-sm text-emerald-600 font-medium">Completed</p>
+                      <p className="text-2xl font-bold text-emerald-700 mt-1">
+                        {earnings.currency} {earnings.byStatus.completed.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
+                      <p className="text-sm text-amber-600 font-medium">Pending</p>
+                      <p className="text-2xl font-bold text-amber-700 mt-1">
+                        {earnings.currency} {earnings.byStatus.pending.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+                      <p className="text-sm text-blue-600 font-medium">Withdrawn</p>
+                      <p className="text-2xl font-bold text-blue-700 mt-1">
+                        {earnings.currency} {earnings.byStatus.withdrawn.toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Earnings by Service */}
+                  {earnings.byService && earnings.byService.length > 0 && (
+                    <div className="bg-gradient-to-br from-gray-50 to-white rounded-2xl p-6 border border-gray-100">
+                      <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <BarChart3 className="w-5 h-5 text-nilin-coral" />
+                        Earnings by Service
+                      </h4>
+                      <div className="space-y-3">
+                        {earnings.byService.map((service, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-3 bg-white rounded-xl border border-gray-100">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-nilin-coral/10 flex items-center justify-center">
+                                <Package className="w-4 h-4 text-nilin-coral" />
+                              </div>
+                              <div>
+                                <p className="font-medium text-gray-900">{service.serviceName}</p>
+                                <p className="text-xs text-gray-500">{service.bookingsCount} bookings</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-semibold text-gray-900">
+                                {earnings.currency} {service.amount.toFixed(2)}
+                              </p>
+                              <p className="text-xs text-gray-500">{service.percentage.toFixed(1)}%</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Platform Fees */}
+                  <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500 font-medium">Platform Fees</p>
+                        <p className="font-semibold text-gray-900 mt-1">
+                          {earnings.currency} {earnings.platformFees.total.toFixed(2)}
+                        </p>
+                      </div>
+                      <span className="px-3 py-1 bg-gray-200 text-gray-700 rounded-full text-sm">
+                        {earnings.platformFees.percentage}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Period Chart (simplified table) */}
+                  {earnings.byPeriod && earnings.byPeriod.length > 0 && (
+                    <div className="bg-gradient-to-br from-gray-50 to-white rounded-2xl p-6 border border-gray-100">
+                      <h4 className="font-semibold text-gray-900 mb-4">Earnings Over Time</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                              <th className="pb-2">Period</th>
+                              <th className="pb-2 text-right">Amount</th>
+                              <th className="pb-2 text-right">Bookings</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {earnings.byPeriod.map((period, idx) => (
+                              <tr key={idx} className="border-b border-gray-100 last:border-0">
+                                <td className="py-2 text-sm text-gray-700">{period.period}</td>
+                                <td className="py-2 text-sm text-right font-medium text-gray-900">
+                                  {earnings.currency} {period.amount.toFixed(2)}
+                                </td>
+                                <td className="py-2 text-sm text-right text-gray-500">{period.bookingsCount}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-12 bg-gray-50 rounded-2xl">
+                  <DollarSign className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p className="text-gray-500">No earnings data available</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Enhanced Actions */}
@@ -968,6 +1471,15 @@ const ProviderDetail: React.FC<{
                 Reactivate Provider
               </button>
             )}
+            {onSendMessage && (
+              <button
+                onClick={() => setShowMessageModal(true)}
+                className="px-5 py-2.5 bg-nilin-coral text-white text-sm font-medium rounded-xl hover:bg-nilin-rose flex items-center gap-2 transition-colors shadow-sm"
+              >
+                <MessageSquare className="w-5 h-5" />
+                Send Message
+              </button>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -977,6 +1489,97 @@ const ProviderDetail: React.FC<{
           </button>
         </div>
       </div>
+
+      {/* Message Modal */}
+      {showMessageModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+                    <MessageSquare className="w-6 h-6 text-nilin-coral" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">Send Message</h3>
+                    <p className="text-sm text-gray-500">To: {getProviderDisplayName(provider)}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMessageModal(false);
+                    setMessageContent('');
+                    setMessageSubject('');
+                  }}
+                  className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Subject (optional)</label>
+                <input
+                  type="text"
+                  value={messageSubject}
+                  onChange={(e) => setMessageSubject(e.target.value)}
+                  placeholder="Message subject..."
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-nilin-coral/25 focus:border-nilin-coral/40 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Message</label>
+                <textarea
+                  value={messageContent}
+                  onChange={(e) => setMessageContent(e.target.value)}
+                  rows={5}
+                  placeholder="Type your message to the provider..."
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-nilin-coral/25 focus:border-nilin-coral/40 transition-all resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 p-6 bg-gray-50 border-t border-gray-100">
+              <button
+                onClick={() => {
+                  setShowMessageModal(false);
+                  setMessageContent('');
+                  setMessageSubject('');
+                }}
+                className="flex-1 px-4 py-2.5 bg-white text-gray-700 text-sm font-medium rounded-xl border border-gray-300 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!messageContent.trim()) return;
+                  setSendingMessage(true);
+                  try {
+                    await onSendMessage(getProviderUserId(), messageContent, messageSubject);
+                    toast.success('Message sent successfully');
+                    setShowMessageModal(false);
+                    setMessageContent('');
+                    setMessageSubject('');
+                  } catch (error) {
+                    toast.error('Failed to send message');
+                  } finally {
+                    setSendingMessage(false);
+                  }
+                }}
+                disabled={!messageContent.trim() || sendingMessage}
+                className="flex-1 px-4 py-2.5 bg-nilin-coral text-white text-sm font-medium rounded-xl hover:bg-nilin-rose disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
+              >
+                {sendingMessage ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                Send Message
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Enhanced Reject Modal */}
       {showRejectModal && (
@@ -1011,14 +1614,20 @@ const ProviderDetail: React.FC<{
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Notes (optional)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Notes <span className="text-red-500">*</span></label>
                 <textarea
                   value={actionNotes}
                   onChange={(e) => setActionNotes(e.target.value)}
                   rows={3}
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="Additional notes for the provider..."
+                  placeholder="Provide detailed feedback (minimum 20 characters)..."
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  {actionNotes.length}/20 characters minimum required
+                  {actionNotes.length < 20 && actionNotes.length > 0 && (
+                    <span className="text-red-500 ml-1">({20 - actionNotes.length} more needed)</span>
+                  )}
+                </p>
               </div>
             </div>
             <div className="flex gap-3 p-6 bg-gray-50 border-t border-gray-100">
@@ -1033,7 +1642,7 @@ const ProviderDetail: React.FC<{
                   onReject(provider, rejectionReason, actionNotes);
                   setShowRejectModal(false);
                 }}
-                disabled={!rejectionReason}
+                disabled={!rejectionReason || actionNotes.trim().length < 20}
                 className="flex-1 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-xl hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 Reject Provider
@@ -1198,6 +1807,7 @@ const ProviderManagement: React.FC = () => {
     activityCount: number;
   } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailLastUpdated, setDetailLastUpdated] = useState<Date | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, pages: 0 });
 
@@ -1222,10 +1832,18 @@ const ProviderManagement: React.FC = () => {
     rejected: 0,
   });
 
+  // Provider detail data
+  const [providerServices, setProviderServices] = useState<ProviderService[]>([]);
+  const [providerBookings, setProviderBookings] = useState<ProviderBooking[]>([]);
+  const [providerEarnings, setProviderEarnings] = useState<EarningsBreakdown | null>(null);
+  const [servicesLoading, setServicesLoading] = useState(false);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [bookingPagination, setBookingPagination] = useState({ page: 1, limit: 20, total: 0, pages: 0 });
+
   // Bulk selection state
   const [selectedProviders, setSelectedProviders] = useState<Set<string>>(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
-  const [showBulkActions, setShowBulkActions] = useState(false);
   const [verificationFilter, setVerificationFilter] = useState<'all' | 'verified' | 'unverified' | 'pending'>('all');
 
   // Bulk action handlers
@@ -1247,86 +1865,122 @@ const ProviderManagement: React.FC = () => {
       newSelected.add(userId);
     }
     setSelectedProviders(newSelected);
-    setShowBulkActions(newSelected.size > 0);
   };
 
   const toggleAllSelection = () => {
     if (selectedProviders.size === providers.length) {
       setSelectedProviders(new Set());
-      setShowBulkActions(false);
     } else {
       const allIds = providers.map(p => typeof p.userId === 'object' ? p.userId?._id : p.userId).filter(Boolean);
       setSelectedProviders(new Set(allIds));
-      setShowBulkActions(true);
-    }
-  };
-
-  const handleBulkSuspend = async () => {
-    const providerIds = getSelectedProviderIds();
-    if (providerIds.length === 0) return;
-
-    setBulkActionLoading(true);
-    try {
-      await Promise.all(
-        providerIds.map(id => providerOpsApi.suspendProvider(id, 'Bulk suspension by admin', 'temporary'))
-      );
-      toast.success(`Suspended ${providerIds.length} provider(s)`);
-      setSelectedProviders(new Set());
-      setShowBulkActions(false);
-      fetchProviders();
-      fetchDashboardStats();
-    } catch (error) {
-      toast.error('Failed to suspend some providers');
-    } finally {
-      setBulkActionLoading(false);
-    }
-  };
-
-  const handleBulkActivate = async () => {
-    const providerIds = getSelectedProviderIds();
-    if (providerIds.length === 0) return;
-
-    setBulkActionLoading(true);
-    try {
-      await Promise.all(
-        providerIds.map(id => providerOpsApi.reactivateProvider(id, 'Bulk activation by admin'))
-      );
-      toast.success(`Activated ${providerIds.length} provider(s)`);
-      setSelectedProviders(new Set());
-      setShowBulkActions(false);
-      fetchProviders();
-      fetchDashboardStats();
-    } catch (error) {
-      toast.error('Failed to activate some providers');
-    } finally {
-      setBulkActionLoading(false);
-    }
-  };
-
-  const handleBulkVerify = async () => {
-    const providerIds = getSelectedProviderIds();
-    if (providerIds.length === 0) return;
-
-    setBulkActionLoading(true);
-    try {
-      await Promise.all(
-        providerIds.map(id => providerOpsApi.approveProvider(id, 'Bulk verification by admin'))
-      );
-      toast.success(`Verified ${providerIds.length} provider(s)`);
-      setSelectedProviders(new Set());
-      setShowBulkActions(false);
-      fetchProviders();
-      fetchDashboardStats();
-    } catch (error) {
-      toast.error('Failed to verify some providers');
-    } finally {
-      setBulkActionLoading(false);
     }
   };
 
   const clearSelection = () => {
     setSelectedProviders(new Set());
-    setShowBulkActions(false);
+  };
+
+  // Define bulk actions
+  const bulkActions: BulkAction[] = [
+    {
+      id: 'verify',
+      label: 'Verify',
+      icon: <UserCheck className="w-4 h-4" />,
+      variant: 'success',
+    },
+    {
+      id: 'activate',
+      label: 'Activate',
+      icon: <CheckCircle className="w-4 h-4" />,
+      variant: 'success',
+    },
+    {
+      id: 'suspend',
+      label: 'Suspend',
+      icon: <Ban className="w-4 h-4" />,
+      variant: 'warning',
+      requiresConfirm: true,
+      confirmTitle: 'Confirm Suspension',
+      confirmDescription: 'Suspended providers will not be able to access their accounts.',
+    },
+  ];
+
+  // Handle bulk action
+  const handleBulkAction = async (actionId: string) => {
+    const providerIds = getSelectedProviderIds();
+    if (providerIds.length === 0) return;
+
+    setBulkActionLoading(true);
+    try {
+      const getActionLabel = (id: string) => {
+        switch (id) {
+          case 'verify': return 'verify';
+          case 'activate': return 'activate';
+          case 'suspend': return 'suspend';
+          default: return id;
+        }
+      };
+
+      let results: PromiseSettledResult<void>[] = [];
+
+      // Helper to create a retryable API call
+      const createRetryableCall = async (apiCall: () => Promise<unknown>) => {
+        try {
+          await withRetry(apiCall, {
+            maxRetries: 2,
+            retryableStatuses: [429, 500, 502, 503, 504]
+          });
+          return { status: 'fulfilled' as const };
+        } catch (error) {
+          return { status: 'rejected' as const, reason: error };
+        }
+      };
+
+      switch (actionId) {
+        case 'verify':
+          results = await Promise.allSettled(
+            providerIds.map(id => createRetryableCall(() =>
+              providerOpsApi.approveProvider(id, 'Bulk verification by admin')
+            ))
+          );
+          break;
+        case 'activate':
+          results = await Promise.allSettled(
+            providerIds.map(id => createRetryableCall(() =>
+              providerOpsApi.reactivateProvider(id, 'Bulk activation by admin')
+            ))
+          );
+          break;
+        case 'suspend':
+          results = await Promise.allSettled(
+            providerIds.map(id => createRetryableCall(() =>
+              providerOpsApi.suspendProvider(id, 'Bulk suspension by admin', 'temporary')
+            ))
+          );
+          break;
+      }
+
+      // Count successes and failures
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+      const actionLabel = getActionLabel(actionId);
+
+      if (failed === 0) {
+        toast.success(`${actionLabel.charAt(0).toUpperCase() + actionLabel.slice(1)}d ${succeeded} provider(s) successfully`);
+      } else if (succeeded === 0) {
+        toast.error(`Failed to ${actionLabel} all ${failed} selected provider(s)`);
+      } else {
+        toast.error(`${actionLabel.charAt(0).toUpperCase() + actionLabel.slice(1)}d ${succeeded} provider(s), ${failed} failed`);
+      }
+
+      setSelectedProviders(new Set());
+      fetchProviders();
+      fetchDashboardStats();
+    } catch (error) {
+      toast.error('An unexpected error occurred during bulk operation');
+    } finally {
+      setBulkActionLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -1417,8 +2071,66 @@ const ProviderManagement: React.FC = () => {
     } finally {
       if (fetchId === detailFetchId.current) {
         setDetailLoading(false);
+        setDetailLastUpdated(new Date());
       }
     }
+  }, []);
+
+  // Load provider services
+  const loadProviderServices = useCallback(async (providerId: string) => {
+    setServicesLoading(true);
+    try {
+      const response = await providerOpsApi.getProviderServices(providerId);
+      setProviderServices(response.data.services);
+    } catch (error) {
+      toast.error('Failed to load provider services');
+      setProviderServices([]);
+    } finally {
+      setServicesLoading(false);
+    }
+  }, []);
+
+  // Load provider bookings
+  const loadProviderBookings = useCallback(async (providerId: string, filters?: { status?: string; page?: number; limit?: number }) => {
+    setBookingsLoading(true);
+    try {
+      const response = await providerOpsApi.getProviderBookings(providerId, {
+        page: filters?.page || 1,
+        limit: filters?.limit || 20,
+        status: filters?.status as ProviderBooking['status'] | undefined,
+      });
+      setProviderBookings(response.data.bookings);
+      setBookingPagination({
+        page: response.data.pagination.page,
+        limit: response.data.pagination.limit,
+        total: response.data.pagination.total,
+        pages: response.data.pagination.pages,
+      });
+    } catch (error) {
+      toast.error('Failed to load provider bookings');
+      setProviderBookings([]);
+    } finally {
+      setBookingsLoading(false);
+    }
+  }, []);
+
+  // Load provider earnings
+  const loadProviderEarnings = useCallback(async (providerId: string) => {
+    setEarningsLoading(true);
+    try {
+      const response = await providerOpsApi.getProviderEarnings(providerId);
+      setProviderEarnings(response.data);
+    } catch (error) {
+      toast.error('Failed to load provider earnings');
+      setProviderEarnings(null);
+    } finally {
+      setEarningsLoading(false);
+    }
+  }, []);
+
+  // Send message to provider
+  const handleSendMessage = useCallback(async (providerId: string, message: string, subject?: string) => {
+    await providerOpsApi.sendProviderMessage(providerId, message, subject);
   }, []);
 
   useEffect(() => {
@@ -1448,13 +2160,16 @@ const ProviderManagement: React.FC = () => {
     }));
   };
 
-  const handleExport = () => {
+  // Export state
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = (format: 'csv' | 'excel' | 'pdf') => {
     if (providers.length === 0) {
       toast.error('No providers to export on this page');
       return;
     }
     exportProvidersCsv(providers);
-    toast.success(`Exported ${providers.length} provider(s) from this page to CSV`);
+    toast.success(`Exported ${providers.length} provider(s) from this page to ${format.toUpperCase()}`);
   };
 
   // Handlers
@@ -1579,6 +2294,12 @@ const ProviderManagement: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <AdminPageShell
         wideLayout
         title="Provider Management"
@@ -1593,17 +2314,14 @@ const ProviderManagement: React.FC = () => {
         ]}
         pendingVerifications={statusCounts.pending}
         headerActions={
-          <button
-            type="button"
-            onClick={handleExport}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-nilin-charcoal bg-white border border-nilin-border rounded-xl hover:bg-nilin-blush/40 transition-colors"
-          >
-            <Download className="w-4 h-4" />
-            Export CSV
-          </button>
+          <ExportDropdown
+            onExport={handleExport}
+            formats={['csv', 'excel', 'pdf']}
+            loading={isExporting}
+          />
         }
       >
-        <div className="space-y-3 w-full">
+        <main id="main-content" className="space-y-3 w-full">
           <ProviderKpiStrip counts={statusCounts} activeTab={activeTab} onTabSelect={handleTabChange} />
 
           <div className="glass rounded-2xl border border-nilin-border/50 bg-white/95 overflow-hidden w-full">
@@ -1719,47 +2437,22 @@ const ProviderManagement: React.FC = () => {
             </div>
 
             {/* Bulk Actions Bar */}
-            {showBulkActions && (
-              <div className="flex items-center justify-between px-4 py-3 bg-nilin-coral/5 border-b border-nilin-coral/20">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={clearSelection}
-                    className="p-1.5 rounded-lg hover:bg-nilin-coral/10 transition-colors"
-                    title="Clear selection"
-                  >
-                    <X className="w-4 h-4 text-nilin-coral" />
-                  </button>
-                  <span className="text-sm font-medium text-nilin-charcoal">
-                    {selectedProviders.size} provider{selectedProviders.size !== 1 ? 's' : ''} selected
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleBulkVerify}
-                    disabled={bulkActionLoading}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                  >
-                    {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
-                    Verify
-                  </button>
-                  <button
-                    onClick={handleBulkActivate}
-                    disabled={bulkActionLoading}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 text-white text-sm font-medium rounded-lg hover:bg-sky-700 disabled:opacity-50 transition-colors"
-                  >
-                    {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                    Activate
-                  </button>
-                  <button
-                    onClick={handleBulkSuspend}
-                    disabled={bulkActionLoading}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors"
-                  >
-                    {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
-                    Suspend
-                  </button>
-                </div>
-              </div>
+            {selectedProviders.size > 0 && (
+              <BulkActionToolbar
+                selectedItems={providers.filter(p => {
+                  const userId = typeof p.userId === 'object' ? p.userId?._id : p.userId;
+                  return userId && selectedProviders.has(userId);
+                })}
+                totalCount={pagination.total}
+                entityName="providers"
+                actions={bulkActions}
+                onAction={handleBulkAction}
+                onClear={clearSelection}
+                getItemId={(p) => {
+                  const userId = typeof p.userId === 'object' ? p.userId?._id : p.userId;
+                  return userId || '';
+                }}
+              />
             )}
 
             {/* Select All Row */}
@@ -1792,7 +2485,7 @@ const ProviderManagement: React.FC = () => {
               onPageChange={handlePageChange}
             />
           </div>
-        </div>
+        </main>
 
         {/* Provider Detail Modal */}
         {selectedProvider && (
@@ -1803,6 +2496,7 @@ const ProviderManagement: React.FC = () => {
             slaMetrics={slaMetrics}
             fraudFlags={fraudFlags}
             detailLoading={detailLoading}
+            lastUpdated={detailLastUpdated}
             fraudRiskLevel={fraudRiskLevel}
             lastFraudReport={lastFraudReport}
             onClose={() => setSelectedProvider(null)}
@@ -1813,6 +2507,16 @@ const ProviderManagement: React.FC = () => {
             onVerifyDocument={handleVerifyDocument}
             onRunFraudCheck={handleRunFraudCheck}
             onResolveFraudFlag={handleResolveFraudFlag}
+            onSendMessage={handleSendMessage}
+            services={providerServices}
+            bookings={providerBookings}
+            earnings={providerEarnings}
+            onLoadServices={loadProviderServices}
+            onLoadBookings={loadProviderBookings}
+            onLoadEarnings={loadProviderEarnings}
+            servicesLoading={servicesLoading}
+            bookingsLoading={bookingsLoading}
+            earningsLoading={earningsLoading}
           />
         )}
       </AdminPageShell>

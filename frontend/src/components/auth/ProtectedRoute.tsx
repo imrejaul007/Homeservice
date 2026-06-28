@@ -1,6 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import authService from '../../services/AuthService';
+
+const enforceEmailVerification = import.meta.env.VITE_ENFORCE_EMAIL_VERIFICATION === 'true';
 
 // NILIN-themed loading spinner
 const NilinLoader = () => (
@@ -47,6 +50,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   } = useAuthStore();
 
   const location = useLocation();
+  const [tokenChecked, setTokenChecked] = useState(false);
+  const [tokenValid, setTokenValid] = useState(false);
 
   useEffect(() => {
     if (!isInitialized) {
@@ -54,8 +59,18 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     }
   }, [isInitialized, initialize]);
 
-  // Show loading while initializing
-  if (!isInitialized || isLoading) {
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setTokenChecked(true);
+      setTokenValid(true);
+      return;
+    }
+    setTokenValid(authService.isTokenValid());
+    setTokenChecked(true);
+  }, [isAuthenticated, user]);
+
+  // Show loading while initializing or checking token validity
+  if (!isInitialized || isLoading || (isAuthenticated && !tokenChecked)) {
     return <>{fallback}</>;
   }
 
@@ -75,30 +90,27 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <>{children}</>;
   }
 
-  // User must be authenticated from this point
-  if (!user) {
+  // User must be authenticated with a valid token from this point
+  if (!user || !tokenValid) {
     return (
-      <Navigate 
-        to={redirectTo} 
-        state={{ from: location.pathname }} 
-        replace 
+      <Navigate
+        to={redirectTo}
+        state={{ from: location.pathname, reason: 'session_expired', message: 'Your session has expired. Please sign in again.' }}
+        replace
       />
     );
   }
 
-  // EMAIL VERIFICATION DISABLED: Email verification check is currently disabled
-  // because the email verification flow requires additional user experience work
-  // (resend verification, email delivery timing, etc.).
-  // To re-enable: uncomment below and ensure requireEmailVerified prop is passed where needed
-  // if (requireEmailVerified && !user.isEmailVerified) {
-  //   return (
-  //     <Navigate
-  //       to="/verify-email-required"
-  //       state={{ from: location.pathname }}
-  //       replace
-  //     />
-  //   );
-  // }
+  const shouldRequireEmailVerification = requireEmailVerified || enforceEmailVerification;
+  if (shouldRequireEmailVerification && !user.isEmailVerified) {
+    return (
+      <Navigate
+        to="/verify-email-required"
+        state={{ from: location.pathname }}
+        replace
+      />
+    );
+  }
 
   // Check account status requirement
   if (requireActiveAccount && user.accountStatus !== 'active' && user.accountStatus !== 'pending_verification') {
@@ -191,7 +203,7 @@ export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> &
     <ProtectedRoute
       {...props}
       allowedRoles={['provider']}
-      requireEmailVerified={false}
+      requireEmailVerified={enforceEmailVerification}
     />
   );
 };
@@ -236,8 +248,14 @@ export const PublicRoute: React.FC<{
       (location.state as { returnTo?: string; from?: string } | null)?.returnTo ||
       (location.state as { from?: string } | null)?.from;
     const queryReturn = searchParams.get('returnTo');
+    // SECURITY FIX: Prevent open redirect vulnerability
+    // Must start with '/' but NOT '//' to prevent protocol-relative attacks like //attacker.com
     const safeReturn =
-      queryReturn?.startsWith('/') ? queryReturn : stateReturn?.startsWith('/') ? stateReturn : null;
+      queryReturn?.startsWith('/') && !queryReturn.startsWith('//')
+        ? queryReturn
+        : stateReturn?.startsWith('/') && !stateReturn.startsWith('//')
+          ? stateReturn
+          : null;
 
     const defaultRedirect = redirectTo || (
       user.role === 'admin'
@@ -281,10 +299,9 @@ export const useRouteAccess = () => {
     
     canAccessProvider: (requireVerification = false) => {
       if (!isAuthenticated || !user || user.role !== 'provider') return false;
+      if (enforceEmailVerification && !user.isEmailVerified) return false;
       if (!requireVerification) return true;
-      // Email verification check disabled - requires UX improvements before enabling
-      // return user.isEmailVerified;
-      return true;
+      return user.isEmailVerified;
     },
     
     isAdmin: () => isAuthenticated && user?.role === 'admin',

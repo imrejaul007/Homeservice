@@ -515,26 +515,25 @@ async function cleanupOrphanedDocuments(result: CleanupJobResult): Promise<void>
   try {
     // Find bookings with non-existent customers
     const bookings = await Booking.find().select('customerId providerId').lean();
-    const userIds = new Set(bookings.flatMap(b => [b.customerId?.toString(), b.providerId?.toString()]));
 
     const validUsers = new Set(
       (await User.find().select('_id').lean()).map(u => u._id.toString())
     );
 
-    let orphanedCount = 0;
-    for (const booking of bookings) {
-      const customerId = booking.customerId?.toString();
-      const providerId = booking.providerId?.toString();
+    // Collect orphaned booking IDs
+    const orphanedIds = bookings
+      .filter(booking => {
+        const customerId = booking.customerId?.toString();
+        const providerId = booking.providerId?.toString();
+        return (customerId && !validUsers.has(customerId)) || (providerId && !validUsers.has(providerId));
+      })
+      .map(booking => (booking as any)._id);
 
-      if ((customerId && !validUsers.has(customerId)) || (providerId && !validUsers.has(providerId))) {
-        await Booking.deleteOne({ _id: (booking as any)._id });
-        orphanedCount++;
-      }
-    }
-
-    if (orphanedCount > 0) {
-      result.deleted += orphanedCount;
-      logger.info(`[cleanupOrphanedDocuments] Removed ${orphanedCount} orphaned bookings`);
+    // Bulk delete all orphaned bookings at once
+    if (orphanedIds.length > 0) {
+      const deleteResult = await Booking.deleteMany({ _id: { $in: orphanedIds } });
+      result.deleted += deleteResult.deletedCount;
+      logger.info(`[cleanupOrphanedDocuments] Bulk deleted ${deleteResult.deletedCount} orphaned bookings`);
     }
   } catch (error) {
     logger.error('[cleanupOrphanedDocuments] Failed', error);

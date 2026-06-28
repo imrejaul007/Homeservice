@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign,
@@ -120,143 +121,11 @@ export const CommissionReports: React.FC<CommissionReportsProps> = ({
         setReports(response.data.data.reports || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setReports([
-          {
-            id: 'com-001',
-            reportId: 'COMM-2024-001',
-            period: '2024-Q1',
-            providerId: 'prov-001',
-            providerName: 'Ahmed Hassan',
-            providerEmail: 'ahmed@email.com',
-            tier: 'gold',
-            commissionRate: 15,
-            grossRevenue: 45600,
-            commissionAmount: 6840,
-            netPayable: 38760,
-            totalBookings: 89,
-            completedBookings: 82,
-            cancelledBookings: 5,
-            refunds: 2,
-            adjustments: -340,
-            generatedAt: new Date().toISOString(),
-            status: 'paid'
-          },
-          {
-            id: 'com-002',
-            reportId: 'COMM-2024-002',
-            period: '2024-Q1',
-            providerId: 'prov-002',
-            providerName: 'Sarah Khan',
-            providerEmail: 'sarah@email.com',
-            tier: 'platinum',
-            commissionRate: 12,
-            grossRevenue: 89200,
-            commissionAmount: 10704,
-            netPayable: 78496,
-            totalBookings: 156,
-            completedBookings: 148,
-            cancelledBookings: 6,
-            refunds: 2,
-            adjustments: 0,
-            generatedAt: new Date().toISOString(),
-            status: 'approved'
-          },
-          {
-            id: 'com-003',
-            reportId: 'COMM-2024-003',
-            period: '2024-Q1',
-            providerId: 'prov-003',
-            providerName: 'Mohammed Ali',
-            providerEmail: 'mohammed@email.com',
-            tier: 'silver',
-            commissionRate: 18,
-            grossRevenue: 23400,
-            commissionAmount: 4212,
-            netPayable: 19188,
-            totalBookings: 45,
-            completedBookings: 42,
-            cancelledBookings: 2,
-            refunds: 1,
-            adjustments: -120,
-            generatedAt: new Date().toISOString(),
-            status: 'pending'
-          },
-          {
-            id: 'com-004',
-            reportId: 'COMM-2024-004',
-            period: '2024-Q1',
-            providerId: 'prov-004',
-            providerName: 'Fatima Omar',
-            providerEmail: 'fatima@email.com',
-            tier: 'bronze',
-            commissionRate: 20,
-            grossRevenue: 12800,
-            commissionAmount: 2560,
-            netPayable: 10240,
-            totalBookings: 28,
-            completedBookings: 26,
-            cancelledBookings: 1,
-            refunds: 1,
-            adjustments: -80,
-            generatedAt: new Date().toISOString(),
-            status: 'calculated'
-          },
-          {
-            id: 'com-005',
-            reportId: 'COMM-2024-005',
-            period: '2024-Q1',
-            providerId: 'prov-005',
-            providerName: 'Omar Farouk',
-            providerEmail: 'omar@email.com',
-            tier: 'gold',
-            commissionRate: 15,
-            grossRevenue: 56700,
-            commissionAmount: 8505,
-            netPayable: 48195,
-            totalBookings: 98,
-            completedBookings: 94,
-            cancelledBookings: 3,
-            refunds: 1,
-            adjustments: 0,
-            generatedAt: new Date().toISOString(),
-            status: 'paid'
-          }
-        ]);
-        setStats({
-          totalCommissionCollected: 2345670,
-          totalProviders: 1247,
-          avgCommissionRate: 15.5,
-          pendingPayouts: 89,
-          avgProcessingTime: 3.2,
-          monthlyTrend: [
-            { month: 'Jan', collected: 345600, paid: 320000 },
-            { month: 'Feb', collected: 389200, paid: 356000 },
-            { month: 'Mar', collected: 412300, paid: 389200 },
-            { month: 'Apr', collected: 398500, paid: 412300 },
-            { month: 'May', collected: 445600, paid: 398500 },
-            { month: 'Jun', collected: 456400, paid: 445600 }
-          ],
-          byTier: [
-            { tier: 'Platinum', count: 101, commission: 456000, percentage: 19.4, color: '#8B5CF6' },
-            { tier: 'Gold', count: 234, commission: 678000, percentage: 28.9, color: '#FFD700' },
-            { tier: 'Silver', count: 345, commission: 723000, percentage: 30.8, color: '#C0C0C0' },
-            { tier: 'Bronze', count: 567, commission: 488670, percentage: 20.9, color: '#CD7F32' }
-          ],
-          topCategories: [
-            { category: 'Home Cleaning', amount: 567890, bookings: 2345 },
-            { category: 'Beauty & Spa', amount: 456780, bookings: 1890 },
-            { category: 'AC Maintenance', amount: 345670, bookings: 1234 },
-            { category: 'Electrical', amount: 234560, bookings: 987 },
-            { category: 'Plumbing', amount: 189340, bookings: 876 }
-          ],
-          totalRevenue: 15678900,
-          platformEarnings: 2345670
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching commission data:', err);
-      setError('Failed to load commission reports');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

@@ -636,7 +636,6 @@ export class SupportTicketService {
     };
 
     const now = new Date();
-    let escalatedCount = 0;
 
     // Find tickets that have exceeded SLA
     const overdueTickets = await SupportTicket.find({
@@ -644,32 +643,55 @@ export class SupportTicketService {
       priority: { $exists: true }
     }).lean();
 
+    if (overdueTickets.length === 0) {
+      return 0;
+    }
+
+    // Categorize tickets by escalation level
+    const escalatedTickets: Array<{ _id: any; newPriority: TicketPriority }> = [];
+
     for (const ticket of overdueTickets) {
       const createdAt = new Date(ticket.createdAt);
       const slaHours = SLA_HOURS[ticket.priority as TicketPriority] || 48;
       const slaDeadline = new Date(createdAt.getTime() + slaHours * 60 * 60 * 1000);
 
       if (now > slaDeadline) {
-        // Escalate
-        await SupportTicket.findByIdAndUpdate(ticket._id, {
-          $set: {
-            priority: ticket.priority === 'low' ? 'medium' :
-                      ticket.priority === 'medium' ? 'high' : 'urgent'
-          }
-        });
-        escalatedCount++;
+        const newPriority: TicketPriority =
+          ticket.priority === 'low' ? 'medium' :
+          ticket.priority === 'medium' ? 'high' : 'urgent';
+
+        escalatedTickets.push({ _id: ticket._id, newPriority });
       }
     }
 
-    if (escalatedCount > 0) {
-      logger.info('Auto-escalated overdue tickets', {
-        context: 'SupportTicketService',
-        action: 'AUTO_ESCALATION',
-        escalatedCount
-      });
+    if (escalatedTickets.length === 0) {
+      return 0;
     }
 
-    return escalatedCount;
+    // Bulk update all escalated tickets
+    const escalatedTicketIds = escalatedTickets.map(t => t._id);
+    const escalatedAt = now;
+
+    await SupportTicket.updateMany(
+      { _id: { $in: escalatedTicketIds } },
+      { $set: { priority: 'escalated_priority', escalatedAt } }
+    );
+
+    // Also update the specific priority for each escalated ticket
+    for (const ticket of escalatedTickets) {
+      await SupportTicket.updateOne(
+        { _id: ticket._id },
+        { $set: { priority: ticket.newPriority } }
+      );
+    }
+
+    logger.info('Auto-escalated overdue tickets', {
+      context: 'SupportTicketService',
+      action: 'AUTO_ESCALATION',
+      escalatedCount: escalatedTickets.length
+    });
+
+    return escalatedTickets.length;
   }
 }
 

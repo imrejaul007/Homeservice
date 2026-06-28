@@ -10,8 +10,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { Share2, TrendingUp, Loader, Users, UserPlus, Zap } from 'lucide-react';
+import { Share2, TrendingUp, Loader, Users, UserPlus, Zap, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface ViralCoefficientProps {
   timeRange?: '7d' | '30d' | '90d';
@@ -37,39 +38,40 @@ interface ViralStats {
   networkEffect: number;
 }
 
-const MOCK_DATA: ViralData[] = [
-  { date: 'Mon', kFactor: 0.45, invitesSent: 120, invitesAccepted: 54, conversionRate: 45.0, viralReach: 180 },
-  { date: 'Tue', kFactor: 0.52, invitesSent: 145, invitesAccepted: 75, conversionRate: 51.7, viralReach: 220 },
-  { date: 'Wed', kFactor: 0.48, invitesSent: 130, invitesAccepted: 62, conversionRate: 47.7, viralReach: 195 },
-  { date: 'Thu', kFactor: 0.61, invitesSent: 180, invitesAccepted: 110, conversionRate: 61.1, viralReach: 310 },
-  { date: 'Fri', kFactor: 0.58, invitesSent: 165, invitesAccepted: 96, conversionRate: 58.2, viralReach: 285 },
-  { date: 'Sat', kFactor: 0.72, invitesSent: 220, invitesAccepted: 158, conversionRate: 71.8, viralReach: 420 },
-  { date: 'Sun', kFactor: 0.68, invitesSent: 195, invitesAccepted: 133, conversionRate: 68.2, viralReach: 380 },
-];
-
-const MOCK_STATS: ViralStats = {
-  currentK: 0.58,
-  targetK: 0.7,
-  avgInvitesPerUser: 1.8,
-  avgConversionRate: 57.6,
-  totalViralUsers: 12450,
-  viralGrowth: 12.5,
-  organicGrowth: 8.2,
-  networkEffect: 0.35,
-};
-
 export const ViralCoefficient: React.FC<ViralCoefficientProps> = ({
   timeRange = '30d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data] = useState<ViralData[]>(MOCK_DATA);
-  const [stats] = useState<ViralStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<ViralData[]>([]);
+  const [stats, setStats] = useState<ViralStats>({
+    currentK: 0,
+    targetK: 0.7,
+    avgInvitesPerUser: 0,
+    avgConversionRate: 0,
+    totalViralUsers: 0,
+    viralGrowth: 0,
+    organicGrowth: 0,
+    networkEffect: 0,
+  });
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'kfactor' | 'invites' | 'conversion'>('kfactor');
 
   useEffect(() => {
     const fetchData = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      setLoading(true);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminViralCoefficient(selectedRange);
+        setData(apiData.timeSeries || []);
+        setStats(apiData.stats);
+      } catch (err) {
+        setData([]);
+        setError(err instanceof Error ? err.message : 'Failed to load viral coefficient data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [selectedRange]);

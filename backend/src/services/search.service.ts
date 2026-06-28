@@ -6,6 +6,7 @@ import { getMeiliClient, resetMeiliClient, INDEXES, isMeiliSearchConfigured } fr
 import { cache } from '../config/redis';
 import logger from '../utils/logger';
 import { buildCaseInsensitiveNameFilter } from '../utils/categoryResolver';
+import { withCircuitBreaker, CIRCUIT_NAMES } from './circuitBreaker.service';
 
 /**
  * Search result cache TTL in seconds (5 minutes)
@@ -347,6 +348,17 @@ const getSearchTerms = async (): Promise<string[]> => {
     await refreshSearchTermsCache();
   }
   return cachedSearchTerms || [];
+};
+
+/**
+ * FIX P2: Pre-populate search terms cache on startup to avoid cold start
+ * Call this function during application initialization
+ */
+export const warmupSearchCache = async (): Promise<void> => {
+  logger.info('Warming up search terms cache...');
+  const startTime = Date.now();
+  await refreshSearchTermsCache();
+  logger.info(`Search cache warmed up in ${Date.now() - startTime}ms with ${cachedSearchTerms?.length || 0} terms`);
 };
 
 // ============================================
@@ -863,8 +875,10 @@ const toRadians = (degrees: number): number => degrees * (Math.PI / 180);
 // DEFAULT SEARCH RANKING RULES
 // ============================================
 
+// FIX P1: Add isFeatured:desc to ranking rules
 const DEFAULT_RANKING_RULES = [
   'providerTrustScore:desc',
+  'isFeatured:desc', // Featured services rank higher
   'words',
   'typo',
   'proximity',
@@ -917,6 +931,7 @@ export interface SearchResults {
   facetDistribution?: Record<string, Record<string, number>>;
   didYouMean?: string[];
   correctionApplied?: boolean;
+  fallbackTriggered?: boolean;
 }
 
 // ============================================
@@ -981,6 +996,7 @@ export const initializeIndexes = async (): Promise<void> => {
         'subcategory',
         'isActive',
         'isDeleted',
+        'isFeatured',
         'status',
         'tenantId',
         'pricing.basePrice',
@@ -994,6 +1010,7 @@ export const initializeIndexes = async (): Promise<void> => {
         'totalBookings',
         'createdAt',
         'provider.trustScore',
+        'isFeatured',
       ],
       rankingRules: DEFAULT_RANKING_RULES,
       typoTolerance: {
@@ -1197,6 +1214,7 @@ export const indexService = async (service: any): Promise<void> => {
       },
       totalBookings: service.searchMetadata?.bookingCount || 0,
       isActive: service.isActive,
+      isFeatured: service.isFeatured || false, // FIX P1: Include featured status in index
       isDeleted: service.isDeleted || false, // SECURITY FIX: Track deletion status
       tenantId: service.tenantId || null, // SECURITY FIX: Track tenant for isolation
       createdAt: new Date(service.createdAt).getTime(),
@@ -1330,6 +1348,7 @@ export const indexCategory = async (category: any): Promise<void> => {
 
 /**
  * Search services using Meilisearch with typo tolerance and synonym support
+ * Circuit breaker protected for external service resilience
  */
 export const searchServices = async (
   query: string,
@@ -1376,94 +1395,140 @@ export const searchServices = async (
     return results;
   }
 
-  try {
-    const {
-      limit = 20,
-      offset = 0,
-      category,
-      subcategory,
-      minPrice,
-      maxPrice,
-      minRating,
-      sortBy,
-      tags,
-    } = options;
+  // Execute MeiliSearch with circuit breaker protection
+  const meiliSearchResults = await withCircuitBreaker(
+    CIRCUIT_NAMES.SEARCH,
+    async () => {
+      const {
+        limit = 20,
+        offset = 0,
+        category,
+        subcategory,
+        minPrice,
+        maxPrice,
+        minRating,
+        sortBy,
+        tags,
+      } = options;
 
-    // Build filters
-    // SECURITY FIX C1-C2: Add tenantId and isDeleted filters for multi-tenant isolation
-    const filters: string[] = ['isActive = true', 'isDeleted = false'];
-    if (tenantId) filters.push(`tenantId = "${tenantId}"`);
-    if (category) filters.push(`category = "${category}"`);
-    if (subcategory) filters.push(`subcategory = "${subcategory}"`);
-    if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
-    if (maxPrice !== undefined) filters.push(`pricing.basePrice <= ${maxPrice}`);
-    if (minRating !== undefined) filters.push(`rating.average >= ${minRating}`);
-    if (tags && tags.length > 0) {
-      filters.push(`tags IN [${tags.map(t => `"${t}"`).join(', ')}]`);
-    }
-    if (options.providerId) {
-      // FIX: Use correct Meilisearch document field name 'provider.id' instead of 'providerId'
-      filters.push(`provider.id = "${options.providerId}"`);
-    }
-
-    // Build sort
-    let sort: string[] | undefined;
-    if (sortBy) {
-      switch (sortBy) {
-        case 'rating':
-          sort = ['rating.average:desc'];
-          break;
-        case 'price_asc':
-          sort = ['pricing.basePrice:asc'];
-          break;
-        case 'price_desc':
-          sort = ['pricing.basePrice:desc'];
-          break;
-        case 'popular':
-          sort = ['totalBookings:desc'];
-          break;
+      // Build filters
+      // SECURITY FIX C1-C2: Add tenantId and isDeleted filters for multi-tenant isolation
+      const filters: string[] = ['isActive = true', 'isDeleted = false'];
+      if (tenantId) filters.push(`tenantId = "${tenantId}"`);
+      if (category) filters.push(`category = "${category}"`);
+      if (subcategory) filters.push(`subcategory = "${subcategory}"`);
+      if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
+      if (maxPrice !== undefined) filters.push(`pricing.basePrice <= ${maxPrice}`);
+      if (minRating !== undefined) filters.push(`rating.average >= ${minRating}`);
+      if (tags && tags.length > 0) {
+        filters.push(`tags IN [${tags.map(t => `"${t}"`).join(', ')}]`);
       }
-    }
+      if (options.providerId) {
+        // FIX: Use correct Meilisearch document field name 'provider.id' instead of 'providerId'
+        filters.push(`provider.id = "${options.providerId}"`);
+      }
 
-    const searchResult = await client.index(INDEXES.SERVICES).search(primaryQuery, {
-      limit,
-      offset,
-      filter: filters.join(' AND '),
-      sort,
-      attributesToHighlight: ['name', 'description'],
-    });
-
-    // Check if we got results, if not try synonym-expanded queries
-    let finalResult = searchResult;
-    let correctionApplied = false;
-    let didYouMean: string[] | undefined;
-
-    if (searchResult.estimatedTotalHits === 0 && expandedQueries.length > 1) {
-      // Try each expanded query
-      for (let i = 1; i < expandedQueries.length; i++) {
-        const altQuery = expandedQueries[i];
-        const altResult = await client.index(INDEXES.SERVICES).search(altQuery, {
-          limit,
-          offset,
-          filter: filters.join(' AND '),
-          sort,
-          attributesToHighlight: ['name', 'description'],
-        });
-
-        if (altResult.estimatedTotalHits > 0) {
-          finalResult = altResult;
-          correctionApplied = true;
-          didYouMean = [altQuery];
-          logger.info(`Search corrected: "${primaryQuery}" -> "${altQuery}"`);
-          break;
+      // Build sort
+      let sort: string[] | undefined;
+      if (sortBy) {
+        switch (sortBy) {
+          case 'rating':
+            sort = ['rating.average:desc'];
+            break;
+          case 'price_asc':
+            sort = ['pricing.basePrice:asc'];
+            break;
+          case 'price_desc':
+            sort = ['pricing.basePrice:desc'];
+            break;
+          case 'popular':
+            sort = ['totalBookings:desc'];
+            break;
         }
       }
-    }
 
-    // If still no results, try MongoDB fallback for provider-specific queries
-    // This ensures provider search works even if Meilisearch is not synced
-    if (finalResult.estimatedTotalHits === 0 && options.providerId) {
-      logger.info(`Meilisearch returned 0 results for provider search, falling back to MongoDB`);
+      // FIX P1: Add maxTotalHits limit and request timeout to prevent expensive queries
+      const searchResult = await client.index(INDEXES.SERVICES).search(primaryQuery, {
+        limit,
+        offset,
+        filter: filters.join(' AND '),
+        sort,
+        attributesToHighlight: ['name', 'description'],
+        maxTotalHits: (limit || 20) * 10,
+      }, { timeout: 5000 });
+
+      // Check if we got results, if not try synonym-expanded queries
+      let finalResult = searchResult;
+      let correctionApplied = false;
+      let didYouMean: string[] | undefined;
+
+      if (searchResult.estimatedTotalHits === 0 && expandedQueries.length > 1) {
+        // Try each expanded query
+        for (let i = 1; i < expandedQueries.length; i++) {
+          const altQuery = expandedQueries[i];
+          const altResult = await client.index(INDEXES.SERVICES).search(altQuery, {
+            limit,
+            offset,
+            filter: filters.join(' AND '),
+            sort,
+            attributesToHighlight: ['name', 'description'],
+          });
+
+          if (altResult.estimatedTotalHits > 0) {
+            finalResult = altResult;
+            correctionApplied = true;
+            didYouMean = [altQuery];
+            logger.info(`Search corrected: "${primaryQuery}" -> "${altQuery}"`);
+            break;
+          }
+        }
+      }
+
+      // If still no results, try MongoDB fallback for provider-specific queries
+      // This ensures provider search works even if Meilisearch is not synced
+      if (finalResult.estimatedTotalHits === 0 && options.providerId) {
+        logger.info(`Meilisearch returned 0 results for provider search, falling back to MongoDB`);
+        const fallbackResults = await fallbackSearch(primaryQuery, options);
+        return {
+          hits: fallbackResults.hits,
+          estimatedTotalHits: fallbackResults.estimatedTotalHits,
+          processingTimeMs: fallbackResults.processingTimeMs,
+          query: fallbackResults.query,
+          facetDistribution: fallbackResults.facetDistribution,
+          didYouMean: fallbackResults.didYouMean,
+          correctionApplied: false,
+          fallbackTriggered: false,
+        };
+      }
+
+      // If still no results, generate "Did you mean?" suggestions using Levenshtein
+      if (finalResult.estimatedTotalHits === 0) {
+        const knownTerms = await getSearchTerms();
+        const suggestions = findSuggestions(primaryQuery, knownTerms);
+
+        if (suggestions.length > 0) {
+          didYouMean = suggestions.map(s => s.term);
+          logger.info(`No results for "${primaryQuery}", suggestions: ${didYouMean.join(', ')}`);
+        }
+      }
+
+      return {
+        hits: finalResult.hits || [],
+        estimatedTotalHits: finalResult.estimatedTotalHits || 0,
+        processingTimeMs: finalResult.processingTimeMs || Date.now() - startTime,
+        query: finalResult.query || primaryQuery,
+        facetDistribution: finalResult.facetDistribution,
+        didYouMean,
+        correctionApplied,
+        fallbackTriggered: false,
+      };
+    },
+    // Fallback: use MongoDB fallback with cached data
+    async () => {
+      logger.warn('Search circuit breaker open - using MongoDB fallback', {
+        action: 'SEARCH_CIRCUIT_FALLBACK',
+      });
+
       const fallbackResults = await fallbackSearch(primaryQuery, options);
       return {
         hits: fallbackResults.hits,
@@ -1473,66 +1538,48 @@ export const searchServices = async (
         facetDistribution: fallbackResults.facetDistribution,
         didYouMean: fallbackResults.didYouMean,
         correctionApplied: false,
+        fallbackTriggered: true,
       };
     }
+  );
 
-    // If still no results, generate "Did you mean?" suggestions using Levenshtein
-    if (finalResult.estimatedTotalHits === 0) {
-      const knownTerms = await getSearchTerms();
-      const suggestions = findSuggestions(primaryQuery, knownTerms);
-
-      if (suggestions.length > 0) {
-        didYouMean = suggestions.map(s => s.term);
-        logger.info(`No results for "${primaryQuery}", suggestions: ${didYouMean.join(', ')}`);
-      }
-    }
-
-    // Update analytics with actual result count
-    trackSearch(query, finalResult.estimatedTotalHits || 0, previousQuery);
-
-    const searchResults: SearchResults = {
-      hits: finalResult.hits || [],
-      estimatedTotalHits: finalResult.estimatedTotalHits || 0,
-      processingTimeMs: finalResult.processingTimeMs || Date.now() - startTime,
-      query: finalResult.query || primaryQuery,
-      facetDistribution: finalResult.facetDistribution,
-      didYouMean,
-      correctionApplied,
-    };
-
-    // Phase 1: Store search results in cache with 5-minute TTL
-    if (redisClient) {
-      try {
-        await redisClient.setex(`cache:${cacheKey}`, SEARCH_CACHE_TTL, JSON.stringify(searchResults));
-        logger.debug(`Search results cached with key: ${cacheKey}`);
-      } catch (err) {
-        logger.warn('Search cache write failed:', err);
-      }
-    }
-
-    return searchResults;
-  } catch (error) {
-    logSearchError('Meilisearch search failed, using MongoDB fallback', error);
-    resetMeiliClient();
-    const results = await fallbackSearch(primaryQuery, options);
-
-    // Phase 1: Store fallback search results in cache with 5-minute TTL
-    if (redisClient) {
-      try {
-        await redisClient.setex(`cache:${cacheKey}`, SEARCH_CACHE_TTL, JSON.stringify(results));
-        logger.debug(`Fallback search results cached with key: ${cacheKey}`);
-      } catch (err) {
-        logger.warn('Search cache write failed:', err);
-      }
-    }
-
-    trackSearch(query, results.estimatedTotalHits, previousQuery);
-    return results;
+  // If circuit breaker returned fallback, track it
+  if (meiliSearchResults.fallbackTriggered) {
+    logger.warn('Search used fallback due to circuit breaker', {
+      query: primaryQuery,
+      action: 'SEARCH_CIRCUIT_FALLBACK_TRIGGERED',
+    });
   }
+
+  // Update analytics with actual result count
+  trackSearch(query, meiliSearchResults.estimatedTotalHits || 0, previousQuery);
+
+  const searchResults: SearchResults = {
+    hits: meiliSearchResults.hits,
+    estimatedTotalHits: meiliSearchResults.estimatedTotalHits,
+    processingTimeMs: meiliSearchResults.processingTimeMs,
+    query: meiliSearchResults.query,
+    facetDistribution: meiliSearchResults.facetDistribution,
+    didYouMean: meiliSearchResults.didYouMean,
+    correctionApplied: meiliSearchResults.correctionApplied,
+  };
+
+  // Phase 1: Store search results in cache with 5-minute TTL
+  if (redisClient) {
+    try {
+      await redisClient.setex(`cache:${cacheKey}`, SEARCH_CACHE_TTL, JSON.stringify(searchResults));
+      logger.debug(`Search results cached with key: ${cacheKey}`);
+    } catch (err) {
+      logger.warn('Search cache write failed:', err);
+    }
+  }
+
+  return searchResults;
 };
 
 /**
  * Get search suggestions with typo tolerance and caching
+ * Circuit breaker protected for external service resilience
  * SECURITY FIX: Support tenant isolation
  */
 export const getSearchSuggestions = async (
@@ -1555,37 +1602,41 @@ export const getSearchSuggestions = async (
     return suggestions;
   }
 
-  try {
-    const searchResult = await client.index(INDEXES.SERVICES).search(query, {
-      limit,
-      attributesToRetrieve: ['name', 'category'],
-    });
+  // Execute MeiliSearch with circuit breaker protection
+  const suggestionsResult = await withCircuitBreaker(
+    CIRCUIT_NAMES.SEARCH,
+    async () => {
+      const searchResult = await client.index(INDEXES.SERVICES).search(query, {
+        limit,
+        attributesToRetrieve: ['name', 'category'],
+      });
 
-    let suggestions: string[] = searchResult.hits.map(
-      (hit: any) => hit.title as string
-    );
+      let suggestions: string[] = searchResult.hits.map(
+        (hit: any) => hit.title as string
+      );
 
-    // If no results, try Levenshtein-based suggestions
-    if (suggestions.length === 0 && query.length >= 2) {
-      const knownTerms = await getSearchTerms();
-      const typoSuggestions = findSuggestions(query, knownTerms);
-      suggestions = typoSuggestions.map(s => s.term);
+      // If no results, try Levenshtein-based suggestions
+      if (suggestions.length === 0 && query.length >= 2) {
+        const knownTerms = await getSearchTerms();
+        const typoSuggestions = findSuggestions(query, knownTerms);
+        suggestions = typoSuggestions.map(s => s.term);
+      }
+
+      return Array.from(new Set<string>(suggestions));
+    },
+    // Fallback: return MongoDB suggestions
+    async () => {
+      logger.warn('Search suggestions circuit breaker open - using MongoDB fallback', {
+        action: 'SUGGESTIONS_CIRCUIT_FALLBACK',
+      });
+      return getMongoSuggestions(query, limit, tenantId);
     }
+  );
 
-    const uniqueSuggestions = Array.from(new Set<string>(suggestions));
+  // Cache the suggestions
+  await setCachedSuggestions(query, suggestionsResult);
 
-    // Cache the suggestions
-    await setCachedSuggestions(query, uniqueSuggestions);
-
-    return uniqueSuggestions.slice(0, limit);
-  } catch (error) {
-    logSearchError('Meilisearch suggestions failed, using MongoDB fallback', error);
-    resetMeiliClient();
-    // Pass tenantId to MongoDB fallback for tenant isolation
-    const suggestions = await getMongoSuggestions(query, limit, tenantId);
-    await setCachedSuggestions(query, suggestions);
-    return suggestions;
-  }
+  return suggestionsResult.slice(0, limit);
 };
 
 /**
@@ -1705,13 +1756,15 @@ export const searchServicesWithGeo = async (
         }
       }
 
+      // FIX P1: Add maxTotalHits limit and request timeout
       const searchResult = await client.index(INDEXES.SERVICES).search(primaryQuery, {
         limit,
         offset,
         filter: filters.join(' AND '),
         sort,
         attributesToHighlight: ['name', 'description'],
-      });
+        maxTotalHits: (limit || 20) * 10,
+      }, { timeout: 5000 });
 
       textSearchResults = searchResult.hits || [];
       textTotalHits = searchResult.estimatedTotalHits || 0;
@@ -2033,6 +2086,7 @@ export const reindexAllServices = async (): Promise<void> => {
       },
       totalBookings: service.searchMetadata?.bookingCount || 0,
       isActive: service.isActive,
+      isFeatured: service.isFeatured || false, // FIX P1: Include featured status in index
       isDeleted: service.isDeleted || false, // SECURITY FIX: Track deletion status
       tenantId: service.tenantId || null, // SECURITY FIX: Track tenant for isolation
       status: service.status || 'active',
@@ -2213,6 +2267,7 @@ export default {
   SYNONYM_DICTIONARY,
   // Export cache refresh
   refreshSearchTermsCache,
+  warmupSearchCache, // FIX P2: Export cache warmup function
   // Export popular searches
   getPopularSearches,
 };

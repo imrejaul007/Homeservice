@@ -28,6 +28,9 @@ export interface AdminReview {
   reportCount: number;
   moderationStatus: 'pending' | 'approved' | 'rejected' | 'hidden';
   moderationReason?: string;
+  autoFlagged: boolean;
+  moderationScore?: number;
+  moderationIssues?: string[];
   reviewerId: AdminReviewUser;
   revieweeId: AdminReviewUser;
   bookingId?: {
@@ -49,6 +52,7 @@ export interface AdminReviewStats {
   rejected: number;
   hidden: number;
   flagged: number;
+  autoFlagged: number;
   averageRating: number;
   ratingDistribution: Record<number, number>;
 }
@@ -70,6 +74,7 @@ function normalizeStats(raw: Record<string, unknown>): AdminReviewStats {
     rejected: Number(raw.rejected ?? 0),
     hidden: Number(raw.hidden ?? 0),
     flagged: Number(raw.flagged ?? 0),
+    autoFlagged: Number(raw.autoFlagged ?? 0),
     averageRating: Number(rating.average ?? raw.averageRating ?? 0),
     ratingDistribution: {
       1: Number(dist[1] ?? 0),
@@ -82,8 +87,10 @@ function normalizeStats(raw: Record<string, unknown>): AdminReviewStats {
 }
 
 export function getReviewDisplayStatus(review: AdminReview): ReviewDisplayStatus {
-  // FIX: 'flagged' is a computed/display status, not stored in backend
+  // FIX: 'flagged' is a computed/display status from reportCount, not stored in backend
+  // 'autoFlagged' is a distinct status from content moderation
   // Backend only stores: 'pending' | 'approved' | 'rejected' | 'hidden'
+  if (review.autoFlagged && review.moderationStatus !== 'rejected') return 'autoFlagged';
   if (review.reportCount > 0 && review.moderationStatus !== 'rejected') return 'flagged';
   return review.moderationStatus;
 }

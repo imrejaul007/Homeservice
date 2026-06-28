@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, MapPin, X, Clock, ChevronRight, Loader2, TrendingUp } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
-import { useLocationStore, SUPPORTED_CITIES } from '@/stores/locationStore';
+import { useLocationStore, useSupportedCities } from '@/stores/locationStore';
+import { useTrendingSearchTerms } from '@/hooks/useTrendingSearchTerms';
 import { cn } from '@/lib/utils';
 import type { Suggestion } from '@/types/search';
 
@@ -31,6 +32,8 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
   } = useSearchStore();
 
   const { selectedCity } = useLocationStore();
+  const supportedCities = useSupportedCities();
+  const { terms: trendingTerms } = useTrendingSearchTerms(5);
 
   const [query, setQuery] = useState('');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
@@ -140,7 +143,7 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
   }, [navigate, setFilters, addToSearchHistory]);
 
   const handleLocationSelect = useCallback((cityName: string) => {
-    const city = SUPPORTED_CITIES.find(c =>
+    const city = supportedCities.find(c =>
       c.name.toLowerCase() === cityName.toLowerCase() ||
       c.id === cityName.toLowerCase()
     );
@@ -157,7 +160,7 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
   };
 
   // Filter cities based on location query
-  const filteredCities = SUPPORTED_CITIES.filter(city =>
+  const filteredCities = supportedCities.filter(city =>
     city.name.toLowerCase().includes(locationQuery.toLowerCase()) ||
     city.id.includes(locationQuery.toLowerCase())
   );
@@ -170,7 +173,10 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
       {/* Main Search Bar Container - Reference Design: Outer shadow + inset shadow */}
       <div
         className={cn(
-          'relative flex items-center transition-all duration-300',
+          'relative flex items-stretch transition-all duration-300',
+          isMinimal
+            ? 'flex-row'
+            : 'flex-col sm:flex-row',
           // Reference design: Outer container with soft shadow
           isMinimal
             ? 'bg-white rounded-nilin shadow-nilin border border-nilin-border/30'
@@ -183,16 +189,19 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
         )}
       >
         {/* Location Selector */}
-        <div className="relative">
+        <div className="relative min-w-0">
           <button
             onClick={() => setShowLocationDropdown(!showLocationDropdown)}
             className={cn(
-              'flex items-center gap-2 px-4 py-3 transition-all border-r border-nilin-border/30',
+              'flex items-center gap-2 px-3 sm:px-4 py-3 transition-all w-full sm:w-auto',
+              isMinimal
+                ? 'border-r border-nilin-border/30'
+                : 'border-b sm:border-b-0 sm:border-r border-nilin-border/30',
               'text-nilin-warmGray hover:text-nilin-charcoal'
             )}
           >
             <MapPin className="w-5 h-5 text-nilin-coral flex-shrink-0" />
-            <span className="text-sm font-medium whitespace-nowrap max-w-[120px] truncate text-nilin-charcoal">
+            <span className="text-sm font-medium whitespace-nowrap max-w-[100px] sm:max-w-[120px] truncate text-nilin-charcoal">
               {selectedCity?.name || 'All Locations'}
             </span>
           </button>
@@ -239,9 +248,9 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
         {/* Search Input - Reference Design: Inset shadow effect */}
         <div
           className={cn(
-            'flex-1 relative',
+            'flex-1 relative min-w-0',
             // Reference design: Inset shadow effect
-            !isMinimal && 'mx-2',
+            !isMinimal && 'mx-0 sm:mx-2',
             isMinimal && 'flex-1'
           )}
         >
@@ -325,10 +334,10 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
           onClick={handleSearch}
           disabled={isSearching}
           className={cn(
-            'flex items-center justify-center transition-all',
+            'flex items-center justify-center transition-all flex-shrink-0',
             isMinimal
               ? 'm-1.5 px-5 py-2 bg-nilin-coral text-white rounded-lg font-medium text-sm hover:bg-nilin-rose'
-              : 'm-1.5 px-8 py-3 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose shadow-lg',
+              : 'm-0 sm:m-1.5 px-6 sm:px-8 py-3 bg-nilin-coral text-white rounded-none rounded-b-nilin-lg sm:rounded-nilin font-semibold hover:bg-nilin-rose shadow-lg w-full sm:w-auto',
             isSearching && 'opacity-70 cursor-wait'
           )}
         >
@@ -424,12 +433,12 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
                 <TrendingUp className="w-3.5 h-3.5" />
                 Popular Searches
               </div>
-              {['Bridal Makeup', 'Swedish Massage', 'Gel Nails', 'Hair Coloring', 'Facial'].map((term, index) => (
+              {trendingTerms.map((term, index) => (
                 <button
-                  key={`trending-${index}`}
+                  key={`trending-${term}-${index}`}
                   onClick={() => handleSuggestionClick(term)}
                   className={cn(
-                    'w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 transition-colors',
+                    'w-full text-left min-h-11 px-3 py-2.5 rounded-lg flex items-center gap-3 transition-colors',
                     selectedIndex === index ? 'bg-nilin-coral/10 text-nilin-coral' : 'hover:bg-nilin-blush/50'
                   )}
                 >

@@ -6,6 +6,7 @@ import Footer from '../../components/layout/Footer';
 import Button from '../../components/common/Button';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../services/chatApi';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 import toast from 'react-hot-toast';
 
 interface Provider {
@@ -54,7 +55,7 @@ const NewMessagePage: React.FC = () => {
         setExistingRoomId(existingRoom._id);
       }
     } catch (error) {
-      console.error('Failed to check existing conversation:', error);
+      showDeduplicatedError('Failed to check conversation');
     }
   };
 
@@ -92,9 +93,9 @@ const NewMessagePage: React.FC = () => {
 
       toast.success('Message sent successfully!');
       navigate('/customer/messages', { state: { roomId } });
-    } catch (error: any) {
-      console.error('Failed to send message:', error);
-      toast.error(error?.response?.data?.message || 'Failed to send message');
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { message?: string } } };
+      showDeduplicatedError('Failed to send message', axiosErr.response?.data?.message || 'Please try again');
     } finally {
       setSending(false);
     }

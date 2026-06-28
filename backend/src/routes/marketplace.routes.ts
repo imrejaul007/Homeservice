@@ -6,10 +6,26 @@ import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import ProviderProfile from '../models/providerProfile.model';
 import { subscriptionService } from '../services/subscription.service';
+import { membershipService } from '../services/membership.service';
 import { CUSTOMER_SUBSCRIPTION_PLANS } from '../constants/subscriptionPlans';
+import { MembershipTier } from '../models/premiumMembership.model';
 import logger from '../utils/logger';
 import type { ICustomerProfile } from '../models/customerProfile.model';
 import mongoose from 'mongoose';
+import customerController from '../controllers/customer.controller';
+import { validate } from '../middleware/validation.middleware';
+import Joi from 'joi';
+
+const updatePaymentMethodSchema = Joi.object({
+  isDefault: Joi.boolean(),
+  nickname: Joi.string().max(50).allow(''),
+});
+
+const paymentMethodSchema = Joi.object({
+  type: Joi.string().valid('card', 'apple_pay', 'google_pay').required(),
+  token: Joi.string().required(),
+  isDefault: Joi.boolean(),
+});
 
 const router = Router();
 
@@ -261,26 +277,27 @@ router.post('/payments/refund/:bookingId', authenticate, asyncHandler(async (req
 router.get('/payments/methods', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).user._id;
 
-  // Get customer profile for saved payment methods
   const CustomerProfileModel = (await import('../models/customerProfile.model')).default;
   const customerProfile = await CustomerProfileModel.findOne({ userId }) as ICustomerProfile | null;
 
-  // Also get Stripe payment methods if user has a Stripe customer ID
-  let stripePaymentMethods: any[] = [];
-  try {
-    const UserSubscription = (await import('../models/userSubscription.model')).default;
-    const subscription = await UserSubscription.findByUserId(userId);
+  const { ensureStripeCustomerId } = await import('../utils/stripeCustomer');
+  const stripeCustomerId = await ensureStripeCustomerId(userId);
 
-    if (subscription?.stripeCustomerId) {
-      // Import Stripe client from subscription service
+  let stripePaymentMethods: any[] = [];
+  let defaultPaymentMethodId: string | null = null;
+
+  if (stripeCustomerId) {
+    try {
       const { getStripeClient } = await import('../services/subscription.service');
       const stripe = getStripeClient();
 
-      // Fetch customer's payment methods from Stripe
       const stripeMethods = await stripe.paymentMethods.list({
-        customer: subscription.stripeCustomerId,
+        customer: stripeCustomerId,
         type: 'card',
       });
+
+      const stripeCustomer = await stripe.customers.retrieve(stripeCustomerId) as any;
+      defaultPaymentMethodId = stripeCustomer?.invoice_settings?.default_payment_method || null;
 
       stripePaymentMethods = stripeMethods.data.map((pm: any) => ({
         id: pm.id,
@@ -291,31 +308,19 @@ router.get('/payments/methods', authenticate, asyncHandler(async (req: Request, 
         expYear: pm.card?.exp_year,
         funding: pm.card?.funding,
         country: pm.card?.country,
-        isDefault: pm.id === subscription.stripePriceId, // Will be enhanced below
+        isDefault: pm.id === defaultPaymentMethodId,
+        source: 'stripe',
       }));
-
-      // Get the default payment method from the customer
-      const stripeCustomer = await stripe.customers.retrieve(subscription.stripeCustomerId) as any;
-      if (stripeCustomer?.invoice_settings?.default_payment_method) {
-        stripePaymentMethods = stripePaymentMethods.map((pm: any) => ({
-          ...pm,
-          isDefault: pm.id === stripeCustomer.invoice_settings.default_payment_method,
-        }));
-      }
+    } catch (stripeError) {
+      logger.warn('Failed to fetch Stripe payment methods', {
+        userId,
+        error: (stripeError as Error).message,
+        action: 'STRIPE_PAYMENT_METHODS_FETCH_FAILED',
+      });
     }
-  } catch (stripeError) {
-    // Log but don't fail - Stripe might not be configured
-    logger.warn('Failed to fetch Stripe payment methods', {
-      userId,
-      error: (stripeError as Error).message,
-      action: 'STRIPE_PAYMENT_METHODS_FETCH_FAILED'
-    });
   }
 
-  // Combine local and Stripe payment methods, prioritizing Stripe methods
   const combinedMethods = [...stripePaymentMethods];
-
-  // Add any local payment methods that aren't in Stripe
   const stripeMethodIds = stripePaymentMethods.map((pm: any) => pm.id);
   const localMethods = (customerProfile?.paymentMethods || []).filter(
     (m: any) => !m.stripePaymentMethodId || !stripeMethodIds.includes(m.stripePaymentMethodId)
@@ -334,68 +339,61 @@ router.get('/payments/methods', authenticate, asyncHandler(async (req: Request, 
     });
   });
 
-  // Set default method
   const defaultMethod = combinedMethods.find((m: any) => m.isDefault) || combinedMethods[0];
 
   res.json({
     success: true,
     data: {
-      paymentMethods: combinedMethods,
-      defaultMethod,
-      hasStripeCustomer: !!customerProfile?.stripeCustomerId,
-    }
+      paymentMethods: combinedMethods.map((method: any) => ({
+        ...method,
+        _id: method._id || method.id,
+        id: method.id || method._id,
+        expiryMonth: method.expiryMonth ?? method.expMonth,
+        expiryYear: method.expiryYear ?? method.expYear,
+      })),
+      defaultMethod: defaultMethod
+        ? {
+            ...defaultMethod,
+            _id: defaultMethod._id || defaultMethod.id,
+            id: defaultMethod.id || defaultMethod._id,
+          }
+        : null,
+      hasStripeCustomer: !!stripeCustomerId,
+    },
   });
 }));
 
 /**
  * @route   POST /api/payments/methods
- * @desc    Add a new payment method
+ * @desc    Add a new payment method (Stripe)
  * @access  Private
  */
-router.post('/payments/methods', authenticate, asyncHandler(async (req: Request, res: Response) => {
-  const { type, token, isDefault } = req.body;
-  const userId = (req as any).user._id;
+router.post('/payments/methods', authenticate, validate(paymentMethodSchema), customerController.addPaymentMethod);
 
-  if (!type || !token) {
-    throw new ApiError(400, 'Payment method type and token are required');
-  }
+/**
+ * @route   DELETE /api/payments/methods/:paymentMethodId
+ * @desc    Remove a saved payment method
+ * @access  Private
+ */
+router.delete(
+  '/payments/methods/:paymentMethodId',
+  authenticate,
+  customerController.deletePaymentMethod
+);
 
-  const CustomerProfileModel = (await import('../models/customerProfile.model')).default;
-  let customerProfile = await CustomerProfileModel.findOne({ userId }) as ICustomerProfile | null;
+/**
+ * @route   PATCH /api/payments/methods/:paymentMethodId
+ * @desc    Update payment method (e.g. set default)
+ * @access  Private
+ */
+router.patch(
+  '/payments/methods/:paymentMethodId',
+  authenticate,
+  validate(updatePaymentMethodSchema),
+  customerController.updatePaymentMethod
+);
 
-  if (!customerProfile) {
-    customerProfile = new CustomerProfileModel({ userId }) as ICustomerProfile;
-  }
-
-  // Add new payment method
-  const newMethod = {
-    type,
-    token,
-    last4: req.body.last4 || '****',
-    brand: req.body.brand || type,
-    expiryMonth: req.body.expiryMonth,
-    expiryYear: req.body.expiryYear,
-    isDefault: isDefault || customerProfile.paymentMethods.length === 0,
-    isActive: true,
-    createdAt: new Date()
-  };
-
-  // If setting as default, unset others
-  if (isDefault) {
-    customerProfile.paymentMethods.forEach(m => m.isDefault = false);
-  }
-
-  customerProfile.paymentMethods.push(newMethod);
-  await customerProfile.save();
-
-  res.json({
-    success: true,
-    message: 'Payment method added',
-    data: {
-      methodId: customerProfile.paymentMethods[customerProfile.paymentMethods.length - 1]._id
-    }
-  });
-}));
+// Legacy POST handler removed — use customerController Stripe integration above
 
 // ============================================
 // SUBSCRIPTION ENDPOINTS
@@ -712,6 +710,277 @@ router.get('/subscription/usage', authenticate, asyncHandler(async (req: Request
 }));
 
 /**
+ * @route   POST /api/subscription/reactivate
+ * @desc    Reactivate a subscription scheduled for cancellation
+ * @access  Private
+ */
+router.post('/subscription/reactivate', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const subscription = await subscriptionService.reactivateSubscription(userId);
+
+  res.json({
+    success: true,
+    message: 'Subscription reactivated successfully',
+    data: {
+      tier: subscription.plan,
+      status: subscription.status,
+      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+    },
+  });
+}));
+
+/**
+ * @route   PATCH /api/subscription/plan
+ * @desc    Change subscription plan
+ * @access  Private
+ */
+router.patch('/subscription/plan', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { plan, tier, billingCycle, immediate, reason } = req.body;
+  const newPlan = plan || tier;
+
+  if (!newPlan) {
+    throw new ApiError(400, 'Plan is required');
+  }
+
+  const subscription = await subscriptionService.changePlan(userId, newPlan, {
+    billingCycle,
+    immediate,
+    reason,
+  });
+
+  res.json({
+    success: true,
+    message: 'Subscription plan updated',
+    data: {
+      tier: subscription.plan,
+      status: subscription.status,
+      billingCycle: subscription.billingCycle,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+    },
+  });
+}));
+
+/**
+ * @route   PATCH /api/subscription/payment-method
+ * @desc    Update subscription payment method
+ * @access  Private
+ */
+router.patch('/subscription/payment-method', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { paymentMethodId } = req.body;
+
+  if (!paymentMethodId) {
+    throw new ApiError(400, 'Payment method ID is required');
+  }
+
+  const subscription = await subscriptionService.updatePaymentMethod(userId, paymentMethodId);
+
+  res.json({
+    success: true,
+    message: 'Payment method updated',
+    data: {
+      tier: subscription.plan,
+      status: subscription.status,
+    },
+  });
+}));
+
+/**
+ * @route   GET /api/subscription/history
+ * @desc    Get subscription billing history
+ * @access  Private
+ */
+router.get('/subscription/history', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { page, limit } = req.query;
+
+  const history = await subscriptionService.getBillingHistory(userId, {
+    page: page ? Number(page) : undefined,
+    limit: limit ? Number(limit) : undefined,
+  });
+
+  res.json({ success: true, data: history });
+}));
+
+/**
+ * @route   GET /api/subscription/permissions/:action
+ * @desc    Check subscription permission for an action
+ * @access  Private
+ */
+router.get('/subscription/permissions/:action', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const action = req.params.action as 'booking' | 'featuredListing';
+
+  if (!['booking', 'featuredListing'].includes(action)) {
+    throw new ApiError(400, 'Invalid action. Must be booking or featuredListing');
+  }
+
+  const result = await subscriptionService.checkPermission(userId, action);
+
+  res.json({ success: true, data: result });
+}));
+
+// Plural aliases for frontend compatibility
+router.get('/subscriptions/me', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id;
+  const subscription = await subscriptionService.getSubscriptionByUserId(userId);
+
+  if (!subscription) {
+    return res.json({
+      success: true,
+      data: {
+        plan: 'free',
+        tier: 'free',
+        status: 'active',
+        features: CUSTOMER_SUBSCRIPTION_PLANS.free.features,
+      },
+    });
+  }
+
+  return res.json({
+    success: true,
+    data: {
+      id: subscription._id,
+      plan: subscription.plan,
+      tier: subscription.plan,
+      status: subscription.status,
+      billingCycle: subscription.billingCycle,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+      price: subscription.price,
+      currency: subscription.currency,
+      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+      features: CUSTOMER_SUBSCRIPTION_PLANS[subscription.plan]?.features || CUSTOMER_SUBSCRIPTION_PLANS.free.features,
+      usage: subscription.usage,
+    },
+  });
+}));
+
+router.get('/subscriptions/plans', asyncHandler(async (_req: Request, res: Response) => {
+  const plans = Object.entries(CUSTOMER_SUBSCRIPTION_PLANS).map(([id, plan]) => ({
+    id,
+    name: plan.name,
+    price: plan.price,
+    currency: 'AED',
+    features: plan.features,
+    limits: plan.limits,
+  }));
+  res.json({ success: true, data: plans });
+}));
+
+router.post('/subscriptions', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { plan, tier, billingCycle, paymentMethodId } = req.body;
+  const selectedTier = tier || plan;
+  const userId = (req as any).user._id;
+
+  if (!selectedTier) {
+    throw new ApiError(400, 'Subscription tier is required');
+  }
+
+  const subscription = await subscriptionService.createSubscription({
+    userId: userId.toString(),
+    plan: selectedTier,
+    billingCycle: billingCycle || 'monthly',
+    paymentMethodId,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      id: subscription._id,
+      tier: subscription.plan,
+      plan: subscription.plan,
+      status: subscription.status,
+      billingCycle: subscription.billingCycle,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+    },
+  });
+}));
+
+router.patch('/subscriptions/plan', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { plan, tier, billingCycle, immediate, reason } = req.body;
+  const newPlan = plan || tier;
+  if (!newPlan) throw new ApiError(400, 'Plan is required');
+  const subscription = await subscriptionService.changePlan(userId, newPlan, { billingCycle, immediate, reason });
+  res.json({
+    success: true,
+    data: {
+      tier: subscription.plan,
+      plan: subscription.plan,
+      status: subscription.status,
+      billingCycle: subscription.billingCycle,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+    },
+  });
+}));
+
+router.post('/subscriptions/cancel', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { immediate, reason } = req.body;
+  const subscription = await subscriptionService.cancelSubscription(userId, { immediate, reason });
+  res.json({
+    success: true,
+    data: {
+      tier: subscription.plan,
+      plan: subscription.plan,
+      status: subscription.status,
+      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+    },
+  });
+}));
+
+router.post('/subscriptions/reactivate', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const subscription = await subscriptionService.reactivateSubscription(userId);
+  res.json({
+    success: true,
+    data: {
+      tier: subscription.plan,
+      plan: subscription.plan,
+      status: subscription.status,
+      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+    },
+  });
+}));
+
+router.patch('/subscriptions/payment-method', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { paymentMethodId } = req.body;
+  if (!paymentMethodId) throw new ApiError(400, 'Payment method ID is required');
+  const subscription = await subscriptionService.updatePaymentMethod(userId, paymentMethodId);
+  res.json({
+    success: true,
+    data: { tier: subscription.plan, plan: subscription.plan, status: subscription.status },
+  });
+}));
+
+router.get('/subscriptions/usage', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const usage = await subscriptionService.getUsageStats(userId);
+  res.json({ success: true, data: usage });
+}));
+
+router.get('/subscriptions/permissions/:action', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const action = req.params.action as 'booking' | 'featuredListing';
+  const result = await subscriptionService.checkPermission(userId, action);
+  res.json({ success: true, data: result });
+}));
+
+router.get('/subscriptions/history', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id.toString();
+  const { page, limit } = req.query;
+  const history = await subscriptionService.getBillingHistory(userId, {
+    page: page ? Number(page) : undefined,
+    limit: limit ? Number(limit) : undefined,
+  });
+  res.json({ success: true, data: history });
+}));
+
+/**
  * @route   GET /api/subscriptions/invoices
  * @desc    Get invoices for the current user's subscription
  * @access  Private
@@ -873,6 +1142,42 @@ router.get('/subscriptions/invoices/:id/pdf-url', authenticate, asyncHandler(asy
       expiresAt: expiresAt.toISOString(),
     },
   });
+}));
+
+// ============================================
+// ADMIN SUBSCRIPTION & MEMBERSHIP
+// ============================================
+
+router.get('/admin/subscriptions', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { page, limit, status, plan } = req.query;
+  const result = await subscriptionService.getAllSubscriptions({
+    page: page ? Number(page) : undefined,
+    limit: limit ? Number(limit) : undefined,
+    status: status as any,
+    plan: plan as any,
+  });
+  res.json({ success: true, data: result });
+}));
+
+router.get('/admin/subscriptions/stats', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  const stats = await subscriptionService.getStats();
+  res.json({ success: true, data: stats });
+}));
+
+router.get('/admin/memberships', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { page, limit, tier, status } = req.query;
+  const result = await membershipService.getAllMemberships({
+    page: page ? Number(page) : undefined,
+    limit: limit ? Number(limit) : undefined,
+    tier: tier as MembershipTier | undefined,
+    status: status as string | undefined,
+  });
+  res.json({ success: true, data: result });
+}));
+
+router.get('/admin/memberships/stats', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  const stats = await membershipService.getStats();
+  res.json({ success: true, data: stats });
 }));
 
 // ============================================

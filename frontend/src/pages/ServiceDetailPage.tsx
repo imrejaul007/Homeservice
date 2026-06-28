@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
+import { showDeduplicatedError } from '../utils/toastUtils';
 import {
   MapPin, Clock, Star, Heart, Share2, CheckCircle,
   AlertTriangle, User, Award, ChevronRight
@@ -119,9 +120,9 @@ const ServiceDetailPage: React.FC = () => {
       setLoading(true);
       setError(null);
       const response = await searchApi.getServiceById(id);
-      if (response.success && response.data.service) {
+      if (response.success && response.data?.service) {
         const loaded = response.data.service;
-        setService(loaded);
+        setService(loaded as ServiceDetail);
         if (loaded.provider?._id) {
           analyticsService.trackProviderFunnelEvent('service.service_viewed', {
             providerId: loaded.provider._id,
@@ -129,11 +130,15 @@ const ServiceDetailPage: React.FC = () => {
             serviceName: loaded.name,
           });
         }
+      } else {
+        setError('Service not found');
+        setService(null);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load service';
       setError(message);
-      toast.error(message);
+      setService(null);
+      showDeduplicatedError('Failed to load service', message);
     } finally {
       setLoading(false);
     }
@@ -144,14 +149,19 @@ const ServiceDetailPage: React.FC = () => {
       toast.error('Please wait for service to load');
       return;
     }
+    const serviceId = service._id || id;
+    if (!serviceId) {
+      toast.error('Service unavailable for booking');
+      return;
+    }
     if (service.provider?._id) {
       analyticsService.trackProviderFunnelEvent('booking.book_now_clicked', {
         providerId: service.provider._id,
-        serviceId: service._id,
+        serviceId,
         serviceName: service.name,
       });
     }
-    navigate(`/book/${id}`, {
+    navigate(`/book/${serviceId}`, {
       state: {
         service,
         providerId: service.provider?._id
@@ -181,7 +191,7 @@ const ServiceDetailPage: React.FC = () => {
       toast.success(result.isFavorited ? 'Added to favorites' : 'Removed from favorites');
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
-      toast.error('Failed to update favorites. Please try again.');
+      showDeduplicatedError('Failed to update favorites', 'Please try again.');
     } finally {
       setIsFavoriting(false);
     }
@@ -288,15 +298,17 @@ const ServiceDetailPage: React.FC = () => {
                   <button
                     onClick={toggleFavorite}
                     disabled={isFavoriting}
-                    className={`p-2.5 rounded-full bg-white/90 backdrop-blur-sm shadow-md transition-colors ${
+                    className={`w-11 h-11 flex items-center justify-center rounded-full bg-white/90 backdrop-blur-sm shadow-md transition-colors ${
                       isFavoriting ? 'opacity-50 cursor-not-allowed' : isFavorited ? 'text-red-500' : 'text-gray-600 hover:text-red-500'
                     }`}
+                    aria-label={isFavorited ? 'Remove from favorites' : 'Add to favorites'}
                   >
                     <Heart className={`w-5 h-5 ${isFavorited ? 'fill-current' : ''}`} />
                   </button>
                   <button
                     onClick={shareService}
-                    className="p-2.5 rounded-full bg-white/90 backdrop-blur-sm shadow-md text-gray-600 hover:text-blue-500 transition-colors"
+                    className="w-11 h-11 flex items-center justify-center rounded-full bg-white/90 backdrop-blur-sm shadow-md text-gray-600 hover:text-blue-500 transition-colors"
+                    aria-label="Share service"
                   >
                     <Share2 className="w-5 h-5" />
                   </button>
@@ -314,7 +326,7 @@ const ServiceDetailPage: React.FC = () => {
                   {service.category}
                 </span>
                 <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-3">{service.name}</h1>
-                <div className="flex items-center gap-4 text-sm text-nilin-warmGray mb-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-nilin-warmGray mb-4">
                   <div className="flex items-center gap-1.5">
                     <div className="flex items-center gap-0.5 px-2 py-1 bg-green-50 rounded">
                       <Star className="w-3.5 h-3.5 text-green-600 fill-green-600" />

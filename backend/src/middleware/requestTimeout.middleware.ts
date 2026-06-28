@@ -288,11 +288,9 @@ export const withTimeout = <T>(
               timeout: timeoutMs,
             },
           });
-          next(); // Signal to Express that response is complete
-        } else {
-          // Headers already sent - propagate error to trigger error handlers
-          next(error);
+          // Don't call next() here - response is already sent
         }
+        // If headers were sent, we don't need to do anything - the response is already complete
       } else {
         next(error);
       }

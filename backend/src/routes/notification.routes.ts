@@ -4,11 +4,12 @@ import BookingNotification from '../models/bookingNotification.model';
 import authMiddleware from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import Joi from 'joi';
+import { escapeHtml } from '../utils/security';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { notificationAnalyticsService } from '../services/notificationAnalytics.service';
 import { notificationService, NotificationType } from '../services/notification.service';
-import { formatNotificationForApi } from '../utils/notificationHelpers';
+import { formatNotificationForApi, normalizeBackendNotificationType, type NotificationCategory } from '../utils/notificationHelpers';
 
 const router = Router();
 
@@ -251,17 +252,24 @@ interface Notification {
 // Get notifications (unified BookingNotification store)
 const getNotifications = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { page = '1', limit = '20', unreadOnly } = req.query;
+  const { page = '1', limit = '20', unreadOnly, type } = req.query;
 
   await notificationService.migrateLegacyNotifications(user._id.toString());
 
   const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
   const limitNum = Math.min(Math.max(1, parseInt(limit as string, 10) || 20), 100);
 
+  // Normalize type filter for query building
+  let typeFilter: NotificationCategory | undefined;
+  if (type && typeof type === 'string') {
+    typeFilter = normalizeBackendNotificationType(type);
+  }
+
   const result = await notificationService.getUserNotifications(user._id.toString(), {
     page: pageNum,
     limit: limitNum,
     unreadOnly: unreadOnly === 'true',
+    type: typeFilter,
   });
 
   res.json({
@@ -388,14 +396,27 @@ const trackDelivery = asyncHandler(async (req: Request, res: Response) => {
     throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
-  await notificationAnalyticsService.trackDelivery(
-    notificationId,
-    user._id,
-    channel || 'in_app',
-    true
-  );
+  try {
+    await notificationAnalyticsService.trackDelivery(
+      notificationId,
+      user._id,
+      channel || 'in_app',
+      true
+    );
+  } catch (error: any) {
+    // Handle rate limit errors
+    if (error.message.includes('Rate limit exceeded')) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests',
+        message: error.message,
+        retryAfter: 60,
+      });
+    }
+    throw error;
+  }
 
-  res.json({
+  return res.json({
     success: true,
     message: 'Delivery tracked',
   });
@@ -416,13 +437,26 @@ const trackClick = asyncHandler(async (req: Request, res: Response) => {
     throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
-  await notificationAnalyticsService.trackClick(
-    notificationId,
-    user._id,
-    channel || 'in_app'
-  );
+  try {
+    await notificationAnalyticsService.trackClick(
+      notificationId,
+      user._id,
+      channel || 'in_app'
+    );
+  } catch (error: any) {
+    // Handle rate limit errors
+    if (error.message.includes('Rate limit exceeded')) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests',
+        message: error.message,
+        retryAfter: 60,
+      });
+    }
+    throw error;
+  }
 
-  res.json({
+  return res.json({
     success: true,
     message: 'Click tracked',
   });
@@ -443,13 +477,26 @@ const trackView = asyncHandler(async (req: Request, res: Response) => {
     throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
-  await notificationAnalyticsService.trackView(
-    notificationId,
-    user._id,
-    channel || 'in_app'
-  );
+  try {
+    await notificationAnalyticsService.trackView(
+      notificationId,
+      user._id,
+      channel || 'in_app'
+    );
+  } catch (error: any) {
+    // Handle rate limit errors
+    if (error.message.includes('Rate limit exceeded')) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests',
+        message: error.message,
+        retryAfter: 60,
+      });
+    }
+    throw error;
+  }
 
-  res.json({
+  return res.json({
     success: true,
     message: 'View tracked',
   });
@@ -586,6 +633,10 @@ const sendNotification = asyncHandler(async (req: Request, res: Response): Promi
 
   const { userId, type, title, message, data, channels } = value;
 
+  // Sanitize title and message to prevent XSS attacks
+  const sanitizedTitle = escapeHtml(String(title).trim());
+  const sanitizedMessage = escapeHtml(String(message).trim());
+
   // Verify target user exists
   const targetUser = await User.findById(userId);
   if (!targetUser) {
@@ -600,8 +651,8 @@ const sendNotification = asyncHandler(async (req: Request, res: Response): Promi
   await notificationService.createNotification({
     recipientId: userId,
     type: type as NotificationType,
-    title,
-    message,
+    title: sanitizedTitle,
+    message: sanitizedMessage,
     metadata: data,
     channels: channels as any,
   });
@@ -623,6 +674,11 @@ router.get('/preferences',
 );
 
 router.patch('/preferences',
+  authMiddleware.authenticate,
+  updatePreferences
+);
+
+router.put('/preferences',
   authMiddleware.authenticate,
   updatePreferences
 );

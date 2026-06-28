@@ -13,6 +13,8 @@ import {
   archiveCoupon,
   cloneCoupon,
   updateCouponStatus,
+  bulkDeactivateCoupons,
+  bulkDeleteCoupons,
 } from '../controllers/coupon.controller';
 
 const router = Router();
@@ -137,6 +139,22 @@ router.get('/stats', getCouponStats);
  * Create a new coupon
  */
 router.post('/', validateCreateCoupon, createCoupon);
+
+// ============================================
+// BULK OPERATION ROUTES (before /:id routes)
+// ============================================
+
+/**
+ * POST /api/admin/coupons/bulk/deactivate
+ * Bulk deactivate coupons
+ */
+router.post('/bulk/deactivate', bulkDeactivateCoupons);
+
+/**
+ * DELETE /api/admin/coupons/bulk
+ * Bulk delete coupons
+ */
+router.delete('/bulk', bulkDeleteCoupons);
 
 // ============================================
 // ROUTES WITH :id - Specific routes BEFORE parameterized /:id

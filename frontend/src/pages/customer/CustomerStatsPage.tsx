@@ -23,8 +23,8 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { loyaltyApi, type LoyaltyStatus } from '../../services/loyaltyApi';
-import { toast } from 'react-hot-toast';
-import { logger } from '../../utils/logger';
+import { showDeduplicatedError } from '../../utils/toastUtils';
+import { customerApi } from '../../services/customerApi';
 
 interface StatCard {
   title: string;
@@ -53,9 +53,14 @@ const CustomerStatsPage: React.FC = () => {
 
   useEffect(() => {
     const currentRequestId = ++requestIdRef.current;
-    getCustomerBookings({ limit: 100 });
+    getCustomerBookings({ limit: 100 }).catch(() => {
+      showDeduplicatedError('Failed to load bookings');
+    });
     fetchLoyaltyStatus(currentRequestId);
-  }, [selectedPeriod]);
+    customerApi.getCustomerAnalytics(selectedPeriod).catch(() => {
+      // Client-side period filtering remains the primary stats source.
+    });
+  }, [selectedPeriod, getCustomerBookings]);
 
   const fetchLoyaltyStatus = async (requestId: number) => {
     try {
@@ -65,12 +70,42 @@ const CustomerStatsPage: React.FC = () => {
     } catch {
       if (requestId !== requestIdRef.current) return; // Ignore stale error
       // Silent failure - loyalty status will not display
-      toast.error('Failed to load loyalty status');
+      showDeduplicatedError('Failed to load loyalty status');
     }
   };
 
+  const getPeriodStart = (period: 'week' | 'month' | 'year'): number => {
+    const now = new Date();
+    switch (period) {
+      case 'week':
+        return now.getTime() - 7 * 24 * 60 * 60 * 1000;
+      case 'year':
+        return now.getTime() - 365 * 24 * 60 * 60 * 1000;
+      default:
+        return now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    }
+  };
+
+  const getPreviousPeriodRange = (period: 'week' | 'month' | 'year'): { start: number; end: number } => {
+    const periodMs = period === 'week'
+      ? 7 * 24 * 60 * 60 * 1000
+      : period === 'year'
+        ? 365 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    return { start: now - periodMs * 2, end: now - periodMs };
+  };
+
   const calculateStats = () => {
-    if (!customerBookings || customerBookings.length === 0) {
+    const periodStart = getPeriodStart(selectedPeriod);
+    const previousRange = getPreviousPeriodRange(selectedPeriod);
+
+    const periodBookings = (customerBookings ?? []).filter((booking) => {
+      const ts = new Date(booking.createdAt || booking.scheduledDate || 0).getTime();
+      return ts >= periodStart;
+    });
+
+    if (periodBookings.length === 0) {
       return {
         totalBookings: 0,
         totalSpent: 0,
@@ -78,23 +113,47 @@ const CustomerStatsPage: React.FC = () => {
         pendingBookings: 0,
         cancelledBookings: 0,
         averageSpent: 0,
-        favoriteCategory: 'N/A'
+        favoriteCategory: 'N/A',
+        bookingsGrowthPct: 0,
+        spentGrowthPct: 0,
       };
     }
 
-    const totalBookings = customerBookings.length;
-    const totalSpent = customerBookings.reduce((sum, booking) => sum + (booking.pricing?.totalAmount || booking.pricing?.total || 0), 0);
-    const completedBookings = customerBookings.filter(b => b.status === 'completed').length;
-    const pendingBookings = customerBookings.filter(b => b.status === 'pending').length;
-    const cancelledBookings = customerBookings.filter(b => b.status === 'cancelled').length;
-    const averageSpent = totalSpent / totalBookings;
+    const totalBookings = periodBookings.length;
+    const totalSpent = periodBookings.reduce((sum, booking) => sum + (booking.pricing?.totalAmount || booking.pricing?.total || 0), 0);
+    const completedBookings = periodBookings.filter(b => b.status === 'completed').length;
+    const pendingBookings = periodBookings.filter(b => b.status === 'pending').length;
+    const cancelledBookings = periodBookings.filter(b => b.status === 'cancelled').length;
+    const averageSpent = totalBookings > 0 ? totalSpent / totalBookings : 0;
 
     const categoryCount: { [key: string]: number } = {};
-    customerBookings.forEach(booking => {
+    periodBookings.forEach(booking => {
       const category = booking.service?.category || 'Other';
       categoryCount[category] = (categoryCount[category] || 0) + 1;
     });
     const favoriteCategory = Object.entries(categoryCount).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+
+    const currentPeriodBookings = periodBookings;
+    const previousPeriodBookings = (customerBookings ?? []).filter((b) => {
+      const ts = new Date(b.createdAt || b.scheduledDate || 0).getTime();
+      return ts >= previousRange.start && ts < previousRange.end;
+    });
+
+    const currentPeriodSpent = currentPeriodBookings.reduce(
+      (sum, b) => sum + (b.pricing?.totalAmount || b.pricing?.total || 0),
+      0
+    );
+    const previousPeriodSpent = previousPeriodBookings.reduce(
+      (sum, b) => sum + (b.pricing?.totalAmount || b.pricing?.total || 0),
+      0
+    );
+
+    const bookingsGrowthPct = previousPeriodBookings.length > 0
+      ? Math.round(((currentPeriodBookings.length - previousPeriodBookings.length) / previousPeriodBookings.length) * 100)
+      : 0;
+    const spentGrowthPct = previousPeriodSpent > 0
+      ? Math.round(((currentPeriodSpent - previousPeriodSpent) / previousPeriodSpent) * 100)
+      : 0;
 
     return {
       totalBookings,
@@ -103,7 +162,9 @@ const CustomerStatsPage: React.FC = () => {
       pendingBookings,
       cancelledBookings,
       averageSpent,
-      favoriteCategory
+      favoriteCategory,
+      bookingsGrowthPct,
+      spentGrowthPct,
     };
   };
 
@@ -113,15 +174,15 @@ const CustomerStatsPage: React.FC = () => {
     {
       title: 'Total Bookings',
       value: stats.totalBookings,
-      change: '+12%',
-      changeType: 'increase',
+      change: `${stats.bookingsGrowthPct >= 0 ? '+' : ''}${stats.bookingsGrowthPct}%`,
+      changeType: stats.bookingsGrowthPct >= 0 ? 'increase' : 'decrease',
       icon: <Calendar className="h-5 w-5" />
     },
     {
       title: 'Total Spent',
       value: `AED ${stats.totalSpent.toFixed(0)}`,
-      change: '+8%',
-      changeType: 'increase',
+      change: `${stats.spentGrowthPct >= 0 ? '+' : ''}${stats.spentGrowthPct}%`,
+      changeType: stats.spentGrowthPct >= 0 ? 'increase' : 'decrease',
       icon: <DollarSign className="h-5 w-5" />
     },
     {
@@ -184,13 +245,18 @@ const CustomerStatsPage: React.FC = () => {
     },
     {
       title: 'Rewards',
-      description: 'Points & benefits',
+      description: 'Coins & benefits',
       icon: <Award className="h-5 w-5" />,
       link: '/customer/rewards'
     }
   ];
 
-  const recentBookings = customerBookings?.slice(0, 5) || [];
+  const recentBookings = (customerBookings ?? [])
+    .filter((booking) => {
+      const ts = new Date(booking.createdAt || booking.scheduledDate || 0).getTime();
+      return ts >= getPeriodStart(selectedPeriod);
+    })
+    .slice(0, 5);
 
   if (isLoading) {
     return (
@@ -469,7 +535,7 @@ const CustomerStatsPage: React.FC = () => {
                       <div>
                         <div className="flex items-center justify-between text-xs text-nilin-warmGray mb-1">
                           <span>Progress to {loyaltyStatus.nextTier}</span>
-                          <span>{loyaltyStatus.pointsToNextTier.toLocaleString()} points to go</span>
+                          <span>{loyaltyStatus.pointsToNextTier.toLocaleString()} coins to go</span>
                         </div>
                         <div className="h-2 bg-nilin-muted rounded-full overflow-hidden">
                           <div
@@ -494,7 +560,7 @@ const CustomerStatsPage: React.FC = () => {
                         {stats.totalBookings * 10}
                       </span>
                     </div>
-                    <p className="text-sm text-nilin-warmGray">Earn more points with each booking</p>
+                    <p className="text-sm text-nilin-warmGray">Earn more coins with each booking</p>
                   </div>
                 )}
               </div>

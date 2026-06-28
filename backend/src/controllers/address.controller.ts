@@ -4,19 +4,45 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import Joi from 'joi';
 
+// Enhanced Joi validation schema for address input
 const addressSchema = Joi.object({
-  label: Joi.string().required(),
-  street: Joi.string().required(),
-  city: Joi.string().required(),
-  state: Joi.string().required(),
-  country: Joi.string().default('India'),
-  zipCode: Joi.string().required(),
+  label: Joi.string().min(1).max(50).required().messages({
+    'string.min': 'Label is required',
+    'string.max': 'Label cannot exceed 50 characters',
+  }),
+  street: Joi.string().min(1).max(200).required().messages({
+    'string.min': 'Street address is required',
+    'string.max': 'Street address cannot exceed 200 characters',
+  }),
+  city: Joi.string().min(1).max(100).required().messages({
+    'string.min': 'City is required',
+    'string.max': 'City cannot exceed 100 characters',
+  }),
+  state: Joi.string().min(1).max(100).required().messages({
+    'string.min': 'State is required',
+    'string.max': 'State cannot exceed 100 characters',
+  }),
+  country: Joi.string().min(1).max(100).default('India').messages({
+    'string.min': 'Country is required',
+  }),
+  zipCode: Joi.string().min(1).max(20).required().messages({
+    'string.min': 'Postal/ZIP code is required',
+    'string.max': 'Postal/ZIP code cannot exceed 20 characters',
+  }),
   isDefault: Joi.boolean().default(false),
   coordinates: Joi.object({
-    lat: Joi.number(),
-    lng: Joi.number(),
+    lat: Joi.number().min(-90).max(90).required().messages({
+      'number.min': 'Latitude must be between -90 and 90',
+      'number.max': 'Latitude must be between -90 and 90',
+    }),
+    lng: Joi.number().min(-180).max(180).required().messages({
+      'number.min': 'Longitude must be between -180 and 180',
+      'number.max': 'Longitude must be between -180 and 180',
+    }),
+  }).optional(),
+  instructions: Joi.string().max(500).allow('').optional().messages({
+    'string.max': 'Delivery instructions cannot exceed 500 characters',
   }),
-  instructions: Joi.string(),
 });
 
 export const getAllAddresses = asyncHandler(async (req: Request, res: Response) => {

@@ -39,6 +39,6 @@ export const useRecentlyViewedStore = create<RecentlyViewedState>()(
       },
       clearViewed: () => set({ viewed: [] }),
     }),
-    { name: 'nilin-recently-viewed' }
+    { name: 'nilin-recently-viewed', version: 1 }
   )
 );

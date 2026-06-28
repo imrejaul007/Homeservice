@@ -48,12 +48,12 @@ export const registerCustomer = asyncHandler(async (req: Request, res: Response)
   const result = await authService.registerCustomer(dto);
 
   // Set refresh token as HTTP-only cookie
-  if (result.tokens.refreshToken) {
+  if (result.tokens?.refreshToken) {
     res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
   }
 
   // Set access token as HTTP-only cookie for web clients
-  if (result.tokens.accessToken) {
+  if (result.tokens?.accessToken) {
     setAuthCookie(res, result.tokens.accessToken);
   }
 
@@ -96,12 +96,12 @@ export const registerProvider = asyncHandler(async (req: Request, res: Response)
   const result = await authService.registerProvider(dto);
 
   // Set refresh token as HTTP-only cookie
-  if (result.tokens.refreshToken) {
+  if (result.tokens?.refreshToken) {
     res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
   }
 
   // Set access token as HTTP-only cookie for web clients
-  if (result.tokens.accessToken) {
+  if (result.tokens?.accessToken) {
     setAuthCookie(res, result.tokens.accessToken);
   }
 
@@ -179,6 +179,59 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   const rememberMe = value.rememberMe || false;
   const result = await authService.login(value.email, value.password, clientIP, rememberMe);
 
+  if (result.requires2FA) {
+    return res.json({
+      success: true,
+      message: 'Two-factor authentication required',
+      data: {
+        requires2FA: true,
+        preAuthToken: result.preAuthToken,
+        user: {
+          id: result.user.id,
+          email: result.user.email,
+          firstName: result.user.firstName,
+        },
+        redirectUrl: result.redirectUrl,
+      },
+    });
+  }
+
+  if (!result.tokens) {
+    throw new ApiError(500, 'Authentication failed');
+  }
+
+  const loginResponse = await finalizeLoginSession(req, res, result, rememberMe);
+  return res.json(loginResponse);
+});
+
+export const verifyLogin2FA = asyncHandler(async (req: Request, res: Response) => {
+  const { verifyLogin2FASchema } = await import('../validation/auth.validation');
+  const { error, value } = verifyLogin2FASchema.validate(req.body);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  const result = await authService.verifyLogin2FA(value.preAuthToken, value.code, clientIP);
+
+  if (!result.tokens) {
+    throw new ApiError(500, 'Authentication failed');
+  }
+
+  const loginResponse = await finalizeLoginSession(req, res, result, false);
+  return res.json(loginResponse);
+});
+
+async function finalizeLoginSession(
+  req: Request,
+  res: Response,
+  result: Awaited<ReturnType<typeof authService.login>>,
+  rememberMe: boolean
+) {
+  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  const acceptLanguage = req.headers['accept-language'];
+
   // Parse user agent for device info
   const deviceInfo = parseUserAgent(userAgent);
 
@@ -189,8 +242,9 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
 
   let isNewDevice = false;
   let isRecognizedDevice = true;
+  let sessionId = '';
 
-  if (userDoc) {
+  if (userDoc && result.tokens) {
     // Import device fingerprinting function
     const { generateDeviceFingerprint } = await import('../services/auth.service');
 
@@ -211,7 +265,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
     });
 
     // Generate session ID and calculate expiry (30 days)
-    const sessionId = crypto.randomBytes(32).toString('hex');
+    sessionId = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30);
 
@@ -331,22 +385,23 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   // Set refresh token as HTTP-only cookie
   // Cookie expiry: 30 days if rememberMe, 7 days otherwise
   const cookieMaxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  if (result.tokens.refreshToken) {
+  if (result.tokens?.refreshToken) {
     res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(cookieMaxAge));
   }
 
   // Set access token as HTTP-only cookie for web clients
-  if (result.tokens.accessToken) {
+  if (result.tokens?.accessToken) {
     setAuthCookie(res, result.tokens.accessToken);
   }
 
-  res.json({
+  return {
     success: true,
     message: 'Login successful',
     data: {
       user: result.user,
       ...result.roleSpecificData,
       tokens: result.tokens,
+      sessionId: sessionId || undefined,
       redirectUrl: result.redirectUrl,
       requiresEmailVerification: result.requiresEmailVerification,
       deviceInfo: {
@@ -357,8 +412,8 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
         os: deviceInfo.os,
       },
     },
-  });
-});
+  };
+}
 
 // Helper function to parse user agent
 function parseUserAgent(userAgent: string): { device: string; browser: string; os: string } {
@@ -416,6 +471,30 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
 
   if (!refreshTokenValue) {
     throw new ApiError(401, 'Refresh token is required');
+  }
+
+  // SECURITY FIX: If authenticated, validate token belongs to the user
+  const authUser = req.user as any;
+  if (authUser?._id) {
+    // Verify the refresh token belongs to this user
+    // This prevents using another user's refresh token
+    const tokenPayload = (() => {
+      try {
+        const jwt = require('jsonwebtoken');
+        return jwt.verify(tokenFromBody, process.env.JWT_REFRESH_SECRET);
+      } catch {
+        return null;
+      }
+    })();
+
+    if (tokenPayload && tokenPayload.id !== authUser._id.toString()) {
+      logger.warn('Refresh token user mismatch', {
+        action: 'REFRESH_TOKEN_USER_MISMATCH',
+        authenticatedUserId: authUser._id,
+        tokenUserId: tokenPayload?.id,
+      });
+      throw new ApiError(403, 'Token does not belong to authenticated user');
+    }
   }
 
   const result = await authService.refreshToken(refreshTokenValue);
@@ -1393,6 +1472,7 @@ export default {
   registerProvider,
   registerAdmin,
   login,
+  verifyLogin2FA,
   refreshToken,
   logout,
   logoutAll,

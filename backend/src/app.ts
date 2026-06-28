@@ -14,6 +14,7 @@ import { APP_CONSTANTS } from './config/constants';
 import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware';
+import { requestTimeout } from './middleware/timeout.middleware';
 import {
   healthCheckHandler,
   livenessProbe,
@@ -64,13 +65,26 @@ const app: Application = express();
 // Trust proxy
 app.set('trust proxy', 1);
 
+function getAllowedOrigins(): string[] {
+  const origins = process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean) || [];
+  const corsOrigins = process.env.CORS_ORIGIN ? [process.env.CORS_ORIGIN.trim()] : [];
+  const isProduction = process.env.NODE_ENV === 'production';
+  const localhostOrigins = isProduction
+    ? []
+    : ['http://localhost:3000', 'http://localhost:5173'];
+
+  return [...new Set([...origins, ...corsOrigins, ...localhostOrigins])];
+}
+
+const allowedOrigins = getAllowedOrigins();
+
 // CORS preflight handler - MUST be before any other middleware
 app.use((req: any, res: any, next: any) => {
   // Always set CORS headers for ALL requests
   const origin = req.headers.origin;
 
   // Set origin dynamically (required for credentials)
-  if (origin && (origin.includes('localhost') || process.env.NODE_ENV === 'development')) {
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
@@ -78,7 +92,7 @@ app.use((req: any, res: any, next: any) => {
   // Handle preflight OPTIONS requests
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Correlation-ID, X-Tenant, X-Device-Fingerprint, X-Idempotency-Key, x-csrf-token, x-2fa-token, skipauth, cookies');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Correlation-ID, X-Tenant, X-Device-Fingerprint, X-Idempotency-Key, Idempotency-Key, idempotency-key, x-csrf-token, x-2fa-token, skipauth, cookies');
     res.setHeader('Access-Control-Max-Age', '86400');
     res.status(204).end();
     return;
@@ -111,10 +125,17 @@ app.use(securityMiddleware);
 // app.use(cors(corsOptions));
 
 // Compression middleware with optimized settings for production
+// Supports gzip and brotli - client negotiates best format
+// Note: brotli is automatically enabled when client sends Accept-Encoding: br
 app.use(compression({
+  // Custom filter to exclude already compressed or binary content
   filter: (req, res) => {
     // Don't compress responses with this request header
     if (req.headers['x-no-compression']) {
+      return false;
+    }
+    // Don't compress streaming responses or SSE
+    if (res.locals?.noCompress) {
       return false;
     }
     // Use compression filter from compression module
@@ -122,10 +143,20 @@ app.use(compression({
     return fallback;
   },
   level: parseInt(process.env.COMPRESSION_LEVEL || '6'), // 0-9, default 6
-  threshold: 1024, // Only compress responses > 1KB
+  threshold: parseInt(process.env.COMPRESSION_THRESHOLD || '1024'), // Only compress responses > 1KB
   chunkSize: 16 * 1024, // 16KB chunks
   windowBits: 15,
 }));
+
+// Add Vary header for proper caching with compression
+app.use((req, res, next) => {
+  // Add Vary header for Accept-Encoding to help caches
+  if (req.headers['accept-encoding']?.includes('gzip') ||
+      req.headers['accept-encoding']?.includes('br')) {
+    res.setHeader('Vary', 'Accept-Encoding');
+  }
+  next();
+});
 
 // Connection keep-alive optimizations
 app.use((_req, res, next) => {
@@ -147,6 +178,9 @@ app.set('trust proxy', 'loopback');
 // Body parsing middleware with size limits
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Request timeout middleware (30 seconds default) - AFTER body parsing for retry support
+app.use(requestTimeout(30000));
 
 // Request size validation middleware
 app.use((req, _res, next) => {

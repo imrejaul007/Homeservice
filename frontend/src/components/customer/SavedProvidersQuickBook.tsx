@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Heart, Zap, Clock, Star, MapPin, ChevronRight, X, AlertCircle, Loader2 } from 'lucide-react';
 import { cn, formatPrice } from '../../lib/utils';
@@ -8,6 +8,7 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { useAuthStore } from '../../stores/authStore';
 import { Modal } from '../common/Modal';
+import { api } from '../../services/api';
 
 // =============================================================================
 // NILIN Customer Dashboard - Saved Providers Quick Book Component
@@ -460,77 +461,46 @@ export const SavedProvidersQuickBook: React.FC<SavedProvidersQuickBookProps> = (
 
   const customerProfile = useAuthStore((state) => state.customerProfile);
 
-  // Load saved providers
-  React.useEffect(() => {
+  // Load saved providers from API (uses /favorites endpoint)
+  useEffect(() => {
     const loadSavedProviders = async () => {
       setIsLoading(true);
 
       try {
-        // In real app, this would fetch from API
-        // For demo, use mock data or profile favorites
-        const mockProviders: SavedProvider[] = [
-          {
-            id: 'provider-1',
-            firstName: 'Sarah',
-            lastName: 'Johnson',
-            businessName: 'Sarah\'s Cleaning Services',
-            rating: 4.9,
-            reviewCount: 127,
-            location: { city: 'Dubai', state: 'Dubai' },
-            specializations: ['Deep Cleaning', 'Move-in/Move-out'],
-            services: [
-              { _id: 's1', name: 'Deep Cleaning', price: 299, duration: 180 },
-              { _id: 's2', name: 'Standard Cleaning', price: 149, duration: 120 },
-            ],
-            savedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-          },
-          {
-            id: 'provider-2',
-            firstName: 'Ahmed',
-            lastName: 'Khalid',
-            rating: 4.7,
-            reviewCount: 89,
-            location: { city: 'Abu Dhabi', state: 'Abu Dhabi' },
-            specializations: ['Plumbing', 'Electrical'],
-            services: [
-              { _id: 's3', name: 'Pipe Repair', price: 199, duration: 60 },
-              { _id: 's4', name: 'Full Inspection', price: 99, duration: 45 },
-            ],
-            savedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-          },
-          {
-            id: 'provider-3',
-            firstName: 'Fatima',
-            lastName: 'Ali',
-            businessName: 'Beauty by Fatima',
-            rating: 4.8,
-            reviewCount: 203,
-            location: { city: 'Dubai', state: 'Dubai' },
-            specializations: ['Hair Styling', 'Makeup', 'Facials'],
-            services: [
-              { _id: 's5', name: 'Hair Styling', price: 250, duration: 90 },
-              { _id: 's6', name: 'Full Makeup', price: 350, duration: 120 },
-            ],
-            savedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
-          },
-        ];
-
-        // Filter by favorites from profile if available
-        const favorites = customerProfile?.favoriteProviders || [];
-        if (favorites.length > 0) {
-          setSavedProviders(mockProviders.filter(p => favorites.includes(p.id)));
+        const response = await api.get('/favorites');
+        if (response.data?.success) {
+          // Map favorites response to SavedProvider format
+          const favoritesData = response.data.data?.favorites || [];
+          const mappedProviders: SavedProvider[] = favoritesData.map((fav: any) => ({
+            id: fav.provider?.id || fav.providerId,
+            firstName: fav.provider?.firstName || '',
+            lastName: fav.provider?.lastName || '',
+            businessName: fav.provider?.businessName,
+            avatar: fav.provider?.avatar || fav.provider?.profilePhoto,
+            rating: fav.provider?.averageRating || 0,
+            reviewCount: fav.provider?.totalReviews || 0,
+            location: undefined,
+            distance: undefined,
+            specializations: [],
+            services: fav.provider?.services || [],
+            savedAt: fav.addedAt || new Date(),
+            notes: fav.notes,
+          }));
+          setSavedProviders(mappedProviders);
         } else {
-          setSavedProviders(mockProviders);
+          // Show empty state if API returns no data
+          setSavedProviders([]);
         }
       } catch (error) {
         console.error('Failed to load saved providers:', error);
+        setSavedProviders([]);
       } finally {
         setIsLoading(false);
       }
     };
 
     loadSavedProviders();
-  }, [customerProfile]);
+  }, []);
 
   const handleProviderClick = useCallback((provider: SavedProvider) => {
     if (onProviderClick) {
@@ -561,11 +531,23 @@ export const SavedProvidersQuickBook: React.FC<SavedProvidersQuickBookProps> = (
   const handleQuickBookConfirm = async (serviceId: string, date: string, time: string) => {
     if (!quickBookProvider) return;
 
-    // In real app, create booking via API
-    // For demo, just simulate success
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const response = await api.post('/bookings', {
+        providerId: quickBookProvider.id,
+        serviceId,
+        scheduledDate: date,
+        scheduledTime: time,
+      });
 
-    onBookingComplete?.(quickBookProvider.id, serviceId);
+      if (response.data?.success) {
+        onBookingComplete?.(quickBookProvider.id, serviceId);
+      } else {
+        throw new Error(response.data?.message || 'Failed to create booking');
+      }
+    } catch (err) {
+      console.error('Error creating booking:', err);
+      throw err; // Re-throw to let the modal handle the error
+    }
   };
 
   // Loading State

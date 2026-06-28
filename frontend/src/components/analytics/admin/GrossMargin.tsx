@@ -14,8 +14,9 @@ import {
   ComposedChart,
   Line,
 } from 'recharts';
-import { DollarSign, TrendingUp, TrendingDown, Loader, Percent, Target, Calculator } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Loader, Percent, Target, Calculator, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface GrossMarginProps {
   timeRange?: '30d' | '90d' | '1y';
@@ -57,39 +58,14 @@ interface MarginStats {
   targetMargin: number;
 }
 
-const MOCK_MARGIN_DATA: MarginData[] = [
-  { date: 'Week 1', revenue: 45000, cost: 27000, grossProfit: 18000, margin: 40 },
-  { date: 'Week 2', revenue: 52000, cost: 31200, grossProfit: 20800, margin: 40 },
-  { date: 'Week 3', revenue: 48000, cost: 28800, grossProfit: 19200, margin: 40 },
-  { date: 'Week 4', revenue: 58000, cost: 34000, grossProfit: 24000, margin: 41 },
-];
-
-const MOCK_CATEGORY_DATA: CategoryMarginData[] = [
-  { category: 'Cleaning', revenue: 85000, cost: 48000, grossProfit: 37000, margin: 43.5, volume: 340 },
-  { category: 'Plumbing', revenue: 72000, cost: 45000, grossProfit: 27000, margin: 37.5, volume: 180 },
-  { category: 'Electrical', revenue: 65000, cost: 39000, grossProfit: 26000, margin: 40, volume: 145 },
-  { category: 'Gardening', revenue: 42000, cost: 28000, grossProfit: 14000, margin: 33.3, volume: 210 },
-  { category: 'Handyman', revenue: 38000, cost: 24000, grossProfit: 14000, margin: 36.8, volume: 125 },
-  { category: 'Painting', revenue: 28000, cost: 18000, grossProfit: 10000, margin: 35.7, volume: 45 },
-];
-
-const MOCK_TREND_DATA: TrendData[] = [
-  { month: 'Jan', margin: 36, benchmark: 38, revenue: 180000 },
-  { month: 'Feb', margin: 37, benchmark: 38, revenue: 195000 },
-  { month: 'Mar', margin: 38, benchmark: 38, revenue: 210000 },
-  { month: 'Apr', margin: 39, benchmark: 38, revenue: 225000 },
-  { month: 'May', margin: 40, benchmark: 38, revenue: 240000 },
-  { month: 'Jun', margin: 41, benchmark: 38, revenue: 255000 },
-];
-
-const MOCK_STATS: MarginStats = {
-  currentMargin: 41,
-  previousMargin: 38,
-  change: 3,
-  changePercent: 7.9,
-  trend: 'up',
-  totalRevenue: 310000,
-  totalGrossProfit: 127100,
+const EMPTY_STATS: MarginStats = {
+  currentMargin: 0,
+  previousMargin: 0,
+  change: 0,
+  changePercent: 0,
+  trend: 'stable',
+  totalRevenue: 0,
+  totalGrossProfit: 0,
   industryBenchmark: 38,
   targetMargin: 45,
 };
@@ -98,21 +74,77 @@ export const GrossMargin: React.FC<GrossMarginProps> = ({
   timeRange = '90d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [marginData, setMarginData] = useState<MarginData[]>(MOCK_MARGIN_DATA);
-  const [categoryData, setCategoryData] = useState<CategoryMarginData[]>(MOCK_CATEGORY_DATA);
-  const [trendData, setTrendData] = useState<TrendData[]>(MOCK_TREND_DATA);
-  const [stats, setStats] = useState<MarginStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [marginData, setMarginData] = useState<MarginData[]>([]);
+  const [categoryData, setCategoryData] = useState<CategoryMarginData[]>([]);
+  const [trendData, setTrendData] = useState<TrendData[]>([]);
+  const [stats, setStats] = useState<MarginStats>(EMPTY_STATS);
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'trend' | 'breakdown'>('trend');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setMarginData(MOCK_MARGIN_DATA);
-      setCategoryData(MOCK_CATEGORY_DATA);
-      setTrendData(MOCK_TREND_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminGrossMargin(selectedRange);
+        const breakdown = apiData.breakdown || [];
+        const trend = apiData.trend || [];
+        const summary = apiData.summary;
+
+        setCategoryData(
+          breakdown.map((entry) => ({
+            category: entry.category,
+            revenue: entry.revenue,
+            cost: entry.cost,
+            grossProfit: entry.grossProfit,
+            margin: entry.margin,
+            volume: 0,
+          })),
+        );
+        setTrendData(
+          trend.map((entry, index) => ({
+            month: entry.month,
+            margin: entry.margin,
+            benchmark: entry.benchmark,
+            revenue: breakdown[index]?.revenue || summary?.totalRevenue || 0,
+          })),
+        );
+        setMarginData(
+          trend.map((entry) => ({
+            date: entry.month,
+            revenue: summary?.totalRevenue || 0,
+            cost: summary?.totalCost || 0,
+            grossProfit: summary?.totalProfit || 0,
+            margin: entry.margin,
+          })),
+        );
+
+        const currentMargin = summary?.overallMargin || 0;
+        const previousMargin = trend.length > 1 ? trend[trend.length - 2].margin : currentMargin;
+        const change = currentMargin - previousMargin;
+
+        setStats({
+          currentMargin,
+          previousMargin,
+          change,
+          changePercent: previousMargin > 0 ? (change / previousMargin) * 100 : 0,
+          trend: change > 0 ? 'up' : change < 0 ? 'down' : 'stable',
+          totalRevenue: summary?.totalRevenue || 0,
+          totalGrossProfit: summary?.totalProfit || 0,
+          industryBenchmark: 38,
+          targetMargin: 45,
+        });
+      } catch (err) {
+        setMarginData([]);
+        setCategoryData([]);
+        setTrendData([]);
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load gross margin data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [selectedRange]);

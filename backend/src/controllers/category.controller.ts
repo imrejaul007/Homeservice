@@ -1,15 +1,46 @@
 import { Request, Response } from 'express';
 import ServiceCategory from '../models/serviceCategory.model';
 import Service from '../models/service.model';
+import Booking from '../models/booking.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { cache } from '../config/redis';
+
+// Cache TTLs in seconds
+const CATEGORIES_CACHE_TTL = 1800; // 30 minutes
+const CATEGORY_STATS_CACHE_TTL = 300; // 5 minutes
+
+function formatBookingCount(count: number): string {
+  if (count >= 1000) {
+    const rounded = Math.round(count / 100) / 10;
+    return `${rounded}k+`;
+  }
+  if (count > 0) return `${count}+`;
+  return '0';
+}
 
 /**
  * Get all master categories (for homepage)
  * GET /api/categories
+ * Cacheable - categories rarely change
  */
 export const getMasterCategories = asyncHandler(async (req: Request, res: Response) => {
   const { featured, includeComingSoon } = req.query;
+
+  // Generate cache key based on query params
+  const cacheKey = `categories:master:${featured || 'all'}:${includeComingSoon || 'false'}`;
+
+  // Check cache first
+  const cached = await cache.get(cacheKey);
+  if (cached) {
+    // Add HTTP cache headers for CDN/browser caching
+    res.set('Cache-Control', `public, max-age=${CATEGORIES_CACHE_TTL}, stale-while-revalidate=${CATEGORIES_CACHE_TTL * 2}`);
+    return res.json({
+      success: true,
+      data: JSON.parse(cached),
+      cached: true,
+    });
+  }
 
   let query: any = { isActive: true };
 
@@ -48,12 +79,20 @@ export const getMasterCategories = asyncHandler(async (req: Request, res: Respon
     })) || []
   }));
 
-  res.json({
+  const data = {
+    categories: categoriesWithMeta,
+    total: categories.length
+  };
+
+  // Cache the result
+  await cache.set(cacheKey, JSON.stringify(data), CATEGORIES_CACHE_TTL);
+
+  // Add HTTP cache headers for CDN/browser caching
+  res.set('Cache-Control', `public, max-age=${CATEGORIES_CACHE_TTL}, stale-while-revalidate=${CATEGORIES_CACHE_TTL * 2}`);
+
+  return res.json({
     success: true,
-    data: {
-      categories: categoriesWithMeta,
-      total: categories.length
-    }
+    data,
   });
 });
 
@@ -440,6 +479,69 @@ export const deleteSubcategory = asyncHandler(async (req: Request, res: Response
   });
 });
 
+/**
+ * Get live stats for a category landing page
+ * GET /api/categories/:slug/page-stats
+ * Cacheable - stats change slowly (5 min TTL)
+ */
+export const getCategoryPageStats = asyncHandler(async (req: Request, res: Response) => {
+  const { slug } = req.params;
+  const cacheKey = `categories:page-stats:${slug}`;
+
+  // Check cache first
+  const cached = await cache.get(cacheKey);
+  if (cached) {
+    // Add HTTP cache headers for CDN/browser caching
+    res.set('Cache-Control', `public, max-age=${CATEGORY_STATS_CACHE_TTL}, stale-while-revalidate=${CATEGORY_STATS_CACHE_TTL * 2}`);
+    return res.json({
+      success: true,
+      data: JSON.parse(cached),
+      cached: true,
+    });
+  }
+
+  const category = await ServiceCategory.findOne({ slug, isActive: true }).select('name slug');
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  const serviceMatch = {
+    isActive: true,
+    status: 'active',
+    $or: [{ category: category.name }, { categoryId: category._id }],
+  };
+
+  const [services, providerIds, bookingCount] = await Promise.all([
+    Service.countDocuments(serviceMatch),
+    Service.distinct('providerId', serviceMatch),
+    Booking.countDocuments({
+      status: 'completed',
+      $or: [{ category: category.name }, { categoryId: category._id }],
+    }),
+  ]);
+
+  const data = {
+    slug: category.slug,
+    name: category.name,
+    services,
+    providers: providerIds.filter(Boolean).length,
+    bookings: formatBookingCount(bookingCount),
+    bookingCount,
+  };
+
+  // Cache the result (5 min TTL - stats can change with new services/bookings)
+  await cache.set(cacheKey, JSON.stringify(data), CATEGORY_STATS_CACHE_TTL);
+
+  // Add HTTP cache headers
+  res.set('Cache-Control', `public, max-age=${CATEGORY_STATS_CACHE_TTL}, stale-while-revalidate=${CATEGORY_STATS_CACHE_TTL * 2}`);
+
+  return res.json({
+    success: true,
+    data,
+  });
+});
+
 export default {
   getMasterCategories,
   getCategoryBySlug,
@@ -447,6 +549,7 @@ export default {
   getSubcategories,
   getCategoryServices,
   getCategoryStats,
+  getCategoryPageStats,
   searchCategories,
   updateSubcategory,
   deleteSubcategory

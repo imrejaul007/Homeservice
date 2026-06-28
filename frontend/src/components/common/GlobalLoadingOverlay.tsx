@@ -29,7 +29,7 @@ export const GlobalLoadingOverlay: React.FC = () => {
       const fadeTimer = setTimeout(() => {
         setVisible(false);
         setFading(false);
-      }, 500);
+      }, 200);
       return () => clearTimeout(fadeTimer);
     }
   }, [isLoading]);
@@ -41,14 +41,14 @@ export const GlobalLoadingOverlay: React.FC = () => {
 
   return (
     <div
-      className={`fixed inset-0 z-[99999] flex flex-col items-center justify-center transition-all ease-out ${
+      className={`fixed inset-0 z-[90] flex flex-col items-center justify-center transition-all ease-out ${
         fading ? 'opacity-0 scale-[1.02]' : mounted ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98]'
       }`}
       style={{
         backgroundColor: bgColor,
-        pointerEvents: fading ? 'none' : 'auto',
+        pointerEvents: isLoading && !fading ? 'auto' : 'none',
         willChange: 'opacity, transform',
-        transitionDuration: '500ms',
+        transitionDuration: '200ms',
       }}
     >
       {/* Subtle background pattern */}

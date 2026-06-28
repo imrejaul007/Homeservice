@@ -181,6 +181,18 @@ export interface BundleApi {
   getBundleBySlug: (slug: string) => Promise<Bundle>;
 
   /**
+   * Get bundle analytics
+   */
+  getAnalytics: (id: string) => Promise<{
+    totalBookings: number;
+    totalRevenue: number;
+    averageRating: number;
+    bookingTrend: Array<{ date: string; count: number; revenue: number }>;
+    customerLocations: Array<{ area: string; count: number }>;
+    peakBookingDays: Array<{ day: string; count: number }>;
+  }>;
+
+  /**
    * Create a new bundle
    */
   createBundle: (data: CreateBundlePayload) => Promise<Bundle>;
@@ -280,6 +292,31 @@ export interface BundleApi {
   }>;
 }
 
+interface BundlePagination {
+  page?: number;
+  limit?: number;
+  total?: number;
+  pages?: number;
+}
+
+function parseBundleListResponse(response: {
+  data: {
+    data?: unknown;
+    pagination?: BundlePagination;
+  };
+}) {
+  const rawBundles = Array.isArray(response.data.data) ? response.data.data : [];
+  const pagination = response.data.pagination;
+
+  return {
+    rawBundles,
+    total: pagination?.total ?? rawBundles.length,
+    page: pagination?.page ?? 1,
+    limit: pagination?.limit ?? 20,
+    totalPages: pagination?.pages ?? 1,
+  };
+}
+
 export const bundleApi: BundleApi = {
   /**
    * Get all bundles with filtering and pagination
@@ -287,14 +324,14 @@ export const bundleApi: BundleApi = {
    */
   getBundles: async (options = {}) => {
     const response = await api.get('/bundles', { params: options });
-    const rawBundles = response.data.data?.bundles || response.data.data || [];
+    const { rawBundles, total, page, limit, totalPages } = parseBundleListResponse(response);
     const bundles = transformBundleListItems(rawBundles);
     return {
       bundles,
-      total: response.data.data?.pagination?.total || rawBundles.length,
-      page: response.data.data?.pagination?.page || 1,
-      limit: response.data.data?.pagination?.limit || 20,
-      totalPages: response.data.data?.pagination?.pages || 1,
+      total,
+      page,
+      limit,
+      totalPages,
     };
   },
 
@@ -314,6 +351,15 @@ export const bundleApi: BundleApi = {
   getBundleBySlug: async (slug: string) => {
     const response = await api.get(`/bundles/slug/${slug}`);
     return transformBundle(response.data.data);
+  },
+
+  /**
+   * Get analytics for a specific bundle
+   * @param id - The bundle ID
+   */
+  getAnalytics: async (id: string) => {
+    const response = await api.get(`/bundles/${id}/analytics`);
+    return response.data.data;
   },
 
   /**
@@ -369,13 +415,13 @@ export const bundleApi: BundleApi = {
     const response = await api.get(`/bundles/category/${categoryId}`, {
       params: options,
     });
-    const rawBundles = response.data.data || [];
+    const { rawBundles, total, page, limit } = parseBundleListResponse(response);
     const bundles = transformBundleListItems(rawBundles);
     return {
       bundles,
-      total: response.data.data?.pagination?.total || rawBundles.length,
-      page: response.data.data?.pagination?.page || 1,
-      limit: response.data.data?.pagination?.limit || 20,
+      total,
+      page,
+      limit,
     };
   },
 
@@ -408,11 +454,11 @@ export const bundleApi: BundleApi = {
     const response = await api.get('/bundles', {
       params: { search: query, ...options },
     });
-    const rawBundles = response.data.data?.bundles || response.data.data || [];
+    const { rawBundles, total } = parseBundleListResponse(response);
     const bundles = transformBundleListItems(rawBundles);
     return {
       bundles,
-      total: response.data.data?.pagination?.total || rawBundles.length,
+      total,
     };
   },
 
@@ -433,13 +479,13 @@ export const bundleApi: BundleApi = {
     }
 
     const response = await api.get('/bundles/my', { params });
-    const rawBundles = response.data.data || [];
+    const { rawBundles, total, page, limit } = parseBundleListResponse(response);
     const bundles = transformBundleList(rawBundles);
     return {
       bundles,
-      total: response.data.data?.pagination?.total || rawBundles.length,
-      page: response.data.data?.pagination?.page || 1,
-      limit: response.data.data?.pagination?.limit || 20,
+      total,
+      page,
+      limit,
     };
   },
 

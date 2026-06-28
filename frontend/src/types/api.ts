@@ -6,7 +6,28 @@ export interface ApiResponse<T = unknown> {
   errors?: Array<{ field?: string; message: string }>;
 }
 
-export interface PaginatedResponse<T> extends ApiResponse<T[]> {
+export interface PaginationParams {
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+  nextPage: number | null;
+  prevPage: number | null;
+}
+
+export interface PaginatedResponse<T> {
+  success: boolean;
+  data: {
+    items: T[];
+    pagination: PaginationParams;
+  };
+  message?: string;
+}
+
+/** Legacy flat pagination shape (some endpoints still use this) */
+export interface LegacyPaginatedResponse<T> extends ApiResponse<T[]> {
   pagination: {
     page: number;
     limit: number;

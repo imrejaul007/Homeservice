@@ -190,7 +190,7 @@ export function usePlatformSettings() {
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Maintenance page may be out of sync';
-        toast.error('Maintenance sync warning', message);
+        toast.error('Maintenance sync warning', { description: message });
       }
     },
     [originalSettings, toast]
@@ -206,7 +206,7 @@ export function usePlatformSettings() {
       toast.success('Settings saved successfully', 'Your changes have been applied');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again';
-      toast.error('Failed to save settings', message);
+      toast.error('Failed to save settings', { description: message });
     } finally {
       setIsSaving(false);
     }
@@ -222,7 +222,7 @@ export function usePlatformSettings() {
       toast.success('Settings reset to defaults', 'All platform settings have been restored');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again';
-      toast.error('Failed to reset settings', message);
+      toast.error('Failed to reset settings', { description: message });
     } finally {
       setIsResetting(false);
     }
@@ -237,11 +237,11 @@ export function usePlatformSettings() {
     const ipRegex =
       /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^([a-fA-F0-9:]+)$/;
     if (!ipRegex.test(newIpAddress)) {
-      toast.error('Invalid IP address', 'Please enter a valid IP address');
+      toast.error('Invalid IP address', { description: 'Please enter a valid IP address' });
       return;
     }
     if (settings.ipAllowlist.includes(newIpAddress)) {
-      toast.error('IP already exists', 'This IP address is already in the allowlist');
+      toast.error('IP already exists', { description: 'This IP address is already in the allowlist' });
       return;
     }
     handleSettingChange('ipAllowlist', [...settings.ipAllowlist, newIpAddress]);
@@ -313,7 +313,7 @@ export function usePlatformSettings() {
 
   const handleTestEmail = useCallback(async () => {
     if (!testEmail.includes('@')) {
-      toast.error('Invalid email', 'Please enter a valid email address');
+      toast.error('Invalid email', { description: 'Please enter a valid email address' });
       return;
     }
     setIsTestingEmail(true);
@@ -322,7 +322,7 @@ export function usePlatformSettings() {
       toast.success('Test email sent', `Email sent to ${testEmail}`);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again';
-      toast.error('Failed to send test email', message);
+      toast.error('Failed to send test email', { description: message });
     } finally {
       setIsTestingEmail(false);
     }
@@ -331,11 +331,11 @@ export function usePlatformSettings() {
   const handleLogoUpload = useCallback(
     async (file: File) => {
       if (!file.type.match(/^image\/(jpeg|png|gif|webp)$/)) {
-        toast.error('Invalid file type', 'Please upload a JPEG, PNG, GIF, or WebP image');
+        toast.error('Invalid file type', { description: 'Please upload a JPEG, PNG, GIF, or WebP image' });
         return;
       }
       if (file.size > 5 * 1024 * 1024) {
-        toast.error('File too large', 'Logo must be less than 5MB');
+        toast.error('File too large', { description: 'Logo must be less than 5MB' });
         return;
       }
       setIsUploading(true);
@@ -345,7 +345,7 @@ export function usePlatformSettings() {
         toast.success('Logo uploaded', 'Your logo has been updated');
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Please try again';
-        toast.error('Failed to upload logo', message);
+        toast.error('Failed to upload logo', { description: message });
       } finally {
         setIsUploading(false);
       }
@@ -361,7 +361,7 @@ export function usePlatformSettings() {
       toast.success('Logo removed', 'Platform logo has been deleted');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again';
-      toast.error('Failed to delete logo', message);
+      toast.error('Failed to delete logo', { description: message });
     }
   }, [toast]);
 
@@ -380,7 +380,7 @@ export function usePlatformSettings() {
       toast.success('Settings exported', 'Your settings have been downloaded');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again';
-      toast.error('Failed to export settings', message);
+      toast.error('Failed to export settings', { description: message });
     }
   }, [toast]);
 
@@ -401,7 +401,7 @@ export function usePlatformSettings() {
           setOriginalSettings(imported);
           toast.success('Settings imported', 'Your settings have been restored from the file');
         } catch {
-          toast.error('Invalid file', 'The selected file is not a valid settings file');
+          toast.error('Invalid file', { description: 'The selected file is not a valid settings file' });
         }
       };
       reader.readAsText(file);
@@ -418,7 +418,7 @@ export function usePlatformSettings() {
       setShowHistory(true);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again';
-      toast.error('Failed to load history', message);
+      toast.error('Failed to load history', { description: message });
     } finally {
       setIsLoadingHistory(false);
     }

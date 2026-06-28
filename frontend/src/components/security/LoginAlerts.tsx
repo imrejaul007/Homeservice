@@ -39,6 +39,7 @@ interface LoginAlertsProps {
   onAlertResolved?: (alertId: string) => void;
   onSessionRevoked?: (sessionId: string) => void;
   onAllRevoked?: () => void;
+  maxConcurrentSessions?: number; // Max allowed concurrent sessions (0 = unlimited)
 }
 
 interface ApiResponse<T> {
@@ -52,6 +53,7 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
   onAlertResolved,
   onSessionRevoked,
   onAllRevoked,
+  maxConcurrentSessions = 0, // 0 = unlimited
 }) => {
   const [alerts, setAlerts] = useState<LoginAlert[]>([]);
   const [sessions, setSessions] = useState<LoginSession[]>([]);
@@ -60,6 +62,9 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
   const [activeTab, setActiveTab] = useState<'alerts' | 'activity'>('alerts');
   const [filterSeverity, setFilterSeverity] = useState<string>('all');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [sessionLimit, setSessionLimit] = useState<number>(maxConcurrentSessions);
+  const [showLimitModal, setShowLimitModal] = useState(false);
+  const [limitInput, setLimitInput] = useState(maxConcurrentSessions.toString());
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -153,6 +158,29 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
     }
   };
 
+  // Save session limit setting
+  const handleSaveSessionLimit = async () => {
+    const limit = parseInt(limitInput, 10);
+    if (isNaN(limit) || limit < 0) {
+      setError('Please enter a valid number (0 for unlimited)');
+      return;
+    }
+    try {
+      setActionLoading('save-limit');
+      await api.post('/security/sessions/limit', { userId, maxSessions: limit });
+      setSessionLimit(limit);
+      setShowLimitModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save session limit');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Check if sessions exceed limit
+  const activeSessionsCount = sessions.filter(s => !s.isCurrent).length;
+  const exceedsLimit = sessionLimit > 0 && activeSessionsCount > sessionLimit;
+
   // Get severity color
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -205,7 +233,27 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
   };
 
   // Format date
-  const formatDate = (date: Date) => {
+  // Mask IP address for privacy (hide middle octets for IPv4, last two segments for IPv6)
+  const maskIpAddress = (ip: string): string => {
+    if (!ip) return 'Unknown';
+
+    // IPv4: mask middle octets (e.g., 192.168.xxx.xxx)
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+      const parts = ip.split('.');
+      return `${parts[0]}.${parts[1]}.xxx.xxx`;
+    }
+
+    // IPv6: mask last two segments
+    if (ip.includes(':')) {
+      const parts = ip.split(':');
+      const lastTwo = parts.slice(-2).map(() => 'xxxx').join(':');
+      return [...parts.slice(0, 6 - 2), lastTwo].join(':');
+    }
+
+    return ip;
+  };
+
+  // Format date
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const minutes = Math.floor(diff / (1000 * 60));
@@ -410,16 +458,78 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
 
       {activeTab === 'activity' && (
         <>
-          {/* Revoke All Button */}
-          {sessions.length > 1 && (
-            <div className="mb-4">
+          {/* Session Limit Controls */}
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              {sessionLimit > 0 ? (
+                <p className="text-sm text-gray-600">
+                  <span className="font-medium">{activeSessionsCount}</span> active sessions (max: {sessionLimit})
+                  {exceedsLimit && (
+                    <span className="ml-2 px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">
+                      Limit exceeded
+                    </span>
+                  )}
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600">
+                  <span className="font-medium">{activeSessionsCount}</span> active sessions (unlimited)
+                </p>
+              )}
+            </div>
+            <div className="flex gap-2">
               <button
-                onClick={handleRevokeAllSessions}
-                disabled={actionLoading === 'revoke-all'}
-                className="px-4 py-2 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                onClick={() => {
+                  setLimitInput(sessionLimit.toString());
+                  setShowLimitModal(true);
+                }}
+                className="px-3 py-1.5 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
               >
-                {actionLoading === 'revoke-all' ? 'Revoking...' : 'Revoke all other sessions'}
+                {sessionLimit > 0 ? 'Change Limit' : 'Set Limit'}
               </button>
+              {sessions.length > 1 && (
+                <button
+                  onClick={handleRevokeAllSessions}
+                  disabled={actionLoading === 'revoke-all'}
+                  className="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'revoke-all' ? 'Revoking...' : 'Revoke All Others'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Session Limit Modal */}
+          {showLimitModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl p-6 max-w-sm w-full mx-4 shadow-xl">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Set Session Limit</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Limit the number of concurrent sessions. Set to 0 for unlimited.
+                </p>
+                <input
+                  type="number"
+                  min="0"
+                  value={limitInput}
+                  onChange={(e) => setLimitInput(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Enter max sessions (0 = unlimited)"
+                />
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowLimitModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveSessionLimit}
+                    disabled={actionLoading === 'save-limit'}
+                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    {actionLoading === 'save-limit' ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -454,7 +564,7 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
                       <div className="mt-1 text-sm text-gray-500 space-y-0.5">
                         {session.browser && <p>{session.browser} on {session.os || 'Unknown OS'}</p>}
                         {session.location && <p>{session.location}</p>}
-                        {session.ip && <p className="font-mono text-xs">{session.ip}</p>}
+                        {session.ip && <p className="font-mono text-xs">{maskIpAddress(session.ip)}</p>}
                         <p className="text-xs">{formatDate(session.timestamp)}</p>
                       </div>
                     </div>

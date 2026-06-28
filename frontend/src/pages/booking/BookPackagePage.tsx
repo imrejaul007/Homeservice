@@ -7,6 +7,7 @@ import Button from '../../components/common/Button';
 import { packageApi, type ServicePackage, normalizeFeatures, isFeatureIncluded, getFeatureText } from '../../services/packageApi';
 import { useAuthStore } from '../../stores/authStore';
 import toast from 'react-hot-toast';
+import { showDeduplicatedError } from '../utils/toastUtils';
 import PackageBookingWizard from '../../components/booking/PackageBookingWizard';
 
 interface ServiceItem {
@@ -104,7 +105,9 @@ const BookPackagePage: React.FC = () => {
       }
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } }; message?: string };
-      setError(error.response?.data?.message || 'Failed to load package details');
+      const message = error.response?.data?.message || error.message || 'Failed to load package details';
+      setError(message);
+      showDeduplicatedError('Failed to load package', message);
     } finally {
       setLoading(false);
     }

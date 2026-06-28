@@ -836,6 +836,12 @@ const BookingForm: React.FC<BookingFormProps> = ({
 
   return (
     <div className={cn("max-w-2xl mx-auto", className)}>
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        Step {step} of 4: {stepLabels[step - 1]}
+        {isSubmitting ? 'Submitting booking...' : ''}
+      </div>
+
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center gap-4 mb-4">

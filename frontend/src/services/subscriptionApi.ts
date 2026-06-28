@@ -767,53 +767,28 @@ export const subscriptionApi = new SubscriptionApiService();
 export default subscriptionApi;
 
 // ============================================
-// Simple API Methods (Nilin)
+// Simple API Methods (Nilin) — deprecated, use subscriptionApi class
 // ============================================
 
-/**
- * Simple get current subscription - returns the data directly
- */
+/** @deprecated Use subscriptionApi.getSubscription() */
 export async function getSubscription() {
-  try {
-    const response = await api.get('/subscription/current');
-    return response.data;
-  } catch (error) {
-    throw new Error(getErrorMessage(error, 'Failed to fetch subscription'));
-  }
+  return subscriptionApi.getSubscription();
 }
 
-/**
- * Simple subscribe to a tier
- */
+/** @deprecated Use subscriptionApi.createSubscription() */
 export async function subscribe(tier: string) {
-  try {
-    const res = await api.post('/subscription/create', { tier });
-    return res.data;
-  } catch (error) {
-    throw new Error(getErrorMessage(error, 'Failed to subscribe'));
-  }
+  return subscriptionApi.createSubscription({
+    plan: tier as CustomerPlanType,
+    billingCycle: 'monthly',
+  });
 }
 
-/**
- * Simple cancel subscription
- */
+/** @deprecated Use subscriptionApi.cancelSubscription() */
 export async function cancelSubscriptionSimple() {
-  try {
-    const res = await api.post('/subscription/cancel');
-    return res.data;
-  } catch (error) {
-    throw new Error(getErrorMessage(error, 'Failed to cancel subscription'));
-  }
+  return subscriptionApi.cancelSubscription();
 }
 
-/**
- * Simple upgrade subscription
- */
+/** @deprecated Use subscriptionApi.changePlan() */
 export async function upgradeSubscription(tier: string) {
-  try {
-    const res = await api.post('/subscription/upgrade', { tier });
-    return res.data;
-  } catch (error) {
-    throw new Error(getErrorMessage(error, 'Failed to upgrade subscription'));
-  }
+  return subscriptionApi.changePlan(tier as CustomerPlanType);
 }

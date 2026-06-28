@@ -25,6 +25,9 @@ import {
   TrendingUp,
   TrendingDown,
   Wallet,
+  Square,
+  CheckSquare,
+  Layers,
 } from 'lucide-react';
 import { payoutApi, type AdminWithdrawal, type WithdrawalStats, type WithdrawalFilters, type WithdrawalDetails } from '../../services/payoutApi';
 import { useAuthStore } from '../../stores/authStore';
@@ -124,7 +127,7 @@ const PayoutManagement: React.FC = () => {
         setWithdrawals(response.data.withdrawals);
         setPagination(response.data.pagination);
       }
-    } catch (err: any) {
+    } catch (err) {
       const message = err.message || 'Failed to load withdrawals';
       setError(message);
       toast.error(message);
@@ -157,7 +160,7 @@ const PayoutManagement: React.FC = () => {
       if (response.success && response.data) {
         setDetailData(response.data);
       }
-    } catch (err: any) {
+    } catch (err) {
       const message = err.message || 'Failed to load withdrawal details';
       setError(message);
       toast.error(message);
@@ -254,7 +257,7 @@ const PayoutManagement: React.FC = () => {
         setError(errorMsg);
         toast.error(errorMsg);
       }
-    } catch (err: any) {
+    } catch (err) {
       const errorMsg = err.message || `Failed to ${processAction} withdrawal`;
       setError(errorMsg);
       toast.error(errorMsg);
@@ -341,7 +344,7 @@ const PayoutManagement: React.FC = () => {
       type="button"
       onClick={handleRefresh}
       disabled={isLoading || isLoadingStats}
-      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-nilin-charcoal text-sm font-sans hover:bg-nilin-blush/40 disabled:opacity-50"
+      className="inline-flex items-center justify-center gap-2 min-h-11 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-nilin-charcoal text-sm font-sans hover:bg-nilin-blush/40 disabled:opacity-50"
     >
       <RefreshCw className={cn('w-4 h-4', (isLoading || isLoadingStats) && 'animate-spin')} />
       Refresh
@@ -350,6 +353,13 @@ const PayoutManagement: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      {/* Skip link for keyboard accessibility (WCAG 2.4.1) */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <AdminPageShell
         wideLayout
         title="Payout Management"
@@ -360,8 +370,9 @@ const PayoutManagement: React.FC = () => {
         ]}
         headerActions={headerActions}
       >
-        {/* KPI strip */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div id="main-content">
+          {/* KPI strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
             {
               key: 'pending' as const,
@@ -504,7 +515,8 @@ const PayoutManagement: React.FC = () => {
               <p className="text-red-800">{error}</p>
               <button
                 onClick={() => setError(null)}
-                className="ml-auto text-red-600 hover:text-red-800"
+                className="ml-auto w-11 h-11 flex items-center justify-center text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                aria-label="Dismiss error"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -512,7 +524,112 @@ const PayoutManagement: React.FC = () => {
           </div>
         )}
 
-          <div className="overflow-x-auto">
+          {/* Mobile withdrawal cards */}
+          <div className="md:hidden p-4 space-y-3">
+            {isLoading ? (
+              <div className="py-12 text-center">
+                <Loader2 className="w-8 h-8 animate-spin text-gray-400 mx-auto" />
+                <p className="text-gray-500 mt-2">Loading withdrawals...</p>
+              </div>
+            ) : withdrawals.length === 0 ? (
+              <div className="py-12 text-center px-2">
+                <Wallet className="w-12 h-12 text-nilin-border mx-auto" />
+                <p className="text-nilin-charcoal font-medium mt-3 font-sans">No withdrawals in this queue</p>
+                {activeStatus !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => handleStatusFilter('all')}
+                    className="mt-4 min-h-11 text-sm font-medium text-nilin-coral hover:text-nilin-rose"
+                  >
+                    View all withdrawals
+                  </button>
+                )}
+              </div>
+            ) : (
+              withdrawals.map((withdrawal) => (
+                <div
+                  key={withdrawalRowId(withdrawal)}
+                  className="bg-white rounded-xl border border-nilin-border/40 p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 bg-nilin-blush/50 rounded-full flex items-center justify-center flex-shrink-0">
+                        <User className="w-5 h-5 text-nilin-coral" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-nilin-charcoal truncate">
+                          {formatProviderName(withdrawal)}
+                        </p>
+                        <p className="text-xs text-nilin-warmGray truncate">{withdrawal.userEmail}</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadge(
+                        withdrawal.transaction.status
+                      )}`}
+                    >
+                      {withdrawal.transaction.status === 'reversed'
+                        ? 'rejected'
+                        : withdrawal.transaction.status}
+                    </span>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-2 text-sm mb-4">
+                    <div>
+                      <dt className="text-xs text-nilin-warmGray">Amount</dt>
+                      <dd className="font-semibold text-gray-900">
+                        {formatCurrency(withdrawal.transaction.amount, withdrawal.transaction.currency)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-nilin-warmGray">Requested</dt>
+                      <dd>{formatDate(withdrawal.transaction.createdAt)}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-xs text-nilin-warmGray">Bank</dt>
+                      <dd>
+                        {withdrawal.transaction.metadata?.bankAccount?.bankName || 'N/A'}
+                        {withdrawal.transaction.metadata?.bankAccount?.accountNumber && (
+                          <span className="text-nilin-warmGray">
+                            {' '}
+                            · ****{withdrawal.transaction.metadata.bankAccount.accountNumber.slice(-4)}
+                          </span>
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openDetailModal(withdrawal)}
+                      className="flex-1 min-h-11 flex items-center justify-center gap-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Details
+                    </button>
+                    {withdrawal.transaction.status === 'pending' && (
+                      <>
+                        <button
+                          onClick={() => openProcessModal(withdrawal, 'approve')}
+                          className="w-11 h-11 flex items-center justify-center text-green-600 border border-green-200 rounded-lg hover:bg-green-50"
+                          aria-label="Approve withdrawal"
+                        >
+                          <CheckCircle className="w-5 h-5" />
+                        </button>
+                        <button
+                          onClick={() => openProcessModal(withdrawal, 'reject')}
+                          className="w-11 h-11 flex items-center justify-center text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
+                          aria-label="Reject withdrawal"
+                        >
+                          <XCircle className="w-5 h-5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="min-w-full divide-y divide-nilin-border/40">
               <thead className="bg-nilin-blush/20">
                 <tr>
@@ -618,26 +735,26 @@ const PayoutManagement: React.FC = () => {
                         <div className="flex items-center justify-end space-x-2">
                           <button
                             onClick={() => openDetailModal(withdrawal)}
-                            className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                            title="View Details"
+                            className="w-11 h-11 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                            aria-label="View withdrawal details"
                           >
-                            <Eye className="w-4 h-4" />
+                            <Eye className="w-5 h-5" />
                           </button>
                           {withdrawal.transaction.status === 'pending' && (
                             <>
                               <button
                                 onClick={() => openProcessModal(withdrawal, 'approve')}
-                                className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                title="Approve"
+                                className="w-11 h-11 flex items-center justify-center text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                aria-label="Approve withdrawal"
                               >
-                                <CheckCircle className="w-4 h-4" />
+                                <CheckCircle className="w-5 h-5" />
                               </button>
                               <button
                                 onClick={() => openProcessModal(withdrawal, 'reject')}
-                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Reject"
+                                className="w-11 h-11 flex items-center justify-center text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                aria-label="Reject withdrawal"
                               >
-                                <XCircle className="w-4 h-4" />
+                                <XCircle className="w-5 h-5" />
                               </button>
                             </>
                           )}
@@ -652,8 +769,8 @@ const PayoutManagement: React.FC = () => {
 
           {/* Pagination */}
           {pagination.pages > 1 && (
-            <div className="px-5 py-4 border-t border-nilin-border/40 flex items-center justify-between">
-              <div className="text-sm text-gray-500">
+            <div className="px-4 sm:px-5 py-4 border-t border-nilin-border/40 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-sm text-gray-500 text-center sm:text-left">
                 Showing {(pagination.page - 1) * pagination.limit + 1} to{' '}
                 {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
               </div>
@@ -661,7 +778,7 @@ const PayoutManagement: React.FC = () => {
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page <= 1}
-                  className="px-3 py-1 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                  className="min-h-11 px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
                 >
                   Previous
                 </button>
@@ -671,7 +788,7 @@ const PayoutManagement: React.FC = () => {
                 <button
                   onClick={() => handlePageChange(pagination.page + 1)}
                   disabled={pagination.page >= pagination.pages}
-                  className="px-3 py-1 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                  className="min-h-11 px-4 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
                 >
                   Next
                 </button>
@@ -691,7 +808,8 @@ const PayoutManagement: React.FC = () => {
                 </h3>
                 <button
                   onClick={closeProcessModal}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  className="w-11 h-11 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
+                  aria-label="Close modal"
                 >
                   <X className="w-5 h-5 text-gray-600" />
                 </button>
@@ -812,7 +930,8 @@ const PayoutManagement: React.FC = () => {
                 <h3 className="text-lg font-semibold text-gray-900">Withdrawal Details</h3>
                 <button
                   onClick={closeDetailModal}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  className="w-11 h-11 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
+                  aria-label="Close modal"
                 >
                   <X className="w-5 h-5 text-gray-600" />
                 </button>
@@ -985,6 +1104,7 @@ const PayoutManagement: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
       </AdminPageShell>
     </ErrorBoundary>
   );

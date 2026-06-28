@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle,
@@ -139,139 +140,11 @@ export const IncidentManagement: React.FC<IncidentManagementProps> = ({
         setIncidents(response.data.data.incidents || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setIncidents([
-          {
-            id: 'inc-001',
-            ticketNumber: 'TKT-2024-001',
-            type: 'complaint',
-            priority: 'high',
-            status: 'open',
-            category: 'Service Quality',
-            subject: 'Poor cleaning service at apartment 204',
-            description: 'The cleaning service was inadequate. Bathroom was not properly cleaned and the team left early.',
-            customerName: 'Ahmed Hassan',
-            providerName: 'Elite Cleaners',
-            bookingId: 'booking-123',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            messages: [
-              { id: 'm1', senderId: 'c1', senderName: 'Ahmed Hassan', senderRole: 'customer', message: 'Very disappointed with the service.', timestamp: new Date().toISOString() }
-            ],
-            tags: ['cleaning', 'quality', 'urgent'],
-            slaDeadline: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'inc-002',
-            ticketNumber: 'TKT-2024-002',
-            type: 'billing',
-            priority: 'medium',
-            status: 'in_progress',
-            category: 'Refund Request',
-            subject: 'Incorrect charges on booking #456',
-            description: 'I was charged twice for the same service. Please refund the duplicate charge.',
-            customerName: 'Sarah Khan',
-            providerName: 'Professional Plumbers',
-            bookingId: 'booking-456',
-            assignedTo: 'admin@nilin.com',
-            createdAt: new Date(Date.now() - 3600000).toISOString(),
-            updatedAt: new Date(Date.now() - 1800000).toISOString(),
-            messages: [
-              { id: 'm1', senderId: 'c2', senderName: 'Sarah Khan', senderRole: 'customer', message: 'Please check my booking.', timestamp: new Date(Date.now() - 3600000).toISOString() },
-              { id: 'm2', senderId: 'a1', senderName: 'Admin', senderRole: 'admin', message: 'Looking into this now.', timestamp: new Date(Date.now() - 1800000).toISOString() }
-            ],
-            tags: ['billing', 'refund'],
-            slaDeadline: new Date(Date.now() + 20 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'inc-003',
-            ticketNumber: 'TKT-2024-003',
-            type: 'technical',
-            priority: 'high',
-            status: 'pending_customer',
-            category: 'App Issue',
-            subject: 'Cannot complete booking - payment failing',
-            description: 'Every time I try to pay, the app shows an error. This has happened 5 times.',
-            customerName: 'Omar Ali',
-            createdAt: new Date(Date.now() - 7200000).toISOString(),
-            updatedAt: new Date(Date.now() - 3600000).toISOString(),
-            messages: [
-              { id: 'm1', senderId: 'a1', senderName: 'Admin', senderRole: 'admin', message: 'Could you share your device model and OS version?', timestamp: new Date(Date.now() - 3600000).toISOString() }
-            ],
-            tags: ['technical', 'payment', 'mobile']
-          },
-          {
-            id: 'inc-004',
-            ticketNumber: 'TKT-2024-004',
-            type: 'safety',
-            priority: 'critical',
-            status: 'open',
-            category: 'Safety Concern',
-            subject: 'Provider damaged property and refused to pay',
-            description: 'The electrician broke a valuable antique while working. He refused to take responsibility.',
-            customerName: 'Fatima Al-Said',
-            providerName: 'Quick Electricians',
-            bookingId: 'booking-789',
-            createdAt: new Date(Date.now() - 10800000).toISOString(),
-            updatedAt: new Date(Date.now() - 10800000).toISOString(),
-            messages: [],
-            tags: ['safety', 'damage', 'liability', 'urgent']
-          },
-          {
-            id: 'inc-005',
-            ticketNumber: 'TKT-2024-005',
-            type: 'dispute',
-            priority: 'medium',
-            status: 'resolved',
-            category: 'Pricing Dispute',
-            subject: 'Provider charged more than quoted',
-            description: 'Provider quoted 200 AED but charged 350 AED at completion.',
-            customerName: 'Mohammed Khan',
-            providerName: 'Garden Experts',
-            bookingId: 'booking-321',
-            assignedTo: 'admin@nilin.com',
-            createdAt: new Date(Date.now() - 86400000).toISOString(),
-            updatedAt: new Date(Date.now() - 43200000).toISOString(),
-            resolvedAt: new Date(Date.now() - 43200000).toISOString(),
-            resolution: 'Partial refund of 150 AED issued to customer. Provider warned about pricing transparency.',
-            messages: [
-              { id: 'm1', senderId: 'c5', senderName: 'Mohammed Khan', senderRole: 'customer', message: 'Provider overcharged me.', timestamp: new Date(Date.now() - 86400000).toISOString() },
-              { id: 'm2', senderId: 'a1', senderName: 'Admin', senderRole: 'admin', message: 'We will investigate.', timestamp: new Date(Date.now() - 72000000).toISOString() },
-              { id: 'm3', senderId: 'a1', senderName: 'Admin', senderRole: 'admin', message: 'Refund has been processed.', timestamp: new Date(Date.now() - 43200000).toISOString() }
-            ],
-            tags: ['dispute', 'pricing', 'resolved']
-          }
-        ]);
-        setStats({
-          total: 156,
-          open: 23,
-          inProgress: 45,
-          pendingCustomer: 18,
-          resolved: 67,
-          avgResolutionTime: 4.2,
-          slaBreaches: 3,
-          byType: [
-            { type: 'Complaint', count: 62, color: '#F59E0B' },
-            { type: 'Dispute', count: 34, color: '#EF4444' },
-            { type: 'Technical', count: 28, color: '#3B82F6' },
-            { type: 'Billing', count: 22, color: '#8B5CF6' },
-            { type: 'Safety', count: 10, color: '#DC2626' }
-          ],
-          byPriority: { low: 45, medium: 62, high: 38, critical: 11 },
-          trend: [
-            { date: 'Mon', created: 22, resolved: 18 },
-            { date: 'Tue', created: 28, resolved: 25 },
-            { date: 'Wed', created: 19, resolved: 22 },
-            { date: 'Thu', created: 25, resolved: 20 },
-            { date: 'Fri', created: 32, resolved: 28 },
-            { date: 'Sat', created: 15, resolved: 18 },
-            { date: 'Sun', created: 15, resolved: 12 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching incidents:', err);
-      setError('Failed to load incident data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

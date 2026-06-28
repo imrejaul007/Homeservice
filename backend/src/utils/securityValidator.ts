@@ -3,6 +3,8 @@
  * Ensures all security configurations are properly set for production
  */
 
+import logger from './logger';
+
 interface SecurityValidationResult {
   isValid: boolean;
   errors: string[];
@@ -117,7 +119,10 @@ export function validateJWTConfiguration(): boolean {
 
     return true;
   } catch (error) {
-    console.error('JWT Configuration validation failed:', error);
+    logger.error('JWT Configuration validation failed', {
+      context: 'SecurityValidator',
+      error: error instanceof Error ? error.message : String(error),
+    });
     return false;
   }
 }
@@ -200,7 +205,7 @@ export function validateCORSConfiguration(): SecurityValidationResult {
  * Comprehensive security validation
  */
 export function performSecurityAudit(): void {
-  console.log('🔒 Performing Security Configuration Audit...\n');
+  logger.info('Performing Security Configuration Audit', { context: 'SecurityValidator' });
 
   const configValidation = validateSecurityConfig();
   const jwtValidation = validateJWTConfiguration();
@@ -212,28 +217,33 @@ export function performSecurityAudit(): void {
 
   if (!configValidation.isValid) {
     hasErrors = true;
-    console.log('❌ Security Configuration Errors:');
-    configValidation.errors.forEach(error => console.log(`   • ${error}`));
-    console.log('');
+    logger.error('Security Configuration Errors', {
+      context: 'SecurityValidator',
+      errors: configValidation.errors,
+    });
   }
 
   if (!jwtValidation) {
     hasErrors = true;
-    console.log('❌ JWT Configuration Error: Unable to generate/verify tokens\n');
+    logger.error('JWT Configuration Error: Unable to generate/verify tokens', {
+      context: 'SecurityValidator',
+    });
   }
 
   if (!dbValidation.isValid) {
     hasErrors = true;
-    console.log('❌ Database Security Errors:');
-    dbValidation.errors.forEach(error => console.log(`   • ${error}`));
-    console.log('');
+    logger.error('Database Security Errors', {
+      context: 'SecurityValidator',
+      errors: dbValidation.errors,
+    });
   }
 
   if (!corsValidation.isValid) {
     hasErrors = true;
-    console.log('❌ CORS Configuration Errors:');
-    corsValidation.errors.forEach(error => console.log(`   • ${error}`));
-    console.log('');
+    logger.error('CORS Configuration Errors', {
+      context: 'SecurityValidator',
+      errors: corsValidation.errors,
+    });
   }
 
   // Show warnings
@@ -244,19 +254,24 @@ export function performSecurityAudit(): void {
   ];
 
   if (allWarnings.length > 0) {
-    console.log('⚠️  Security Warnings:');
-    allWarnings.forEach(warning => console.log(`   • ${warning}`));
-    console.log('');
+    logger.warn('Security Warnings', {
+      context: 'SecurityValidator',
+      warnings: allWarnings,
+    });
   }
 
   // Final result
   if (hasErrors) {
-    console.log('🚨 Security Audit Failed - Please fix the errors above before proceeding\n');
+    logger.error('Security Audit Failed - Please fix the errors above before proceeding', {
+      context: 'SecurityValidator',
+    });
     if (process.env.NODE_ENV === 'production') {
       process.exit(1); // Exit in production if security issues found
     }
   } else {
-    console.log('✅ Security Audit Passed - All critical security configurations are valid\n');
+    logger.info('Security Audit Passed - All critical security configurations are valid', {
+      context: 'SecurityValidator',
+    });
   }
 }
 

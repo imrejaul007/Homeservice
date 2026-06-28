@@ -1306,6 +1306,243 @@ export const getAllServiceSchedules = asyncHandler(async (req: Request, res: Res
   });
 });
 
+// ============================================================
+// BREAK TIMES ENDPOINTS
+// ============================================================
+
+/**
+ * Add break time
+ * POST /api/availability/breaks
+ */
+export const addBreakTime = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can add break times'
+    });
+  }
+
+  const { dayOfWeek, startTime, endTime, label } = req.body;
+
+  if (!dayOfWeek || !startTime || !endTime) {
+    return res.status(400).json({
+      success: false,
+      message: 'dayOfWeek, startTime, and endTime are required'
+    });
+  }
+
+  const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  if (!validDays.includes(dayOfWeek.toLowerCase())) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid dayOfWeek. Must be monday-sunday.'
+    });
+  }
+
+  let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  // Initialize availability and breaks array if needed
+  if (!providerProfile.availability) {
+    providerProfile.availability = {
+      schedule: createDefaultSchedule(),
+      exceptions: [],
+      bufferTime: 15,
+      maxAdvanceBooking: 30,
+      minNoticeTime: 24,
+      autoAcceptBookings: false,
+      breaks: [],
+    };
+  }
+
+  if (!providerProfile.availability.breaks) {
+    providerProfile.availability.breaks = [];
+  }
+
+  // Create break entry
+  const newBreak = {
+    _id: new mongoose.Types.ObjectId(),
+    dayOfWeek: dayOfWeek.toLowerCase(),
+    startTime,
+    endTime,
+    label: label || 'Break',
+  };
+
+  providerProfile.availability.breaks.push(newBreak);
+
+  await providerProfile.save();
+
+  logger.info('Break time added', {
+    context: 'AvailabilityController',
+    action: 'BREAK_ADDED',
+    providerId: req.user?._id?.toString(),
+    breakId: newBreak._id.toString(),
+    dayOfWeek,
+  });
+
+  return res.status(201).json({
+    success: true,
+    message: 'Break time added successfully',
+    data: { break: newBreak }
+  });
+});
+
+/**
+ * Update break time
+ * PUT /api/availability/breaks/:breakId
+ */
+export const updateBreakTime = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can update break times'
+    });
+  }
+
+  const { breakId } = req.params;
+  const { dayOfWeek, startTime, endTime, label } = req.body;
+
+  let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile || !providerProfile.availability?.breaks) {
+    return res.status(404).json({
+      success: false,
+      message: 'Break not found'
+    });
+  }
+
+  const breakIndex = providerProfile.availability.breaks.findIndex(
+    b => b._id?.toString() === breakId
+  );
+
+  if (breakIndex === -1) {
+    return res.status(404).json({
+      success: false,
+      message: 'Break not found'
+    });
+  }
+
+  // Update fields if provided
+  if (dayOfWeek) {
+    const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    if (!validDays.includes(dayOfWeek.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid dayOfWeek'
+      });
+    }
+    providerProfile.availability.breaks[breakIndex].dayOfWeek = dayOfWeek.toLowerCase();
+  }
+  if (startTime) providerProfile.availability.breaks[breakIndex].startTime = startTime;
+  if (endTime) providerProfile.availability.breaks[breakIndex].endTime = endTime;
+  if (label !== undefined) providerProfile.availability.breaks[breakIndex].label = label;
+
+  await providerProfile.save();
+
+  logger.info('Break time updated', {
+    context: 'AvailabilityController',
+    action: 'BREAK_UPDATED',
+    providerId: req.user?._id?.toString(),
+    breakId,
+  });
+
+  return res.json({
+    success: true,
+    message: 'Break time updated successfully',
+    data: { break: providerProfile.availability.breaks[breakIndex] }
+  });
+});
+
+/**
+ * Delete break time
+ * DELETE /api/availability/breaks/:breakId
+ */
+export const deleteBreakTime = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can delete break times'
+    });
+  }
+
+  const { breakId } = req.params;
+
+  let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile || !providerProfile.availability?.breaks) {
+    return res.status(404).json({
+      success: false,
+      message: 'Break not found'
+    });
+  }
+
+  const breakIndex = providerProfile.availability.breaks.findIndex(
+    b => b._id?.toString() === breakId
+  );
+
+  if (breakIndex === -1) {
+    return res.status(404).json({
+      success: false,
+      message: 'Break not found'
+    });
+  }
+
+  providerProfile.availability.breaks.splice(breakIndex, 1);
+
+  await providerProfile.save();
+
+  logger.info('Break time deleted', {
+    context: 'AvailabilityController',
+    action: 'BREAK_DELETED',
+    providerId: req.user?._id?.toString(),
+    breakId,
+  });
+
+  return res.json({
+    success: true,
+    message: 'Break time deleted successfully'
+  });
+});
+
+/**
+ * Get all break times
+ * GET /api/availability/breaks
+ */
+export const getBreakTimes = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can view break times'
+    });
+  }
+
+  const providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  const breaks = providerProfile.availability?.breaks || [];
+
+  return res.json({
+    success: true,
+    data: { breaks }
+  });
+});
+
+// ============================================================
+// PER-SERVICE / BUNDLE AVAILABILITY ENDPOINTS
+// ============================================================
+
 /**
  * Copy global schedule to a service
  * POST /api/availability/service/:serviceId/copy-global

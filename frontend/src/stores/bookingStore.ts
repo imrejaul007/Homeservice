@@ -1,8 +1,7 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
-import { Capacitor } from '@capacitor/core';
-import { Preferences } from '@capacitor/preferences';
+import { capacitorStorageAdapter } from '../lib/storageAdapters';
 import logger from '../lib/logger';
 import type {
   Booking,
@@ -20,6 +19,9 @@ import type {
 
 // Default timeout for optimistic update operations (30 seconds)
 const OPTIMISTIC_UPDATE_TIMEOUT_MS = 30000;
+
+// Maximum bookings to persist to prevent storage quota issues
+const MAX_PERSISTED_BOOKINGS = 50;
 
 /**
  * Parse a date from backend (MongoDB Date) or frontend (ISO string)
@@ -122,6 +124,7 @@ export interface BookingState {
   acceptBooking: (bookingId: string, data?: BookingAcceptData) => Promise<void>;
   rejectBooking: (bookingId: string, data: BookingCancelData) => Promise<void>;
   startBooking: (bookingId: string, notes?: string) => Promise<void>;
+  markBookingPaymentCompleted: (bookingId: string, data?: { transactionId?: string; notes?: string }) => Promise<void>;
   completeBooking: (bookingId: string, data?: BookingCompleteData) => Promise<void>;
 
   // Actions - Shared
@@ -164,47 +167,6 @@ export interface BookingState {
   clearBookings: () => void;
 }
 
-/**
- * Capacitor-safe Zustand storage adapter for booking store
- */
-const capacitorBookingStorage: StateStorage = {
-  getItem: async (name: string): Promise<string | null> => {
-    if (Capacitor.isNativePlatform()) {
-      try {
-        const result = await Preferences.get({ key: name });
-        return result.value;
-      } catch {
-        return null;
-      }
-    }
-    // Browser fallback
-    if (typeof window !== 'undefined' && window.localStorage) {
-      return localStorage.getItem(name);
-    }
-    return null;
-  },
-  setItem: async (name: string, value: string): Promise<void> => {
-    if (Capacitor.isNativePlatform()) {
-      await Preferences.set({ key: name, value });
-    } else {
-      // Browser fallback
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.setItem(name, value);
-      }
-    }
-  },
-  removeItem: async (name: string): Promise<void> => {
-    if (Capacitor.isNativePlatform()) {
-      await Preferences.remove({ key: name });
-    } else {
-      // Browser fallback
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.removeItem(name);
-      }
-    }
-  },
-};
-
 export const useBookingStore = create<BookingState>()(
   persist(
     immer((set, get) => ({
@@ -232,19 +194,11 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          console.log('[bookingStore] createBooking request', {
-            serviceId: data.serviceId,
-            providerId: data.providerId || '(auto-assign)',
-            scheduledDate: data.scheduledDate,
-            scheduledTime: data.scheduledTime,
-          });
-
           const response = await bookingService.createBooking(data);
           const responseData = response.data as (Record<string, unknown> & { booking?: unknown; isDuplicate?: boolean });
           const booking = responseData?.booking as (Record<string, unknown> & { _id?: string; isDuplicate?: boolean });
 
           if (!booking?._id) {
-            console.error('[bookingStore] createBooking missing booking in response', response);
             throw new Error('Invalid booking response from server');
           }
 
@@ -266,7 +220,6 @@ export const useBookingStore = create<BookingState>()(
           return validBooking;
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Failed to create booking';
-          console.error('[bookingStore] createBooking failed', { message, error });
           set((state) => {
             state.isSubmitting = false;
             state.errors = [{
@@ -635,6 +588,50 @@ export const useBookingStore = create<BookingState>()(
         }
       },
 
+      markBookingPaymentCompleted: async (
+        bookingId: string,
+        data?: { transactionId?: string; notes?: string }
+      ): Promise<void> => {
+        const bookingService = (await import('../services/BookingService')).default;
+
+        try {
+          set((state) => {
+            state.isSubmitting = true;
+            state.errors = [];
+          });
+
+          const response = await bookingService.markBookingPaymentCompleted(bookingId, data);
+          const updatedBooking = response.data.booking;
+
+          set((state) => {
+            const providerIndex = state.providerBookings.findIndex((b) => b._id === bookingId);
+            if (providerIndex !== -1) {
+              state.providerBookings[providerIndex] = updatedBooking;
+            }
+
+            const customerIndex = state.customerBookings.findIndex((b) => b._id === bookingId);
+            if (customerIndex !== -1) {
+              state.customerBookings[customerIndex] = updatedBooking;
+            }
+
+            if (state.currentBooking?._id === bookingId) {
+              state.currentBooking = updatedBooking;
+            }
+
+            state.isSubmitting = false;
+          });
+        } catch (error) {
+          set((state) => {
+            state.isSubmitting = false;
+            state.errors = [{
+              message: error instanceof Error ? error.message : 'Failed to update payment status',
+              code: 'MARK_PAYMENT_COMPLETED_ERROR'
+            }];
+          });
+          throw error;
+        }
+      },
+
       // Shared Actions
       getBooking: async (bookingId: string): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
@@ -650,6 +647,7 @@ export const useBookingStore = create<BookingState>()(
           set((state) => {
             state.currentBooking = response.data.booking;
             state.isLoading = false;
+            state.errors = [];
           });
         } catch (error) {
           set((state) => {
@@ -659,6 +657,8 @@ export const useBookingStore = create<BookingState>()(
               code: 'GET_BOOKING_ERROR'
             }];
           });
+          // Re-throw so callers (e.g., BookingDetailPage) can react with their own error state and retry button
+          throw error;
         }
       },
 
@@ -1165,16 +1165,14 @@ export const useBookingStore = create<BookingState>()(
     })),
     {
       name: 'booking-storage',
-      storage: createJSONStorage(() => capacitorBookingStorage),
+      version: 1,
+      storage: createJSONStorage(() => capacitorStorageAdapter),
       partialize: (state) => ({
         // Persist booking data for better UX across sessions
-        // customerBookings: cached bookings for quick display
-        customerBookings: state.customerBookings,
-        // providerBookings: cached bookings for provider dashboard
-        providerBookings: state.providerBookings,
-        // currentBooking: last viewed booking for back navigation
+        // Limit to MAX_PERSISTED_BOOKINGS to prevent storage quota issues
+        customerBookings: state.customerBookings.slice(0, MAX_PERSISTED_BOOKINGS),
+        providerBookings: state.providerBookings.slice(0, MAX_PERSISTED_BOOKINGS),
         currentBooking: state.currentBooking,
-        // Persist pagination to maintain scroll position and page info
         customerBookingsPagination: state.customerBookingsPagination,
         providerBookingsPagination: state.providerBookingsPagination,
       }),

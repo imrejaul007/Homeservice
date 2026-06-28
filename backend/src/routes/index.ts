@@ -66,6 +66,7 @@ import featureFlagsRoutes from './featureFlags.routes';
 import twilioWebhookRoutes from './webhooks/twilio.routes';
 import stripeWebhookRoutes from './webhooks/stripe.routes';
 import notificationWebhookRoutes from './webhooks/notificationWebhooks.routes';
+import emailBounceRoutes from './webhooks/emailBounce.routes';
 import inboundEmailRoutes from './webhooks/inboundEmail.routes';
 import offerAnalyticsRoutes from './offerAnalytics.routes';
 import apiKeyRoutes from './apiKey.routes';
@@ -95,6 +96,12 @@ import bundleAdminRoutes from './bundleAdmin.routes';
 import bundleCustomerRoutes from './bundleCustomer.routes';
 import batchRoutes from './batch.routes';
 import newsletterRoutes from './newsletter.routes';
+import membershipRoutes from './membership.routes';
+import geoRoutes from './geo.routes';
+import equipmentRoutes from './equipment.routes';
+import adminWidgetRoutes from './adminWidget.routes';
+import heroAdminRoutes from './hero.admin.routes';
+import recurringBookingRoutes from './recurringBooking.routes';
 
 const router = Router();
 
@@ -165,6 +172,12 @@ router.use('/providers', providerPublicRoutes);
 // Admin routes
 router.use('/admin', adminRoutes);
 
+// Admin Widget routes (fraud detection, abuse monitoring, etc.)
+router.use('/admin', adminWidgetRoutes);
+
+// Hero slide management routes (admin)
+router.use('/admin/hero-slides', heroAdminRoutes);
+
 // Admin RBAC routes
 router.use('/admin/rbac', rbacRoutes);
 
@@ -204,8 +217,8 @@ router.use('/analytics', analyticsRoutes);
 // Business Intelligence routes
 router.use('/bi', biRoutes);
 
-// Churn Prediction routes
-router.use('/churn', churnRoutes);
+// Churn Prediction routes (mounted at /admin for frontend compatibility)
+router.use('/admin', churnRoutes);
 
 // Fraud Detection routes
 router.use('/fraud', fraudRoutes);
@@ -248,6 +261,9 @@ router.use('/customers', customerRoutes);
 
 // Customer Dashboard routes
 router.use('/customer', customerDashboardRoutes);
+
+// Recurring booking subscriptions (customer)
+router.use('/customer/subscriptions', recurringBookingRoutes);
 
 // Customer wallet routes (same handlers as provider wallet; role-agnostic by user id)
 router.use('/customer', walletRoutes);
@@ -332,6 +348,9 @@ router.use('/support/chat', liveChatRoutes);
 // Marketplace routes (booking, payments, subscriptions, analytics)
 router.use('/', marketplaceRoutes);
 
+// Premium membership routes
+router.use('/membership', membershipRoutes);
+
 // Feature flags routes
 router.use('/feature-flags', featureFlagsRoutes);
 
@@ -346,10 +365,11 @@ router.use('/webhooks/inbound-email', inboundEmailRoutes);
 // WhatsApp & Telegram notification webhooks
 router.use('/webhooks', notificationWebhookRoutes);
 
+// Email bounce/complaint webhooks (SES, Resend, etc.)
+router.use('/webhooks/email', emailBounceRoutes);
+
 // Bundle routes (implemented below)
-// Subscription routes - commented out until properly implemented
-// router.use('/subscriptions', subscriptionRoutes);
-// router.use('/membership', subscriptionRoutes);
+// Subscription plural aliases mounted via marketplace.routes.ts
 
 // Offer analytics routes
 router.use('/offers-analytics', offerAnalyticsRoutes);
@@ -384,8 +404,9 @@ router.use('/bundles', bundleRoutes);
 // Admin Bundle management routes
 router.use('/admin/bundles', bundleAdminRoutes);
 
-// Customer Bundle routes (my/bundles)
-router.use('/', bundleCustomerRoutes);
+// Customer Bundle routes (my/bundles) – must NOT be mounted at '/' to avoid
+// swallowing routes like /cashback/history via the /:purchaseId/history pattern
+router.use('/my/bundles', bundleCustomerRoutes);
 
 // Invoice routes
 router.use('/invoices', invoiceRoutes);
@@ -401,6 +422,10 @@ router.use('/admin/curated-trends', curatedTrendAdminRoutes);
 
 // Geolocation/nearby providers routes
 router.use('/nearby', geolocationRoutes);
+
+// Legacy /geo/nearby/* alias for older clients
+router.use('/geo', geoRoutes);
+router.use('/equipment', equipmentRoutes);
 
 // Lead generation routes
 router.use('/leads', leadRoutes);
@@ -437,6 +462,10 @@ router.use('/sessions', sessionRoutes);
 // Automation management routes
 router.use('/automation', automationRoutes);
 
+// Automation API routes (frontend endpoints)
+import automationApiRoutes from './automationApi.routes';
+router.use('/automation', automationApiRoutes);
+
 // Customer onboarding routes
 router.use('/customer/onboarding', onboardingRoutes);
 
@@ -445,6 +474,15 @@ router.use('/winback', winbackRoutes);
 
 // Health check routes (public)
 router.use('/', healthRoutes);
+
+// API connectivity test (also available at app level)
+router.get('/test', (_req, res) => {
+  res.json({
+    success: true,
+    message: 'Backend API is connected and working!',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // Batch operations routes (efficient batch fetching)
 router.use('/batch', batchRoutes);

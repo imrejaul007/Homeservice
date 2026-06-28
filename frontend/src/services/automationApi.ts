@@ -1,4 +1,36 @@
 import { api } from './api';
+import { AxiosError } from 'axios';
+
+export class FeatureUnavailableError extends Error {
+  constructor(message = 'This feature is not available yet.') {
+    super(message);
+    this.name = 'FeatureUnavailableError';
+  }
+}
+
+function unwrapAutomationResponse<T>(response: { data?: { success?: boolean; data?: T; message?: string } }): T {
+  if (response.data?.success && response.data.data !== undefined) {
+    return response.data.data;
+  }
+  throw new Error(response.data?.message || 'Unexpected automation API response');
+}
+
+async function callAutomationApi<T>(request: () => Promise<{ data?: { success?: boolean; data?: T; message?: string } }>): Promise<T> {
+  try {
+    const response = await request();
+    return unwrapAutomationResponse(response);
+  } catch (error) {
+    const axiosError = error as AxiosError<{ code?: string; message?: string }>;
+    const status = axiosError.response?.status;
+    const code = axiosError.response?.data?.code;
+    if (status === 503 || status === 501 || code === 'FEATURE_NOT_AVAILABLE') {
+      throw new FeatureUnavailableError(
+        axiosError.response?.data?.message || 'Automation feature is not available yet.'
+      );
+    }
+    throw error;
+  }
+}
 
 // ============================================
 // Automation Types
@@ -322,201 +354,65 @@ export interface AutomationApi {
 }
 
 export const automationApi: AutomationApi = {
-  /**
-   * Get onboarding status and progress
-   */
-  getOnboardingStatus: async () => {
-    const response = await api.get('/automation/onboarding');
-    return response.data.data;
-  },
+  getOnboardingStatus: () => callAutomationApi(() => api.get('/automation/onboarding')),
 
-  /**
-   * Get onboarding tasks by category
-   * @param category - Optional category filter
-   */
-  getOnboardingTasks: async (category?: OnboardingTask['category']) => {
-    const response = await api.get('/automation/onboarding/tasks', {
-      params: { category },
-    });
-    return response.data.data;
-  },
+  getOnboardingTasks: (category?: OnboardingTask['category']) =>
+    callAutomationApi(() => api.get('/automation/onboarding/tasks', { params: { category } })),
 
-  /**
-   * Get a specific onboarding task
-   * @param taskId - The task ID
-   */
-  getOnboardingTask: async (taskId: string) => {
-    const response = await api.get(`/automation/onboarding/tasks/${taskId}`);
-    return response.data.data;
-  },
+  getOnboardingTask: (taskId: string) =>
+    callAutomationApi(() => api.get(`/automation/onboarding/tasks/${taskId}`)),
 
-  /**
-   * Complete an onboarding task
-   * @param taskId - The task ID to complete
-   * @param data - Optional completion data
-   */
-  completeOnboardingTask: async (taskId: string, data?: Record<string, unknown>) => {
-    const response = await api.post(
-      `/automation/onboarding/tasks/${taskId}/complete`,
-      data
-    );
-    return response.data.data;
-  },
+  completeOnboardingTask: (taskId: string, data?: Record<string, unknown>) =>
+    callAutomationApi(() => api.post(`/automation/onboarding/tasks/${taskId}/complete`, data)),
 
-  /**
-   * Skip an onboarding task
-   * @param taskId - The task ID to skip
-   * @param reason - Optional skip reason
-   */
-  skipOnboardingTask: async (taskId: string, reason?: string) => {
-    const response = await api.post(
-      `/automation/onboarding/tasks/${taskId}/skip`,
-      { reason }
-    );
-    return response.data.data;
-  },
+  skipOnboardingTask: (taskId: string, reason?: string) =>
+    callAutomationApi(() => api.post(`/automation/onboarding/tasks/${taskId}/skip`, { reason })),
 
-  /**
-   * Reset onboarding to start fresh
-   */
-  resetOnboarding: async () => {
-    const response = await api.post('/automation/onboarding/reset');
-    return response.data.data;
-  },
+  resetOnboarding: () => callAutomationApi(() => api.post('/automation/onboarding/reset')),
 
-  /**
-   * Get current automation preferences status
-   */
-  getAutomationStatus: async () => {
-    const response = await api.get('/automation/status');
-    return response.data.data;
-  },
+  getAutomationStatus: () => callAutomationApi(() => api.get('/automation/status')),
 
-  /**
-   * Get detailed automation preferences
-   */
-  getAutomationPreferences: async () => {
-    const response = await api.get('/automation/preferences');
-    return response.data.data;
-  },
+  getAutomationPreferences: () => callAutomationApi(() => api.get('/automation/preferences')),
 
-  /**
-   * Update automation preferences
-   * @param preferences - Preferences to update
-   */
-  updateAutomationPreferences: async (preferences: Partial<AutomationPreferences>) => {
-    const response = await api.patch('/automation/preferences', preferences);
-    return response.data.data;
-  },
+  updateAutomationPreferences: (preferences: Partial<AutomationPreferences>) =>
+    callAutomationApi(() => api.patch('/automation/preferences', preferences)),
 
-  /**
-   * Trigger welcome email for new user
-   * @param data - Optional welcome email customization data
-   */
-  triggerWelcomeEmail: async (data?: WelcomeEmailData) => {
-    const response = await api.post('/automation/trigger/welcome', data || {});
-    return response.data.data;
-  },
+  triggerWelcomeEmail: (data?: WelcomeEmailData) =>
+    callAutomationApi(() => api.post('/automation/trigger/welcome', data || {})),
 
-  /**
-   * Trigger winback campaign for inactive customer
-   * @param customerId - Customer ID to trigger winback for
-   * @param options - Optional trigger options
-   */
-  triggerWinback: async (customerId: string, options = {}) => {
-    const response = await api.post(
-      `/automation/trigger/winback/${customerId}`,
-      options
-    );
-    return response.data.data;
-  },
+  triggerWinback: (customerId: string, options = {}) =>
+    callAutomationApi(() => api.post(`/automation/trigger/winback/${customerId}`, options)),
 
-  /**
-   * Trigger batch winback for multiple customers
-   * @param options - Filter options for batch selection
-   */
-  triggerBatchWinback: async (options = {}) => {
-    const response = await api.post('/automation/trigger/batch-winback', options);
-    return response.data.data;
-  },
+  triggerBatchWinback: (options = {}) =>
+    callAutomationApi(() => api.post('/automation/trigger/batch-winback', options)),
 
-  /**
-   * Get automation logs with filtering
-   * @param options - Filter and pagination options
-   */
-  getAutomationLogs: async (options = {}) => {
-    const response = await api.get('/automation/logs', { params: options });
-    return response.data.data;
-  },
+  getAutomationLogs: (options = {}) =>
+    callAutomationApi(() => api.get('/automation/logs', { params: options })),
 
-  /**
-   * Get available automation templates
-   */
-  getAutomationTemplates: async () => {
-    const response = await api.get('/automation/templates');
-    return response.data.data;
-  },
+  getAutomationTemplates: () => callAutomationApi(() => api.get('/automation/templates')),
 
-  /**
-   * Trigger a custom automation template
-   * @param templateId - Template ID to trigger
-   * @param recipientId - Recipient ID
-   * @param variables - Optional variable overrides
-   */
-  triggerCustomAutomation: async (
+  triggerCustomAutomation: (
     templateId: string,
     recipientId: string,
     variables?: Record<string, unknown>
-  ) => {
-    const response = await api.post(
-      `/automation/trigger/${templateId}`,
-      { recipientId, variables }
-    );
-    return response.data.data;
-  },
+  ) =>
+    callAutomationApi(() =>
+      api.post(`/automation/trigger/${templateId}`, { recipientId, variables })
+    ),
 
-  /**
-   * Test an automation template
-   * @param templateId - Template ID to test
-   * @param testRecipientId - Optional test recipient override
-   */
-  testAutomation: async (templateId: string, testRecipientId?: string) => {
-    const response = await api.post(`/automation/templates/${templateId}/test`, {
-      testRecipientId,
-    });
-    return response.data.data;
-  },
+  testAutomation: (templateId: string, testRecipientId?: string) =>
+    callAutomationApi(() =>
+      api.post(`/automation/templates/${templateId}/test`, { testRecipientId })
+    ),
 
-  /**
-   * Get automation statistics
-   * @param options - Optional date range and filter
-   */
-  getAutomationStats: async (options = {}) => {
-    const response = await api.get('/automation/stats', { params: options });
-    return response.data.data;
-  },
+  getAutomationStats: (options = {}) =>
+    callAutomationApi(() => api.get('/automation/stats', { params: options })),
 
-  /**
-   * Subscribe to newsletter
-   * @param email - Email address to subscribe
-   */
-  subscribeNewsletter: async (email: string) => {
-    const response = await api.post('/automation/newsletter/subscribe', { email });
-    return response.data.data;
-  },
+  subscribeNewsletter: (email: string) =>
+    callAutomationApi(() => api.post('/automation/newsletter/subscribe', { email })),
 
-  /**
-   * Unsubscribe from newsletter
-   * @param email - Email address to unsubscribe
-   * @param reason - Optional unsubscription reason
-   */
-  unsubscribeNewsletter: async (email: string, reason?: string) => {
-    const response = await api.post('/automation/newsletter/unsubscribe', {
-      email,
-      reason,
-    });
-    return response.data.data;
-  },
+  unsubscribeNewsletter: (email: string, reason?: string) =>
+    callAutomationApi(() => api.post('/automation/newsletter/unsubscribe', { email, reason })),
 };
 
 export default automationApi;

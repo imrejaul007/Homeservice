@@ -4,6 +4,7 @@ import {
   createPaymentIntent,
   getPaymentStatus,
   createRefund,
+  createSetupIntent,
 } from '../services/payment.service';
 import { bookingService } from '../services/booking.service';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -136,6 +137,27 @@ router.post('/create-intent', paymentLimiter, authenticate, asyncHandler(async (
       paymentIntentId: result.paymentIntentId,
     },
     idempotencyKey,
+  });
+  return;
+}));
+
+/**
+ * @route   POST /api/payments/create-setup-intent
+ * @desc    Create a Stripe SetupIntent for saving payment methods
+ * @access  Private (Customer)
+ */
+router.post('/create-setup-intent', paymentLimiter, authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as IUser;
+  const result = await createSetupIntent(user._id.toString());
+
+  res.json({
+    success: true,
+    message: 'Setup intent created',
+    data: {
+      clientSecret: result.clientSecret,
+      setupIntentId: result.setupIntentId,
+      simulated: result.simulated ?? false,
+    },
   });
   return;
 }));

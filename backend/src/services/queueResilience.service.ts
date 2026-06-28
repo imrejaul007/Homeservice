@@ -479,10 +479,9 @@ class QueueResilienceService {
   /**
    * Get dead letter entries for a queue
    */
-  getDeadLetterEntries(queueName: string): any[] {
-    const entries = getDeadLetterQueue();
-
-    return entries.map(entry => ({
+  getDeadLetterEntries(queueName: string): Promise<any[]> {
+    return getDeadLetterQueue().then(entries =>
+      entries.map(entry => ({
       id: entry.id,
       data: entry.metadata,
       error: entry.error?.message || String(entry.error),
@@ -492,7 +491,8 @@ class QueueResilienceService {
       queueName,
       jobId: entry.metadata?.jobId as string || entry.id,
       maxRetries: QUEUE_CONFIGS[queueName]?.maxRetries || 3,
-    }));
+    }))
+    );
   }
 
   /**
@@ -508,8 +508,8 @@ class QueueResilienceService {
       return { success: false, error: 'Queue not found' };
     }
 
-    const dlq = getDeadLetterQueue();
-    const entry = dlq.find(e => e.id === entryId);
+    const dlq = await getDeadLetterQueue();
+    const entry = dlq.find((e: DeadLetterEntry) => e.id === entryId);
 
     if (!entry) {
       return { success: false, error: 'Entry not found' };
@@ -524,7 +524,7 @@ class QueueResilienceService {
       });
 
       // Remove from dead letter queue
-      const index = dlq.findIndex(e => e.id === entryId);
+      const index = dlq.findIndex((e: DeadLetterEntry) => e.id === entryId);
       if (index > -1) {
         dlq.splice(index, 1);
       }
@@ -544,8 +544,8 @@ class QueueResilienceService {
   /**
    * Clear dead letter queue
    */
-  clearDeadLetterQueue(queueName: string): number {
-    const dlq = getDeadLetterQueue();
+  async clearDeadLetterQueue(queueName: string): Promise<number> {
+    const dlq = await getDeadLetterQueue();
     const size = dlq.length;
 
     // Clear entries for this queue (by filtering)

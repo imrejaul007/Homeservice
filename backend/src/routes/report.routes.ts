@@ -11,7 +11,7 @@ const router = Router();
  * @desc    Create a new scheduled report
  * @access  Admin
  */
-router.post('/admin/reports', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/reports', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { name, type, frequency, format, recipients, filters, enabled } = req.body;
 
@@ -69,7 +69,7 @@ router.post('/admin/reports', authenticate, requireRole('admin'), asyncHandler(a
  * @desc    List all scheduled reports
  * @access  Admin
  */
-router.get('/admin/reports', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.get('/reports', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { enabled, type, page = '1', limit = '20' } = req.query;
 
   const options: {
@@ -110,11 +110,42 @@ router.get('/admin/reports', authenticate, requireRole('admin'), asyncHandler(as
 }));
 
 /**
+ * @route   GET /api/admin/reports/due
+ * @desc    Get all reports due for execution
+ * @access  Admin
+ */
+router.get('/reports/due', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  const dueReports = await reportService.getDueReports();
+
+  res.json({
+    success: true,
+    data: {
+      count: dueReports.length,
+      reports: dueReports,
+    },
+  });
+}));
+
+/**
+ * @route   POST /api/admin/reports/run-due
+ * @desc    Run all due reports
+ * @access  Admin
+ */
+router.post('/reports/run-due', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  const results = await reportService.runDueReports();
+
+  res.json({
+    success: true,
+    data: results,
+  });
+}));
+
+/**
  * @route   GET /api/admin/reports/:id
  * @desc    Get a specific scheduled report
  * @access  Admin
  */
-router.get('/admin/reports/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.get('/reports/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const report = await reportService.getScheduledReport(id);
@@ -134,7 +165,7 @@ router.get('/admin/reports/:id', authenticate, requireRole('admin'), asyncHandle
  * @desc    Update a scheduled report
  * @access  Admin
  */
-router.patch('/admin/reports/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.patch('/reports/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { name, type, frequency, format, recipients, filters, enabled } = req.body;
 
@@ -191,7 +222,7 @@ router.patch('/admin/reports/:id', authenticate, requireRole('admin'), asyncHand
  * @desc    Delete a scheduled report
  * @access  Admin
  */
-router.delete('/admin/reports/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.delete('/reports/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const deleted = await reportService.deleteScheduledReport(id);
@@ -211,7 +242,7 @@ router.delete('/admin/reports/:id', authenticate, requireRole('admin'), asyncHan
  * @desc    Toggle report enabled status
  * @access  Admin
  */
-router.post('/admin/reports/:id/toggle', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/reports/:id/toggle', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { enabled } = req.body;
 
@@ -236,7 +267,7 @@ router.post('/admin/reports/:id/toggle', authenticate, requireRole('admin'), asy
  * @desc    Trigger report generation
  * @access  Admin
  */
-router.post('/admin/reports/:id/trigger', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/reports/:id/trigger', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const result = await reportService.triggerReport(id);
@@ -251,37 +282,6 @@ router.post('/admin/reports/:id/trigger', authenticate, requireRole('admin'), as
   res.json({
     success: true,
     data: result,
-  });
-}));
-
-/**
- * @route   GET /api/admin/reports/due
- * @desc    Get all reports due for execution
- * @access  Admin
- */
-router.get('/admin/reports/due', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const dueReports = await reportService.getDueReports();
-
-  res.json({
-    success: true,
-    data: {
-      count: dueReports.length,
-      reports: dueReports,
-    },
-  });
-}));
-
-/**
- * @route   POST /api/admin/reports/run-due
- * @desc    Run all due reports
- * @access  Admin
- */
-router.post('/admin/reports/run-due', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const results = await reportService.runDueReports();
-
-  res.json({
-    success: true,
-    data: results,
   });
 }));
 

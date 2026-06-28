@@ -60,9 +60,10 @@ const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-
 const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 
 /**
- * Phone number regex (allows various formats)
+ * Phone number regex (stricter validation)
+ * Validates: +1234567890, +123 456 7890, (123) 456-7890, 123-456-7890, 1234567890
  */
-const PHONE_REGEX = /^[\+]?[(]?[0-9]{1,3}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{1,4}[-\s\.]?[0-9]{1,9}$/;
+const PHONE_REGEX = /^(?:\+?[1-9]\d{0,2}[-\s.]?)?\(?\d{3}\)?[-\s.]?\d{3}[-\s.]?\d{4}$/;
 
 // =============================================================================
 // Validation Functions

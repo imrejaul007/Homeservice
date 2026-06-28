@@ -4,13 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { useLocationStore } from '../../stores/locationStore';
-import { Eye, EyeOff, Mail, Phone, AlertCircle, CheckCircle, MapPin, Loader2, ArrowRight, Shield } from 'lucide-react';
+import { Eye, EyeOff, Mail, Phone, AlertCircle, CheckCircle, MapPin, Loader2, ArrowRight, Shield, Gift } from 'lucide-react';
 import NavigationHeader from '../layout/NavigationHeader';
 import Footer from '../layout/Footer';
 import PasswordStrengthIndicator from './PasswordStrengthIndicator';
+import CaptchaWidget from './CaptchaWidget';
 import { ApiError } from '../../services/AuthService';
 import { Sparkles } from '../ui/sparkles';
 import { motion, AnimatePresence, useAnimation } from 'framer-motion';
@@ -78,6 +79,9 @@ const CustomerRegistration: React.FC = () => {
   const [autoStreet, setAutoStreet] = useState<string>('');
   const [autoZipCode, setAutoZipCode] = useState<string>('');
   const [shake, setShake] = useState(false);
+  const [referralCode, setReferralCode] = useState('');
+  const [referralApplied, setReferralApplied] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const firstNameRef = useRef<HTMLInputElement>(null);
   const controls = useAnimation();
   const autofillSynced = useRef(false);
@@ -90,9 +94,19 @@ const CustomerRegistration: React.FC = () => {
   const { currentLocation, selectedCity, requestLocationPermission, getCurrentLocation } = useLocationStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const registrationState = location.state as { email?: string; returnTo?: string } | null;
   const prefilledEmail = registrationState?.email || '';
   const returnTo = registrationState?.returnTo?.startsWith('/') ? registrationState.returnTo : '/customer/bookings';
+
+  // Read referral code from URL ?ref=CODE query param
+  useEffect(() => {
+    const refCode = searchParams.get('ref');
+    if (refCode) {
+      setReferralCode(refCode.toUpperCase());
+      setReferralApplied(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const detectLocation = async () => {
@@ -101,7 +115,7 @@ const CustomerRegistration: React.FC = () => {
         const granted = await requestLocationPermission();
         if (granted) await getCurrentLocation();
       } catch {
-        console.log('Location detection failed');
+        // Location detection is optional during registration
       } finally {
         setIsDetectingLocation(false);
       }
@@ -215,6 +229,8 @@ const CustomerRegistration: React.FC = () => {
         firstName: data.firstName, lastName: data.lastName, email: data.email, password: data.password,
         phone: selectedCountryCode + data.phone, agreeToTermsAndPrivacy: data.agreeToTermsAndPrivacy, address, role: 'customer' as const,
         ...(data.gender && { gender: data.gender }),
+        ...(referralCode.trim() && { referralCode: referralCode.trim().toUpperCase() }),
+        ...(captchaToken ? { captchaToken } : {}),
       };
       await registerCustomer(registrationData);
       setIsSuccess(true);
@@ -334,9 +350,9 @@ const CustomerRegistration: React.FC = () => {
               {/* Top Gradient Line */}
               <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-nilin-coral via-nilin-rose to-nilin-blush" />
 
-              <motion.form onSubmit={handleSubmit(onSubmit)} animate={controls} className="p-10 space-y-6">
+              <motion.form onSubmit={handleSubmit(onSubmit)} animate={controls} className="p-6 sm:p-10 space-y-6">
                 {/* Name Fields */}
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}>
                     <label htmlFor="firstName" className="block text-base font-medium text-nilin-charcoal mb-3">First Name *</label>
                     <input {...register('firstName')} ref={firstNameRef} id="firstName" placeholder="John"
@@ -458,6 +474,35 @@ const CustomerRegistration: React.FC = () => {
                   {zodErrors.confirmPassword && <p id="confirmPassword-error" className="mt-2 text-sm text-red-500" role="alert" aria-live="polite">{zodErrors.confirmPassword.message}</p>}
                 </motion.div>
 
+                {/* Referral Code (Optional) */}
+                <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.67 }}>
+                  <label htmlFor="referralCode" className="block text-base font-medium text-nilin-charcoal mb-3">
+                    Referral Code <span className="text-nilin-warmGray text-sm font-normal">(optional)</span>
+                  </label>
+                  <div className="relative">
+                    <Gift className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-charcoal/60" />
+                    <input
+                      id="referralCode"
+                      type="text"
+                      value={referralCode}
+                      onChange={(e) => { setReferralCode(e.target.value.toUpperCase()); setReferralApplied(false); }}
+                      placeholder="Enter referral code (e.g. RE12345678)"
+                      className={`w-full pl-14 pr-5 py-4 rounded-xl bg-white border-2 text-nilin-charcoal placeholder:text-nilin-lightGray focus:outline-none focus:border-nilin-coral focus:ring-3 focus:ring-nilin-coral/20 transition-all text-base font-mono tracking-wider ${
+                        referralApplied ? 'border-green-400 bg-green-50' : 'border-nilin-border'
+                      }`}
+                    />
+                    {referralApplied && (
+                      <CheckCircle className="absolute right-5 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />
+                    )}
+                  </div>
+                  {referralApplied && referralCode && (
+                    <p className="mt-2 text-sm text-green-600 font-medium flex items-center gap-1">
+                      <Gift className="w-4 h-4" />
+                      Referral code applied! You'll earn {250} bonus coins after your first booking.
+                    </p>
+                  )}
+                </motion.div>
+
                 {/* Terms */}
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.7 }} className="pt-2">
                   <label className="flex items-start gap-4 cursor-pointer">
@@ -471,6 +516,8 @@ const CustomerRegistration: React.FC = () => {
                   </label>
                   {zodErrors.agreeToTermsAndPrivacy && <p id="agreeToTermsAndPrivacy-error" className="text-sm text-red-500 mt-2" role="alert" aria-live="polite">{zodErrors.agreeToTermsAndPrivacy.message}</p>}
                 </motion.div>
+
+                <CaptchaWidget onToken={setCaptchaToken} className="mt-2" />
 
                 {/* Submit */}
                 <motion.button initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.75 }}

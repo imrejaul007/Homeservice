@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Shield,
@@ -47,6 +48,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface SuspiciousBooking {
   id: string;
@@ -144,204 +148,11 @@ export const FakeBookingDetector: React.FC<FakeBookingDetectorProps> = ({
         setBookings(response.data.data.bookings || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setBookings([
-          {
-            id: 'fb-001',
-            bookingId: 'booking-ring-001',
-            customerId: 'cust-001',
-            customerName: 'Ahmed Hassan',
-            customerEmail: 'ahmed.h@email.com',
-            providerId: 'prov-045',
-            providerName: 'Quick Electricians',
-            type: 'ring_detection',
-            severity: 'critical',
-            status: 'investigating',
-            detectedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-            evidence: {
-              bookingCount: 5,
-              timeframeHours: 24,
-              ipAddresses: ['185.220.x.x', '185.221.x.x', '185.222.x.x'],
-              deviceFingerprints: ['fp-abc123', 'fp-def456', 'fp-ghi789'],
-              locations: [
-                { lat: 25.2048, lng: 55.2708, address: 'Dubai Marina, Dubai' },
-                { lat: 25.2048, lng: 55.2708, address: 'Dubai Marina, Dubai' },
-                { lat: 25.2048, lng: 55.2708, address: 'Dubai Marina, Dubai' }
-              ],
-              amount: 1250,
-              serviceCategory: 'Electrical'
-            },
-            investigation: {
-              assignedTo: 'investigator@nilin.com',
-              notes: [
-                { text: 'Multiple accounts from same IP range detected', author: 'System', createdAt: new Date(Date.now() - 3600000 * 2).toISOString() },
-                { text: 'Cross-referencing with other accounts', author: 'investigator@nilin.com', createdAt: new Date(Date.now() - 3600000).toISOString() }
-              ],
-              actions: []
-            }
-          },
-          {
-            id: 'fb-002',
-            bookingId: 'booking-vel-002',
-            customerId: 'cust-002',
-            customerName: 'Sarah Khan',
-            customerEmail: 'sarah.k@email.com',
-            type: 'velocity',
-            severity: 'high',
-            status: 'pending_review',
-            detectedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-            evidence: {
-              bookingCount: 8,
-              timeframeHours: 6,
-              ipAddresses: ['185.220.x.x'],
-              deviceFingerprints: ['fp-xyz789'],
-              locations: [
-                { lat: 24.4539, lng: 54.3773, address: 'Abu Dhabi Mall, Abu Dhabi' }
-              ],
-              amount: 3400,
-              serviceCategory: 'Plumbing'
-            },
-            investigation: {
-              notes: [
-                { text: 'Velocity threshold exceeded: 8 bookings in 6 hours', author: 'System', createdAt: new Date(Date.now() - 3600000 * 5).toISOString() }
-              ],
-              actions: []
-            }
-          },
-          {
-            id: 'fb-003',
-            bookingId: 'booking-pat-003',
-            customerId: 'cust-003',
-            customerName: 'Omar Ali',
-            customerEmail: 'omar.a@email.com',
-            type: 'pattern',
-            severity: 'medium',
-            status: 'investigating',
-            detectedAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-            evidence: {
-              bookingCount: 12,
-              timeframeHours: 168,
-              ipAddresses: ['192.168.x.x'],
-              deviceFingerprints: ['fp-mno123'],
-              locations: [
-                { lat: 25.2048, lng: 55.2708, address: 'JLT, Dubai' }
-              ],
-              amount: 5600,
-              serviceCategory: 'Cleaning'
-            },
-            investigation: {
-              notes: [
-                { text: 'Pattern: Consistent booking times suggest bot activity', author: 'System', createdAt: new Date(Date.now() - 3600000 * 12).toISOString() }
-              ],
-              actions: []
-            }
-          },
-          {
-            id: 'fb-004',
-            bookingId: 'booking-geo-004',
-            customerId: 'cust-004',
-            customerName: 'Fatima Malik',
-            customerEmail: 'fatima.m@email.com',
-            type: 'geolocation',
-            severity: 'high',
-            status: 'confirmed_fake',
-            detectedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-            evidence: {
-              bookingCount: 3,
-              timeframeHours: 2,
-              ipAddresses: ['10.0.x.x', '10.1.x.x'],
-              deviceFingerprints: ['fp-pqr456', 'fp-stu789'],
-              locations: [
-                { lat: 25.2048, lng: 55.2708, address: 'Downtown Dubai' },
-                { lat: 24.4539, lng: 54.3773, address: 'Abu Dhabi' },
-                { lat: 25.2048, lng: 55.2708, address: 'Downtown Dubai' }
-              ],
-              amount: 1800,
-              serviceCategory: 'AC Repair'
-            },
-            investigation: {
-              notes: [
-                { text: 'GPS spoofing detected - impossible travel time between locations', author: 'investigator@nilin.com', createdAt: new Date(Date.now() - 3600000 * 20).toISOString() }
-              ],
-              actions: [
-                { type: 'Account suspended', by: 'investigator@nilin.com', at: new Date(Date.now() - 3600000 * 18).toISOString() }
-              ]
-            }
-          },
-          {
-            id: 'fb-005',
-            bookingId: 'booking-beh-005',
-            customerId: 'cust-005',
-            customerName: 'Mohammed Khan',
-            customerEmail: 'mohammed.k@email.com',
-            type: 'behavioral',
-            severity: 'low',
-            status: 'legitimate',
-            detectedAt: new Date(Date.now() - 3600000 * 48).toISOString(),
-            evidence: {
-              bookingCount: 2,
-              timeframeHours: 72,
-              ipAddresses: ['203.0.x.x'],
-              deviceFingerprints: ['fp-abc999'],
-              locations: [
-                { lat: 25.2048, lng: 55.2708, address: 'Business Bay, Dubai' }
-              ],
-              amount: 650,
-              serviceCategory: 'Gardening'
-            },
-            investigation: {
-              notes: [
-                { text: 'Normal booking behavior confirmed after manual review', author: 'investigator@nilin.com', createdAt: new Date(Date.now() - 3600000 * 36).toISOString() }
-              ],
-              actions: [
-                { type: 'Marked as legitimate', by: 'investigator@nilin.com', at: new Date(Date.now() - 3600000 * 36).toISOString() }
-              ]
-            }
-          }
-        ]);
-        setStats({
-          totalDetected: 156,
-          investigating: 23,
-          confirmedFake: 45,
-          legitimate: 88,
-          detectionRate: 2.3,
-          falsePositiveRate: 12.5,
-          avgInvestigationTime: 4.2,
-          byType: [
-            { type: 'Ring Detection', count: 52, confirmed: 38, color: '#EF4444' },
-            { type: 'Velocity', count: 45, confirmed: 32, color: '#F59E0B' },
-            { type: 'Pattern', count: 28, confirmed: 18, color: '#8B5CF6' },
-            { type: 'Geolocation', count: 18, confirmed: 14, color: '#3B82F6' },
-            { type: 'Behavioral', count: 13, confirmed: 5, color: '#EC4899' }
-          ],
-          bySeverity: { low: 34, medium: 62, high: 45, critical: 15 },
-          trend: [
-            { date: 'Mon', detected: 22, confirmed: 8, dismissed: 12 },
-            { date: 'Tue', detected: 25, confirmed: 10, dismissed: 14 },
-            { date: 'Wed', detected: 18, confirmed: 7, dismissed: 10 },
-            { date: 'Thu', detected: 30, confirmed: 12, dismissed: 16 },
-            { date: 'Fri', detected: 28, confirmed: 11, dismissed: 15 },
-            { date: 'Sat', detected: 15, confirmed: 5, dismissed: 8 },
-            { date: 'Sun', detected: 18, confirmed: 6, dismissed: 10 }
-          ],
-          ringSizes: [
-            { size: 2, count: 12 },
-            { size: 3, count: 8 },
-            { size: 4, count: 5 },
-            { size: 5, count: 3 },
-            { size: 6, count: 2 },
-            { size: 7, count: 1 }
-          ],
-          velocityAlerts: [
-            { threshold: '5+ bookings/hour', triggered: 15 },
-            { threshold: '10+ bookings/day', triggered: 28 },
-            { threshold: '20+ bookings/week', triggered: 45 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching fake booking detection data:', err);
-      setError('Failed to load fake booking detection data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -358,6 +169,7 @@ export const FakeBookingDetector: React.FC<FakeBookingDetectorProps> = ({
   };
 
   const handleUpdateStatus = async (bookingId: string, newStatus: SuspiciousBooking['status']) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(bookingId);
     try {
       await api.patch(`/admin/fake-booking-detection/${bookingId}`, { status: newStatus });
@@ -372,7 +184,7 @@ export const FakeBookingDetector: React.FC<FakeBookingDetectorProps> = ({
   };
 
   const handleAddNote = async (bookingId: string) => {
-    if (!investigationNote.trim()) return;
+    if (WIDGET_MUTATIONS_READ_ONLY || !investigationNote.trim()) return;
 
     setActionLoading(bookingId);
     try {
@@ -683,15 +495,17 @@ export const FakeBookingDetector: React.FC<FakeBookingDetectorProps> = ({
                       <>
                         <button
                           onClick={() => handleUpdateStatus(booking.id, 'confirmed_fake')}
-                          disabled={actionLoading === booking.id}
-                          className="px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors text-sm font-medium"
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === booking.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Mark as confirmed fake'}
+                          className="px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Ban className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleUpdateStatus(booking.id, 'legitimate')}
-                          disabled={actionLoading === booking.id}
-                          className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium"
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === booking.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Mark as legitimate'}
+                          className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <CheckCircle className="w-4 h-4" />
                         </button>
@@ -798,8 +612,9 @@ export const FakeBookingDetector: React.FC<FakeBookingDetectorProps> = ({
                         />
                         <button
                           onClick={() => handleAddNote(booking.id)}
-                          disabled={!investigationNote.trim() || actionLoading === booking.id}
-                          className="px-4 py-2 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors text-sm font-medium disabled:opacity-50"
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || !investigationNote.trim() || actionLoading === booking.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Add note'}
+                          className="px-4 py-2 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <MessageSquare className="w-4 h-4" />
                         </button>

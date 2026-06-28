@@ -11,6 +11,9 @@ import {
   ArrowDown,
   Pin,
   Image as ImageIcon,
+  Search,
+  Check,
+  Square,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
@@ -37,11 +40,15 @@ const emptyForm = {
 const CuratedTrendingManagement: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('curated');
   const [items, setItems] = useState<CuratedTrend[]>([]);
+  const [filteredItems, setFilteredItems] = useState<CuratedTrend[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<CuratedTrend | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const loadItems = useCallback(async () => {
     setIsLoading(true);
@@ -60,6 +67,62 @@ const CuratedTrendingManagement: React.FC = () => {
       loadItems();
     }
   }, [activeTab, loadItems]);
+
+  // Filter items by search query
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredItems(items);
+    } else {
+      const query = searchQuery.toLowerCase();
+      setFilteredItems(
+        items.filter(
+          (item) =>
+            item.title.toLowerCase().includes(query) ||
+            item.subtitle.toLowerCase().includes(query) ||
+            item.categoryLabel.toLowerCase().includes(query) ||
+            item.linkTarget.toLowerCase().includes(query)
+        )
+      );
+    }
+    setSelectedIds(new Set());
+  }, [searchQuery, items]);
+
+  // Bulk selection handlers
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredItems.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredItems.map((item) => item._id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.size} selected card(s)?`)) return;
+    setIsDeleting(true);
+    try {
+      await Promise.all([...selectedIds].map((id) => curatedTrendApi.remove(id)));
+      toast.success(`${selectedIds.size} card(s) deleted`);
+      setSelectedIds(new Set());
+      await loadItems();
+    } catch {
+      toast.error('Failed to delete some items');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -145,6 +208,7 @@ const CuratedTrendingManagement: React.FC = () => {
     <AdminPageShell
       title="Homepage Trending"
       description="Curate the Trending Now carousel and manage featured experiences"
+      wideLayout
     >
       <div className="flex gap-2 mb-6">
         {(['curated', 'experiences'] as AdminTab[]).map((tab) => (
@@ -166,14 +230,40 @@ const CuratedTrendingManagement: React.FC = () => {
       ) : (
         <>
           <div className="flex items-center justify-between mb-6">
-            <p className="text-sm text-nilin-warmGray">
-              Pinned and ordered cards appear first in the homepage Trending Now section.
-            </p>
+            <div className="flex items-center gap-3 flex-1">
+              {/* Search */}
+              <div className="relative max-w-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                <input
+                  type="search"
+                  placeholder="Search cards..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-nilin-border/50 bg-white text-sm placeholder:text-nilin-warmGray/60 focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral"
+                />
+              </div>
+              {searchQuery && (
+                <span className="text-sm text-nilin-warmGray">
+                  {filteredItems.length} of {items.length} cards
+                </span>
+              )}
+            </div>
             <div className="flex gap-2">
+              {selectedIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={handleBulkDelete}
+                  disabled={isDeleting}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-nilin-rose text-white text-sm disabled:opacity-60"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete ({selectedIds.size})
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => loadItems()}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-nilin-border/50 bg-white text-sm"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-nilin-border/50 bg-white text-sm hover:bg-nilin-blush/30"
               >
                 <RefreshCw className="w-4 h-4" />
                 Refresh
@@ -181,7 +271,7 @@ const CuratedTrendingManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={openCreate}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-nilin-coral text-white text-sm"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-nilin-coral text-white text-sm hover:opacity-90"
               >
                 <Plus className="w-4 h-4" />
                 Add Card
@@ -202,11 +292,34 @@ const CuratedTrendingManagement: React.FC = () => {
                 Create first card
               </button>
             </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-nilin-border/30">
+              <Search className="w-12 h-12 text-nilin-warmGray mx-auto mb-3" />
+              <p className="text-nilin-charcoal font-medium">No cards match your search</p>
+              <p className="text-sm text-nilin-warmGray mb-4">Try a different search term or clear filters.</p>
+              <button type="button" onClick={() => setSearchQuery('')} className="px-4 py-2 bg-nilin-coral text-white rounded-lg text-sm">
+                Clear search
+              </button>
+            </div>
           ) : (
             <div className="bg-white rounded-2xl border border-nilin-border/30 overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-nilin-blush/20 text-left">
                   <tr>
+                    <th className="p-4 w-12">
+                      <button
+                        type="button"
+                        onClick={toggleSelectAll}
+                        className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-nilin-blush/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                        aria-label={selectedIds.size === filteredItems.length ? 'Deselect all' : 'Select all'}
+                      >
+                        {selectedIds.size === filteredItems.length && filteredItems.length > 0 ? (
+                          <Check className="w-4 h-4 text-nilin-coral" />
+                        ) : (
+                          <Square className="w-4 h-4 text-nilin-warmGray" />
+                        )}
+                      </button>
+                    </th>
                     <th className="p-4">Preview</th>
                     <th className="p-4">Title</th>
                     <th className="p-4">Link</th>
@@ -216,8 +329,22 @@ const CuratedTrendingManagement: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item, index) => (
-                    <tr key={item._id} className="border-t border-nilin-border/20">
+                  {filteredItems.map((item, index) => (
+                    <tr key={item._id} className="border-t border-nilin-border/20 hover:bg-nilin-blush/20 transition-colors">
+                      <td className="p-4">
+                        <button
+                          type="button"
+                          onClick={() => toggleSelect(item._id)}
+                          className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-nilin-blush/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                          aria-label={selectedIds.has(item._id) ? `Deselect ${item.title}` : `Select ${item.title}`}
+                        >
+                          {selectedIds.has(item._id) ? (
+                            <Check className="w-4 h-4 text-nilin-coral" />
+                          ) : (
+                            <Square className="w-4 h-4 text-nilin-warmGray" />
+                          )}
+                        </button>
+                      </td>
                       <td className="p-4">
                         <img src={item.imageUrl} alt={item.title} className="w-14 h-18 object-cover rounded-lg" />
                       </td>
@@ -233,8 +360,10 @@ const CuratedTrendingManagement: React.FC = () => {
                       </td>
                       <td className="p-4">
                         <span
-                          className={`px-2 py-1 rounded-full text-xs ${
-                            item.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
+                            item.isActive
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-nilin-warmGray/10 text-nilin-warmGray'
                           }`}
                         >
                           {item.isActive ? 'Active' : 'Inactive'}
@@ -270,126 +399,126 @@ const CuratedTrendingManagement: React.FC = () => {
         </>
       )}
 
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-5 border-b border-nilin-border/30">
-              <h2 className="text-lg font-semibold text-nilin-charcoal">
-                {editing ? 'Edit Curated Card' : 'New Curated Card'}
-              </h2>
-              <button type="button" onClick={() => setShowModal(false)}>
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+            <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between p-5 border-b border-nilin-border/30">
+                <h2 className="text-lg font-semibold text-nilin-charcoal">
+                  {editing ? 'Edit Curated Card' : 'New Curated Card'}
+                </h2>
+                <button type="button" onClick={() => setShowModal(false)}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-            <form onSubmit={handleSave} className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Title</label>
-                <input
-                  required
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Subtitle</label>
-                <input
-                  required
-                  value={form.subtitle}
-                  onChange={(e) => setForm({ ...form, subtitle: e.target.value })}
-                  className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Image URL</label>
-                <input
-                  required
-                  value={form.imageUrl}
-                  onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
-                  className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+              <form onSubmit={handleSave} className="p-5 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Link Type</label>
-                  <select
-                    value={form.linkType}
-                    onChange={(e) => setForm({ ...form, linkType: e.target.value as CuratedTrend['linkType'] })}
-                    className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
-                  >
-                    <option value="category">Category</option>
-                    <option value="service">Service</option>
-                    <option value="experience">Experience</option>
-                    <option value="search">Search</option>
-                    <option value="external">External URL</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Link Target</label>
+                  <label className="block text-sm font-medium mb-1">Title</label>
                   <input
                     required
-                    value={form.linkTarget}
-                    onChange={(e) => setForm({ ...form, linkTarget: e.target.value })}
-                    placeholder="slug, id, or URL"
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
                     className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
                   />
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Category Label</label>
-                <input
-                  required
-                  value={form.categoryLabel}
-                  onChange={(e) => setForm({ ...form, categoryLabel: e.target.value })}
-                  className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Metric Override (optional)</label>
-                <input
-                  value={form.metricOverride}
-                  onChange={(e) => setForm({ ...form, metricOverride: e.target.value })}
-                  placeholder="e.g. 15K views"
-                  className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
-                />
-              </div>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-sm">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Subtitle</label>
                   <input
-                    type="checkbox"
-                    checked={form.isActive}
-                    onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                    required
+                    value={form.subtitle}
+                    onChange={(e) => setForm({ ...form, subtitle: e.target.value })}
+                    className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
                   />
-                  Active
-                </label>
-                <label className="flex items-center gap-2 text-sm">
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Image URL</label>
                   <input
-                    type="checkbox"
-                    checked={form.isPinned}
-                    onChange={(e) => setForm({ ...form, isPinned: e.target.checked })}
+                    required
+                    value={form.imageUrl}
+                    onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+                    className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
                   />
-                  Pinned
-                </label>
-              </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Link Type</label>
+                    <select
+                      value={form.linkType}
+                      onChange={(e) => setForm({ ...form, linkType: e.target.value as CuratedTrend['linkType'] })}
+                      className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
+                    >
+                      <option value="category">Category</option>
+                      <option value="service">Service</option>
+                      <option value="experience">Experience</option>
+                      <option value="search">Search</option>
+                      <option value="external">External URL</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Link Target</label>
+                    <input
+                      required
+                      value={form.linkTarget}
+                      onChange={(e) => setForm({ ...form, linkTarget: e.target.value })}
+                      placeholder="slug, id, or URL"
+                      className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Category Label</label>
+                  <input
+                    required
+                    value={form.categoryLabel}
+                    onChange={(e) => setForm({ ...form, categoryLabel: e.target.value })}
+                    className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Metric Override (optional)</label>
+                  <input
+                    value={form.metricOverride}
+                    onChange={(e) => setForm({ ...form, metricOverride: e.target.value })}
+                    placeholder="e.g. 15K views"
+                    className="w-full px-3 py-2 border border-nilin-border/50 rounded-lg"
+                  />
+                </div>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.isActive}
+                      onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                    />
+                    Active
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.isPinned}
+                      onChange={(e) => setForm({ ...form, isPinned: e.target.checked })}
+                    />
+                    Pinned
+                  </label>
+                </div>
 
-              <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg border">
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-nilin-coral text-white disabled:opacity-60"
-                >
-                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  Save
-                </button>
-              </div>
-            </form>
+                <div className="flex justify-end gap-3 pt-2">
+                  <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg border">
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-nilin-coral text-white disabled:opacity-60"
+                  >
+                    {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    Save
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        )}
     </AdminPageShell>
   );
 };

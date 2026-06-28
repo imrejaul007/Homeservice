@@ -198,9 +198,35 @@ export const TravelTimeTracking: React.FC<TravelTimeTrackingProps> = ({
       ) : !hasTravelData ? (
         <EmptyState
           icon={<MapPin className="h-8 w-8" />}
-          title="Travel tracking coming soon"
-          description="Route and travel-time analytics will appear here once GPS tracking is enabled for completed jobs."
-          compact
+          title="No travel data yet"
+          description={
+            <div className="text-left space-y-2">
+              <p>Travel analytics will appear after you complete your first jobs with location tracking enabled.</p>
+              <div className="mt-3 pt-3 border-t border-gray-200">
+                <p className="font-medium text-gray-700 mb-2">How it works:</p>
+                <ul className="text-sm text-gray-600 space-y-1">
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500 mt-1">1.</span>
+                    <span>GPS data is captured when you start and complete jobs in the field</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500 mt-1">2.</span>
+                    <span>Travel time is calculated from your previous job location to the next</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500 mt-1">3.</span>
+                    <span>Distance is computed using real-world routes, not straight-line paths</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500 mt-1">4.</span>
+                    <span>Fuel costs are estimated based on your vehicle type and distance</span>
+                  </li>
+                </ul>
+              </div>
+              <p className="text-xs text-gray-500 mt-3">Data updates automatically after each completed booking.</p>
+            </div>
+          }
+          compact={false}
         />
       ) : (
         <>

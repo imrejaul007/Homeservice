@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Search,
   Plus,
@@ -170,7 +170,7 @@ const SubcategoryModal: React.FC<{
               {category.name} · {subcategories.length} total
             </p>
           </div>
-          <button type="button" onClick={onClose} className="p-2 hover:bg-nilin-blush/40 rounded-full">
+          <button type="button" onClick={onClose} className="w-11 h-11 flex items-center justify-center hover:bg-nilin-blush/40 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2" aria-label="Close subcategory modal">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -190,7 +190,8 @@ const SubcategoryModal: React.FC<{
                     setEditingSub(null);
                     setFormData(emptySubcategoryForm());
                   }}
-                  className="p-2 hover:bg-nilin-muted rounded-lg"
+                  className="w-11 h-11 flex items-center justify-center hover:bg-nilin-muted rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                  aria-label="Go back"
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
@@ -319,10 +320,10 @@ const SubcategoryModal: React.FC<{
                           Inactive
                         </span>
                       )}
-                      <button type="button" onClick={() => handleEdit(sub)} className="p-2 hover:bg-nilin-blush/40 rounded-lg">
+                      <button type="button" onClick={() => handleEdit(sub)} className="w-11 h-11 flex items-center justify-center hover:bg-nilin-blush/40 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2" aria-label="Edit subcategory">
                         <Edit3 className="w-4 h-4 text-nilin-coral" />
                       </button>
-                      <button type="button" onClick={() => handleDelete(sub.slug)} className="p-2 hover:bg-red-50 rounded-lg">
+                      <button type="button" onClick={() => handleDelete(sub.slug)} className="w-11 h-11 flex items-center justify-center hover:bg-red-50 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2" aria-label="Delete subcategory">
                         <Trash2 className="w-4 h-4 text-red-500" />
                       </button>
                     </div>
@@ -339,6 +340,7 @@ const SubcategoryModal: React.FC<{
 
 const CategoryManagement: React.FC = () => {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -390,9 +392,21 @@ const CategoryManagement: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (user && user.role !== 'admin') return;
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+      return;
+    }
     loadData();
-  }, [loadData, user]);
+  }, [loadData, user, navigate]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId || categories.length === 0) return;
+    const categoryToEdit = categories.find((cat) => cat._id === editId);
+    if (categoryToEdit) {
+      handleEdit(categoryToEdit);
+    }
+  }, [categories, searchParams]);
 
   const filteredCategories = categories.filter(
     (cat) =>
@@ -622,7 +636,7 @@ const CategoryManagement: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleToggleFeatured(category)}
-                            className="p-2 rounded-full hover:bg-nilin-blush/40"
+                            className="w-11 h-11 flex items-center justify-center rounded-full hover:bg-nilin-blush/40"
                             title={category.isFeatured ? 'Unfeature' : 'Feature'}
                           >
                             <Star
@@ -651,16 +665,18 @@ const CategoryManagement: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleEdit(category)}
-                              className="p-2 rounded-lg hover:bg-nilin-blush/40"
+                              className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-blush/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                               title="Edit"
+                              aria-label="Edit category"
                             >
                               <Edit3 className="w-4 h-4 text-nilin-coral" />
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDelete(category._id)}
-                              className="p-2 rounded-lg hover:bg-red-50"
+                              className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
                               title="Delete"
+                              aria-label="Delete category"
                             >
                               <Trash2 className="w-4 h-4 text-red-500" />
                             </button>
@@ -691,7 +707,7 @@ const CategoryManagement: React.FC = () => {
                 <h2 id="category-form-title" className="text-xl font-serif text-nilin-charcoal">
                   {editingCategory ? 'Edit category' : 'New category'}
                 </h2>
-                <button type="button" onClick={() => setShowModal(false)} className="p-2 hover:bg-nilin-muted rounded-full">
+                <button type="button" onClick={() => setShowModal(false)} className="w-11 h-11 flex items-center justify-center hover:bg-nilin-muted rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2" aria-label="Close category form">
                   <X className="w-5 h-5" />
                 </button>
               </div>

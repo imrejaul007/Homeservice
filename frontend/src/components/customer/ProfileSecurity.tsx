@@ -71,6 +71,8 @@ const ProfileSecurity: React.FC = () => {
   const [loginHistory, setLoginHistory] = useState<LoginSession[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [confirmLogoutAll, setConfirmLogoutAll] = useState(false);
+  const [confirmLogoutSession, setConfirmLogoutSession] = useState<string | null>(null);
 
   // 2FA State
   const [twoFactorStatus, setTwoFactorStatus] = useState<TwoFactorStatus | null>(null);
@@ -119,7 +121,7 @@ const ProfileSecurity: React.FC = () => {
         setTwoFactorSetup(response.data.data);
         setShowSetup2FA(true);
       }
-    } catch (err: any) {
+    } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to setup 2FA' });
     } finally {
       setSettingUp2FA(false);
@@ -142,7 +144,7 @@ const ProfileSecurity: React.FC = () => {
         setTwoFactorSetup(null);
         fetch2FAStatus();
       }
-    } catch (err: any) {
+    } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to enable 2FA' });
     } finally {
       setSettingUp2FA(false);
@@ -172,7 +174,7 @@ const ProfileSecurity: React.FC = () => {
         setVerifyCode('');
         setDisablePassword('');
       }
-    } catch (err: any) {
+    } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to disable 2FA' });
     } finally {
       setSettingUp2FA(false);
@@ -180,16 +182,13 @@ const ProfileSecurity: React.FC = () => {
   };
 
   const handleLogoutAllDevices = async () => {
-    if (!confirm('Are you sure you want to logout from all other devices? Your current session will remain active.')) {
-      return;
-    }
-
     setLoggingOutAll(true);
     try {
       await api.post('/auth/logout-all-devices');
       setMessage({ type: 'success', text: 'Successfully logged out from all other devices' });
+      setConfirmLogoutAll(false);
       fetchLoginHistory();
-    } catch (err: any) {
+    } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to logout from other devices' });
     } finally {
       setLoggingOutAll(false);
@@ -197,15 +196,12 @@ const ProfileSecurity: React.FC = () => {
   };
 
   const handleLogoutSession = async (login: LoginSession) => {
-    if (!confirm(`Are you sure you want to logout from "${login.device || 'this device'}"?`)) {
-      return;
-    }
-
     try {
       await api.delete(`/sessions/${login.sessionId}`);
       setMessage({ type: 'success', text: 'Session logged out successfully' });
+      setConfirmLogoutSession(null);
       fetchLoginHistory();
-    } catch (err: any) {
+    } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to logout from this device' });
     }
   };
@@ -252,7 +248,7 @@ const ProfileSecurity: React.FC = () => {
       setMessage({ type: 'success', text: 'Password changed successfully!' });
       setIsEditingPassword(false);
       setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-    } catch (error: any) {
+    } catch (error) {
       setMessage({
         type: 'error',
         text: error.response?.data?.message || 'Failed to change password',
@@ -289,7 +285,7 @@ const ProfileSecurity: React.FC = () => {
 
         setMessage({ type: 'success', text: 'Your data has been downloaded!' });
       }
-    } catch (error: any) {
+    } catch (error) {
       setMessage({
         type: 'error',
         text: error.response?.data?.message || 'Failed to export data',
@@ -319,7 +315,7 @@ const ProfileSecurity: React.FC = () => {
         await logout();
         navigate('/');
       }
-    } catch (error: any) {
+    } catch (error) {
       setMessage({
         type: 'error',
         text: error.response?.data?.message || 'Failed to delete account. Please check your password.',
@@ -346,7 +342,7 @@ const ProfileSecurity: React.FC = () => {
         {!isEditingPassword ? (
           <button
             onClick={() => setIsEditingPassword(true)}
-            className="btn-nilin"
+            className="btn-nilin focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
           >
             Change Password
           </button>
@@ -363,13 +359,15 @@ const ProfileSecurity: React.FC = () => {
                   name="currentPassword"
                   value={passwordData.currentPassword}
                   onChange={handlePasswordChange}
-                  className="w-full pl-12 pr-12 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none"
+                  className="w-full pl-12 pr-12 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   placeholder="Enter current password"
+                  aria-invalid={!!message && message.type === 'error'}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPasswords(prev => ({ ...prev, current: !prev.current }))}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-nilin-warmGray hover:text-nilin-charcoal"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-nilin"
+                  aria-label={showPasswords.current ? 'Hide current password' : 'Show current password'}
                 >
                   {showPasswords.current ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -387,13 +385,15 @@ const ProfileSecurity: React.FC = () => {
                   name="newPassword"
                   value={passwordData.newPassword}
                   onChange={handlePasswordChange}
-                  className="w-full pl-12 pr-12 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none"
+                  className="w-full pl-12 pr-12 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   placeholder="Enter new password"
+                  aria-invalid={!!message && message.type === 'error'}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPasswords(prev => ({ ...prev, new: !prev.new }))}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-nilin-warmGray hover:text-nilin-charcoal"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-nilin"
+                  aria-label={showPasswords.new ? 'Hide new password' : 'Show new password'}
                 >
                   {showPasswords.new ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -412,13 +412,15 @@ const ProfileSecurity: React.FC = () => {
                   name="confirmPassword"
                   value={passwordData.confirmPassword}
                   onChange={handlePasswordChange}
-                  className="w-full pl-12 pr-12 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none"
+                  className="w-full pl-12 pr-12 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   placeholder="Confirm new password"
+                  aria-invalid={!!message && message.type === 'error'}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPasswords(prev => ({ ...prev, confirm: !prev.confirm }))}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-nilin-warmGray hover:text-nilin-charcoal"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-nilin"
+                  aria-label={showPasswords.confirm ? 'Hide confirm password' : 'Show confirm password'}
                 >
                   {showPasswords.confirm ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -429,13 +431,13 @@ const ProfileSecurity: React.FC = () => {
               <button
                 onClick={handleSavePassword}
                 disabled={isLoading}
-                className="btn-nilin flex-1 flex items-center justify-center gap-2"
+                className="btn-nilin flex-1 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 {isLoading ? 'Updating...' : 'Update Password'}
               </button>
               <button
                 onClick={handleCancel}
-                className="flex-1 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+                className="flex-1 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 Cancel
               </button>
@@ -494,7 +496,7 @@ const ProfileSecurity: React.FC = () => {
                     <button
                       onClick={handleEnable2FA}
                       disabled={settingUp2FA || verifyCode.length !== 6}
-                      className="btn-nilin flex-1"
+                      className="btn-nilin flex-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                     >
                       {settingUp2FA ? 'Verifying...' : 'Verify & Enable'}
                     </button>
@@ -504,7 +506,7 @@ const ProfileSecurity: React.FC = () => {
                         setTwoFactorSetup(null);
                         setVerifyCode('');
                       }}
-                      className="px-4 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted"
+                      className="px-4 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                     >
                       Cancel
                     </button>
@@ -514,7 +516,7 @@ const ProfileSecurity: React.FC = () => {
                 <>
                   <button
                     onClick={() => setShowSetup2FA(true)}
-                    className="px-4 py-2 rounded-nilin border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                    className="px-4 py-2 rounded-nilin border border-red-200 text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
                   >
                     Disable 2FA
                   </button>
@@ -530,7 +532,7 @@ const ProfileSecurity: React.FC = () => {
             <button
               onClick={handleSetup2FA}
               disabled={settingUp2FA}
-              className="btn-nilin flex items-center gap-2"
+              className="btn-nilin flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
             >
               {settingUp2FA ? (
                 <>
@@ -617,13 +619,31 @@ const ProfileSecurity: React.FC = () => {
                   </div>
                 </div>
                 {!login.isCurrent && (
-                  <button
-                    onClick={() => handleLogoutSession(login)}
-                    className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    Logout
-                  </button>
+                  confirmLogoutSession === login.sessionId ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleLogoutSession(login)}
+                        disabled={loggingOutAll}
+                        className="px-3 py-1.5 text-xs bg-red-500 text-white rounded hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => setConfirmLogoutSession(null)}
+                        className="px-3 py-1.5 text-xs border border-nilin-border rounded hover:bg-nilin-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmLogoutSession(login.sessionId)}
+                      className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 rounded"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Logout
+                    </button>
+                  )
                 )}
               </div>
             ))
@@ -643,23 +663,32 @@ const ProfileSecurity: React.FC = () => {
               <p className="text-sm text-nilin-warmGray">Manage devices logged into your account</p>
             </div>
           </div>
-          <button
-            onClick={handleLogoutAllDevices}
-            disabled={loggingOutAll}
-            className="text-sm text-nilin-coral hover:text-nilin-rose flex items-center gap-2 disabled:opacity-50"
-          >
-            {loggingOutAll ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Logging out...
-              </>
-            ) : (
-              <>
-                <LogOut className="w-4 h-4" />
-                Logout All Devices
-              </>
-            )}
-          </button>
+          {confirmLogoutAll ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleLogoutAllDevices}
+                disabled={loggingOutAll}
+                className="px-4 py-2 text-sm bg-nilin-coral text-white rounded hover:bg-nilin-rose focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+              >
+                {loggingOutAll ? 'Logging out...' : 'Yes, logout all'}
+              </button>
+              <button
+                onClick={() => setConfirmLogoutAll(false)}
+                className="px-4 py-2 text-sm border border-nilin-border rounded hover:bg-nilin-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmLogoutAll(true)}
+              disabled={loggingOutAll}
+              className="text-sm text-nilin-coral hover:text-nilin-rose flex items-center gap-2 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout All Devices
+            </button>
+          )}
         </div>
       </div>
 
@@ -680,7 +709,7 @@ const ProfileSecurity: React.FC = () => {
           <button
             onClick={handleExportData}
             disabled={isExporting}
-            className="w-full text-left px-4 py-4 rounded-nilin border border-nilin-border hover:bg-nilin-muted transition-colors flex items-center justify-between"
+            className="w-full text-left px-4 py-4 rounded-nilin border border-nilin-border hover:bg-nilin-muted transition-colors flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
           >
             <div className="flex items-center gap-3">
               <Download className="w-5 h-5 text-nilin-coral" />
@@ -699,7 +728,7 @@ const ProfileSecurity: React.FC = () => {
           {/* Delete Account */}
           <button
             onClick={() => setShowDeleteModal(true)}
-            className="w-full text-left px-4 py-4 rounded-nilin border border-red-200 hover:bg-red-50 transition-colors flex items-center justify-between"
+            className="w-full text-left px-4 py-4 rounded-nilin border border-red-200 hover:bg-red-50 transition-colors flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
           >
             <div className="flex items-center gap-3">
               <Trash2 className="w-5 h-5 text-red-500" />
@@ -747,14 +776,14 @@ const ProfileSecurity: React.FC = () => {
                   setShowDeleteModal(false);
                   setDeletePassword('');
                 }}
-                className="flex-1 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+                className="flex-1 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDeleteAccount}
                 disabled={isDeleting || !deletePassword}
-                className="flex-1 py-3 rounded-nilin bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 py-3 rounded-nilin bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
               >
                 {isDeleting ? (
                   <>

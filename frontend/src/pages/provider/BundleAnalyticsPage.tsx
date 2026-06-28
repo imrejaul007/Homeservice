@@ -11,9 +11,11 @@ import {
   BarChart3,
   RefreshCw,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { bundleApi, Bundle } from '../../services/bundleApi';
 import { formatPrice } from '../../utils/currency';
+import toast from 'react-hot-toast';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
@@ -32,6 +34,7 @@ const BundleAnalyticsPage: React.FC = () => {
   const navigate = useNavigate();
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [analytics, setAnalytics] = useState<BundleAnalyticsData | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -50,16 +53,24 @@ const BundleAnalyticsPage: React.FC = () => {
       const bundleData = await bundleApi.getBundle(id!);
       setBundle(bundleData);
 
-      // TODO: Replace with actual analytics endpoint when available
-      // For now, derive analytics from bundle data
-      setAnalytics({
-        totalBookings: bundleData.bookingsUsed || 0,
-        totalRevenue: (bundleData.bundlePrice || 0) * (bundleData.bookingsUsed || 0),
-        averageRating: bundleData.averageRating || 0,
-        bookingTrend: [],
-        customerLocations: [],
-        peakBookingDays: [],
-      });
+      // Fetch analytics from the dedicated endpoint
+      try {
+        const response = await bundleApi.getAnalytics(id!);
+        setAnalyticsError(null);
+        setAnalytics({
+          totalBookings: response.totalBookings || 0,
+          totalRevenue: response.totalRevenue || 0,
+          averageRating: response.averageRating || bundleData.averageRating || 0,
+          bookingTrend: response.bookingTrend || [],
+          customerLocations: response.customerLocations || [],
+          peakBookingDays: response.peakBookingDays || [],
+        });
+      } catch (analyticsError) {
+        // Analytics API failed - set error state instead of using derived data
+        setAnalyticsError('Unable to load analytics data. Please try again later.');
+        toast.error('Analytics temporarily unavailable', { id: 'analytics-unavailable' });
+        setAnalytics(null);
+      }
     } catch (error) {
       console.error('Failed to load bundle analytics:', error);
     } finally {
@@ -144,6 +155,24 @@ const BundleAnalyticsPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Analytics Error Banner */}
+          {analyticsError && (
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-nilin-lg flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-amber-800">Analytics Data Unavailable</p>
+                <p className="text-sm text-amber-700 mt-0.5">{analyticsError}</p>
+              </div>
+              <button
+                onClick={() => loadBundleAnalytics(true)}
+                disabled={refreshing}
+                className="text-sm text-amber-600 hover:text-amber-800 font-medium disabled:opacity-50"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
           {/* Stats Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div className="glass-nilin rounded-nilin-lg p-6 hover-lift">
@@ -154,7 +183,7 @@ const BundleAnalyticsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray mb-1">Total Bookings</p>
               <p className="text-2xl font-bold text-nilin-charcoal">
-                {analytics?.totalBookings || 0}
+                {analytics ? analytics.totalBookings : '--'}
               </p>
             </div>
 
@@ -166,7 +195,7 @@ const BundleAnalyticsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray mb-1">Total Revenue</p>
               <p className="text-2xl font-bold text-nilin-charcoal">
-                {formatPrice(analytics?.totalRevenue || 0, 'AED')}
+                {analytics ? formatPrice(analytics.totalRevenue, 'AED') : '--'}
               </p>
             </div>
 
@@ -223,7 +252,15 @@ const BundleAnalyticsPage: React.FC = () => {
           {/* Placeholder for detailed charts - to be implemented */}
           <div className="glass-nilin rounded-nilin-lg p-6">
             <h2 className="text-lg font-serif text-nilin-charcoal mb-4">Booking Trend</h2>
-            {analytics?.bookingTrend && analytics.bookingTrend.length > 0 ? (
+            {!analytics ? (
+              <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
+                <div className="text-center text-nilin-warmGray">
+                  <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                  <p>Booking trend data unavailable</p>
+                  <p className="text-sm mt-1">Unable to load analytics at this time</p>
+                </div>
+              </div>
+            ) : analytics.bookingTrend.length > 0 ? (
               <div className="h-64 flex items-end gap-1">
                 {analytics.bookingTrend.map((day, idx) => (
                   <div

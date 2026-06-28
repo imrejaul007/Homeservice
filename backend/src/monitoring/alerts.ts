@@ -7,6 +7,7 @@
  */
 
 import { getBreakerMetrics, getAllCircuitBreakerStats, CircuitState } from '../services/circuitBreaker.service';
+import logger from '../utils/logger';
 
 // ============================================================
 // ALERT TYPES
@@ -478,10 +479,16 @@ export async function sendAlertWebhook(
     });
 
     if (!response.ok) {
-      console.error(`Failed to send alert webhook: ${response.status}`);
+      logger.error('Failed to send alert webhook', {
+        context: 'Alerts',
+        status: response.status,
+      });
     }
   } catch (error) {
-    console.error('Failed to send alert webhook:', error);
+    logger.error('Failed to send alert webhook', {
+      context: 'Alerts',
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

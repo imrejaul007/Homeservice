@@ -10,8 +10,11 @@ import {
   AddMessageDTO,
   ResolveDisputeDTO,
   DisputeFiltersDTO,
+  SubmitAppealDTO,
+  ReviewAppealDTO,
 } from '../services/dispute.service';
 import { refundService, CreateRefundDTO, ProcessRefundDTO } from '../services/refund.service';
+import { escalationService } from '../services/escalation.service';
 import { cache } from '../config/redis';
 import logger from '../utils/logger';
 import rateLimit from 'express-rate-limit';
@@ -99,6 +102,33 @@ const disputeEscalateLimiter = rateLimit({
     res.status(429).json({
       success: false,
       error: 'Too many escalation requests. Please wait before escalating this dispute again.',
+    });
+  },
+});
+
+/**
+ * Rate limiter for dispute list retrieval
+ * Limits to 100 requests per minute per user
+ */
+const disputesListLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // 100 requests per minute
+  keyGenerator: (req: Request) => {
+    const userId = (req as Request & { user?: { _id?: string } }).user?._id || 'unknown';
+    return `dispute:list:${userId}`;
+  },
+  message: { success: false, error: 'Too many requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    logger.warn('Dispute list rate limit exceeded', {
+      ip: req.ip,
+      userId: (req as Request & { user?: { _id?: string } }).user?._id,
+      action: 'DISPUTE_LIST_RATE_LIMIT',
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many requests. Please wait a moment before fetching your disputes.',
     });
   },
 });
@@ -219,10 +249,24 @@ router.post(
       evidence,
     });
 
+    // Check if dispute should be auto-escalated
+    const escalationResult = await escalationService.checkDisputeEscalation(dispute._id.toString());
+    if (escalationResult.shouldEscalate) {
+      // Escalate asynchronously to not block the response
+      escalationService.escalateDispute(dispute._id.toString(), escalationResult.triggers).catch(err => {
+        logger.error('Auto-escalation failed', {
+          disputeId: dispute._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     res.status(201).json({
       success: true,
       data: { dispute },
-      message: 'Dispute created successfully',
+      message: escalationResult.shouldEscalate
+        ? 'Dispute created successfully. It has been escalated for priority review.'
+        : 'Dispute created successfully',
     });
   })
 );
@@ -257,6 +301,7 @@ router.get(
       success: true,
       data: result.disputes,
       pagination: result.pagination,
+      ...(result.statusBreakdown && { statusBreakdown: result.statusBreakdown }),
     });
   })
 );
@@ -269,6 +314,7 @@ router.get(
 router.get(
   '/my',
   authenticate,
+  disputesListLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const filters = {
       status: req.query.status as any,
@@ -282,6 +328,7 @@ router.get(
       success: true,
       data: result.disputes,
       pagination: result.pagination,
+      statusBreakdown: result.statusBreakdown,
     });
   })
 );
@@ -435,6 +482,7 @@ router.post(
 router.post(
   '/:id/messages',
   authenticate,
+  disputeMessageLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const { message } = req.body;
 
@@ -544,6 +592,21 @@ router.patch(
       reason
     );
 
+    // Check for escalation triggers after status change
+    // (only for open/under_review status, not for resolved/closed)
+    if (status !== 'resolved' && status !== 'closed') {
+      const escalationResult = await escalationService.checkDisputeEscalation(req.params.id);
+      if (escalationResult.shouldEscalate) {
+        // Escalate asynchronously
+        escalationService.escalateDispute(req.params.id, escalationResult.triggers).catch(err => {
+          logger.error('Auto-escalation failed on status change', {
+            disputeId: req.params.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    }
+
     res.json({
       success: true,
       data: dispute,
@@ -648,6 +711,100 @@ router.patch(
 );
 
 // ============================================
+// APPEAL ROUTES
+// ============================================
+
+/**
+ * @route   POST /api/disputes/:id/appeal
+ * @desc    Submit appeal for a resolved dispute
+ * @access  Private (Dispute parties only)
+ */
+router.post(
+  '/:id/appeal',
+  authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const { reason } = req.body as { reason: string };
+
+    if (!reason) {
+      throw new ApiError(400, 'Appeal reason is required');
+    }
+
+    // Verify user is party to dispute
+    await disputeService.verifyDisputeAccess(
+      req.params.id,
+      req.user!._id.toString(),
+      { allowAdmin: false, allowParties: true }
+    );
+
+    const dispute = await disputeService.submitAppeal({
+      disputeId: req.params.id,
+      reason,
+      submittedBy: req.user!._id.toString(),
+    });
+
+    res.json({
+      success: true,
+      data: dispute,
+      message: 'Appeal submitted successfully',
+    });
+  })
+);
+
+/**
+ * @route   GET /api/admin/disputes/appeals
+ * @desc    List pending appeals
+ * @access  Private (Admin only)
+ */
+router.get(
+  '/admin/appeals',
+  authenticate,
+  requireRole(['admin']),
+  asyncHandler(async (req: Request, res: Response) => {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+
+    const result = await disputeService.getPendingAppeals(page, limit);
+
+    res.json({
+      success: true,
+      data: result.disputes,
+      pagination: result.pagination,
+    });
+  })
+);
+
+/**
+ * @route   POST /api/admin/disputes/:id/appeal-review
+ * @desc    Review appeal (approve/reject)
+ * @access  Private (Admin only)
+ */
+router.post(
+  '/admin/:id/appeal-review',
+  authenticate,
+  requireRole(['admin']),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { action, reviewNotes } = req.body as { action: 'approve' | 'reject'; reviewNotes?: string };
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      throw new ApiError(400, 'Action must be "approve" or "reject"');
+    }
+
+    const dispute = await disputeService.reviewAppeal({
+      disputeId: req.params.id,
+      action,
+      reviewNotes,
+      reviewedBy: req.user!._id.toString(),
+    });
+
+    res.json({
+      success: true,
+      data: dispute,
+      message: `Appeal ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
+    });
+  })
+);
+
+// ============================================
 // REFUND ROUTES
 // ============================================
 
@@ -681,10 +838,24 @@ router.post(
       disputeId,
     });
 
+    // Check if refund should be auto-escalated
+    const escalationResult = await escalationService.checkRefundEscalation(refund._id.toString());
+    if (escalationResult.shouldEscalate) {
+      // Escalate asynchronously to not block the response
+      escalationService.escalateRefund(refund._id.toString(), escalationResult.triggers).catch(err => {
+        logger.error('Auto-escalation failed', {
+          refundId: refund._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     res.status(201).json({
       success: true,
       data: refund,
-      message: 'Refund request created successfully',
+      message: escalationResult.shouldEscalate
+        ? 'Refund request created successfully. It has been escalated for priority review.'
+        : 'Refund request created successfully',
     });
   })
 );

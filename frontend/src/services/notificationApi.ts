@@ -99,12 +99,12 @@ export function normalizeBackendNotificationType(type: string): string {
  */
 export interface Notification {
   _id?: string;
-  id?: string;
+  id: string; // Required - mapped from MongoDB _id by backend
   userId?: string;
   type?: NotificationType;
   title?: string;
   message?: string;
-  isRead?: boolean;
+  isRead: boolean; // Required - boolean for read status
   data?: Record<string, unknown>;
   createdAt?: string;
   readAt?: string;

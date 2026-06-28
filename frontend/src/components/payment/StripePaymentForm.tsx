@@ -10,10 +10,13 @@ import { CreditCard, Lock, AlertCircle, CheckCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import PaymentService, { type PaymentMethodType } from '../../services/PaymentService';
 
-// Initialize Stripe with publishable key
-const stripePromise = loadStripe(
-  import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder'
-);
+const STRIPE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined;
+
+if (!STRIPE_KEY && import.meta.env.DEV) {
+  console.warn('[StripePaymentForm] VITE_STRIPE_PUBLISHABLE_KEY is not set in .env.local');
+}
+
+const stripePromise = STRIPE_KEY ? loadStripe(STRIPE_KEY) : null;
 
 // ============================================
 // Payment Deduplication Prevention
@@ -206,7 +209,7 @@ const PaymentForm: React.FC<StripePaymentFormProps> = ({
             clearPendingPayment(bookingId);
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       const message = err.message || 'Failed to process payment.';
       setErrorMessage(message);
       onError(message);

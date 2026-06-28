@@ -15,7 +15,9 @@ import {
   Grid3X3,
 } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
-import { useLocationStore, SUPPORTED_CITIES } from '@/stores/locationStore';
+import { useLocationStore, useSupportedCities } from '@/stores/locationStore';
+import { useCategories } from '@/hooks/useCategories';
+import { useTrendingSearchTerms } from '@/hooks/useTrendingSearchTerms';
 import { cn } from '@/lib/utils';
 import type { Suggestion } from '@/types/search';
 
@@ -26,15 +28,6 @@ interface SearchModalProps {
 }
 
 type TabType = 'all' | 'services' | 'providers' | 'locations';
-
-const CATEGORIES = [
-  { name: 'Hair', icon: '✂️', slug: 'hair' },
-  { name: 'Spa', icon: '💆', slug: 'spa' },
-  { name: 'Nails', icon: '💅', slug: 'nails' },
-  { name: 'Makeup', icon: '💄', slug: 'makeup' },
-  { name: 'Skincare', icon: '✨', slug: 'skincare' },
-  { name: 'Massage', icon: '👐', slug: 'massage' },
-];
 
 const SearchModal: React.FC<SearchModalProps> = ({
   isOpen,
@@ -55,6 +48,9 @@ const SearchModal: React.FC<SearchModalProps> = ({
   } = useSearchStore();
 
   const { selectedCity, setSelectedCity } = useLocationStore();
+  const supportedCities = useSupportedCities();
+  const { categories: apiCategories } = useCategories();
+  const { terms: trendingTerms } = useTrendingSearchTerms(8);
 
   const [query, setQuery] = useState(initialQuery);
   const [activeTab, setActiveTab] = useState<TabType>('all');
@@ -172,7 +168,7 @@ const SearchModal: React.FC<SearchModalProps> = ({
   };
 
   const handleLocationSelect = (cityName: string) => {
-    const city = SUPPORTED_CITIES.find(c =>
+    const city = supportedCities.find(c =>
       c.name.toLowerCase() === cityName.toLowerCase() ||
       c.id === cityName.toLowerCase()
     );
@@ -183,7 +179,7 @@ const SearchModal: React.FC<SearchModalProps> = ({
     setLocationQuery('');
   };
 
-  const filteredCities = SUPPORTED_CITIES.filter(city =>
+  const filteredCities = supportedCities.filter(city =>
     city.name.toLowerCase().includes(locationQuery.toLowerCase()) ||
     city.id.includes(locationQuery.toLowerCase())
   );
@@ -222,7 +218,7 @@ const SearchModal: React.FC<SearchModalProps> = ({
             {/* Location Button */}
             <button
               onClick={() => setShowLocationPicker(!showLocationPicker)}
-              className="flex items-center gap-2 px-4 py-3 bg-nilin-blush/30 rounded-xl border-2 border-nilin-border/30 hover:border-nilin-coral/50 transition-colors"
+              className="flex items-center gap-2 min-h-11 px-3 sm:px-4 py-3 bg-nilin-blush/30 rounded-xl border-2 border-nilin-border/30 hover:border-nilin-coral/50 transition-colors flex-shrink-0"
             >
               <MapPin className="w-5 h-5 text-nilin-coral" />
               <span className="text-sm font-medium text-nilin-charcoal max-w-[100px] truncate">
@@ -233,7 +229,7 @@ const SearchModal: React.FC<SearchModalProps> = ({
             {/* Close Button */}
             <button
               onClick={onClose}
-              className="p-3 rounded-xl bg-nilin-blush/30 hover:bg-nilin-blush/50 transition-colors"
+              className="min-h-11 min-w-11 flex items-center justify-center rounded-xl bg-nilin-blush/30 hover:bg-nilin-blush/50 transition-colors flex-shrink-0"
             >
               <X className="w-5 h-5 text-nilin-warmGray" />
             </button>
@@ -373,12 +369,12 @@ const SearchModal: React.FC<SearchModalProps> = ({
               <TrendingUp className="w-4 h-4 text-nilin-coral" />
               <span className="text-sm font-medium text-nilin-warmGray">Trending Searches</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {['Bridal Makeup', 'Swedish Massage', 'Gel Nails', 'Hair Coloring', 'Deep Tissue', 'Facial', 'Manicure', 'Haircut'].map((term, index) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              {trendingTerms.map((term, index) => (
                 <button
-                  key={`trending-${index}`}
+                  key={`trending-${term}-${index}`}
                   onClick={() => handleItemClick({ type: 'suggestion', data: { text: term, type: 'service' }, label: term })}
-                  className="flex items-center gap-2 px-4 py-3 bg-white rounded-xl text-sm text-nilin-charcoal hover:bg-nilin-coral hover:text-white transition-colors shadow-sm group"
+                  className="flex items-center gap-2 min-h-11 px-4 py-3 bg-white rounded-xl text-sm text-nilin-charcoal hover:bg-nilin-coral hover:text-white transition-colors shadow-sm group"
                 >
                   <span className="w-6 h-6 flex items-center justify-center bg-nilin-coral/10 group-hover:bg-white/20 rounded-lg text-xs font-bold text-nilin-coral group-hover:text-white">
                     {index + 1}
@@ -396,15 +392,15 @@ const SearchModal: React.FC<SearchModalProps> = ({
             <Grid3X3 className="w-4 h-4 text-nilin-warmGray" />
             <span className="text-sm font-medium text-nilin-warmGray">Browse Categories</span>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {CATEGORIES.map((category) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {apiCategories.slice(0, 6).map((category) => (
               <button
                 key={category.slug}
                 onClick={() => handleCategoryClick(category.slug)}
-                className="flex items-center gap-3 px-4 py-4 bg-white rounded-xl hover:bg-nilin-coral hover:text-white transition-all duration-300 shadow-sm group"
+                className="flex items-center gap-3 min-h-11 px-4 py-4 bg-white rounded-xl hover:bg-nilin-coral hover:text-white transition-all duration-300 shadow-sm group"
               >
-                <span className="text-2xl">{category.icon}</span>
-                <span className="font-medium text-nilin-charcoal group-hover:text-white">
+                <span className="text-2xl">{category.icon || '✨'}</span>
+                <span className="font-medium text-nilin-charcoal group-hover:text-white truncate">
                   {category.name}
                 </span>
                 <ArrowRight className="w-4 h-4 ml-auto text-nilin-warmGray group-hover:text-white group-hover:translate-x-1 transition-all" />

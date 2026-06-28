@@ -21,11 +21,11 @@ import {
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
+import ProviderHubNav from '../../components/provider/ProviderHubNav';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 import { useToast } from '../../components/common/Toast/ToastContext';
 import { socketService } from '../../services/socket';
-import { secureStorage } from '@/lib/security';
 
 interface VerificationDocument {
   id: string;
@@ -212,6 +212,7 @@ const ProviderVerificationPage: React.FC = () => {
   // FIX #1: State initialized with function to avoid dependency on providerProfile
   const [verificationSteps, setVerificationSteps] = useState<VerificationStep[]>(getDefaultVerificationSteps);
   const [isLoading, setIsLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
   const [backgroundCheckConsent, setBackgroundCheckConsent] = useState(false);
 
   // Redirect if not a provider
@@ -352,7 +353,34 @@ const ProviderVerificationPage: React.FC = () => {
     };
   }, [toast, providerProfile, setProviderProfile]);
 
-  // FIX #2: Handle file upload using providerOpsService.uploadKycDocument endpoint
+  // Upload via Cloudinary endpoints, then register document URL with verification API
+  const uploadVerificationFile = async (file: File): Promise<string> => {
+    if (file.type === 'application/pdf') {
+      const formData = new FormData();
+      formData.append('files', file);
+      const uploadResponse = await api.post('/chat/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const fileUrl = uploadResponse.data?.data?.attachments?.[0]?.url;
+      if (!fileUrl) {
+        throw new Error('Upload failed: no URL returned');
+      }
+      return fileUrl;
+    }
+
+    const formData = new FormData();
+    formData.append('images', file);
+    const uploadResponse = await api.post('/provider/services/upload-images', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    const imageUrls = uploadResponse.data?.data;
+    const fileUrl = Array.isArray(imageUrls) ? imageUrls[0] : undefined;
+    if (!fileUrl) {
+      throw new Error('Upload failed: no URL returned');
+    }
+    return fileUrl;
+  };
+
   const handleFileUpload = async (stepId: string, documentId: string, file: File) => {
     // File validation constants
     const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
@@ -377,44 +405,16 @@ const ProviderVerificationPage: React.FC = () => {
     }
 
     setUploadProgress({ ...uploadProgress, [documentId]: 0 });
+    setIsUploading(true);
 
     try {
-      // Create form data for file upload
-      const formData = new FormData();
-      formData.append('file', file);
-
-      // Get token from secureStorage instead of sessionStorage
-      const stored = secureStorage.getItem('auth-storage');
-      let accessToken: string | null = null;
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          accessToken = parsed?.state?.tokens?.accessToken || null;
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      if (!accessToken) {
-        throw new Error('Authentication required');
-      }
-
-      // FIX #2: Upload to file storage endpoint
-      const uploadResponse = await api.post('/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      const uploadData = uploadResponse.data;
-      const fileUrl = uploadData.url;
+      const fileUrl = await uploadVerificationFile(file);
 
       setUploadProgress((prev) => ({ ...prev, [documentId]: 50 }));
 
-      // FIX #2: Map frontend document ID to backend document type
+      // Map frontend document ID to backend document type
       const backendDocType = mapFrontendDocIdToBackendType(documentId);
 
-      // Save document reference to backend using providerOpsService endpoint
       const response = await api.post('/provider/verification/documents', {
         documentType: backendDocType,
         documentUrl: fileUrl,
@@ -453,10 +453,12 @@ const ProviderVerificationPage: React.FC = () => {
         throw new Error(response.data?.message || 'Failed to save document');
       }
 
-    } catch (error: any) {
+    } catch (error) {
       console.error('Upload failed:', error);
       setUploadProgress({});
       toast.addToast({ title: error.response?.data?.message || error.message || 'Failed to upload document', variant: 'error' });
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -491,7 +493,7 @@ const ProviderVerificationPage: React.FC = () => {
         );
         toast.addToast({ title: 'Your verification documents have been submitted for review. You will be notified once the review is complete.', variant: 'success' });
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Submit failed:', error);
       toast.addToast({ title: error.response?.data?.message || 'Failed to submit verification. Please try again.', variant: 'error' });
     } finally {
@@ -568,12 +570,27 @@ const ProviderVerificationPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <ProviderHubNav />
+
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isSubmitting ? 'Submitting verification...' : ''}
+        {isUploading ? 'Uploading document...' : ''}
+      </div>
 
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
           <div className="mb-8">
@@ -866,7 +883,7 @@ const ProviderVerificationPage: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
     </div>

@@ -82,10 +82,12 @@ const ApiKeyManagement: React.FC = () => {
   const [actionId, setActionId] = useState<string | null>(null);
   const [formData, setFormData] = useState<ApiKeyFormPayload>(emptyForm());
   const [confirm, setConfirm] = useState<{
-    type: 'regenerate' | 'delete';
+    type: 'regenerate' | 'delete' | 'bulkDelete';
     id: string;
     name: string;
   } | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [bulkActionId, setBulkActionId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -212,8 +214,91 @@ const ApiKeyManagement: React.FC = () => {
     }));
   };
 
+  const toggleSelectKey = (id: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedKeys.size === apiKeys.length) {
+      setSelectedKeys(new Set());
+    } else {
+      setSelectedKeys(new Set(apiKeys.map((k) => k._id)));
+    }
+  };
+
+  const handleBulkActivate = async () => {
+    if (selectedKeys.size === 0) return;
+    setBulkActionId('activate');
+    try {
+      await Promise.all(
+        [...selectedKeys].map((id) => adminApiKeyApi.toggle(id, true))
+      );
+      toast.success(`${selectedKeys.size} key(s) activated`);
+      setSelectedKeys(new Set());
+      await loadData(true);
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to activate keys');
+    } finally {
+      setBulkActionId(null);
+    }
+  };
+
+  const handleBulkDeactivate = async () => {
+    if (selectedKeys.size === 0) return;
+    setBulkActionId('deactivate');
+    try {
+      await Promise.all(
+        [...selectedKeys].map((id) => adminApiKeyApi.toggle(id, false))
+      );
+      toast.success(`${selectedKeys.size} key(s) deactivated`);
+      setSelectedKeys(new Set());
+      await loadData(true);
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to deactivate keys');
+    } finally {
+      setBulkActionId(null);
+    }
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedKeys.size === 0) return;
+    const names = apiKeys
+      .filter((k) => selectedKeys.has(k._id))
+      .map((k) => k.name)
+      .join(', ');
+    setConfirm({ type: 'bulkDelete', id: [...selectedKeys].join(','), name: names });
+  };
+
+  const runBulkDelete = async () => {
+    if (!confirm || confirm.type !== 'bulkDelete') return;
+    setBulkActionId('delete');
+    const ids = confirm.id.split(',');
+    try {
+      await adminApiKeyApi.bulkDelete(ids);
+      toast.success(`${ids.length} key(s) deleted`);
+      setSelectedKeys(new Set());
+      await loadData(true);
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to delete keys');
+    } finally {
+      setBulkActionId(null);
+      setConfirm(null);
+    }
+  };
+
   return (
     <ErrorBoundary>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <AdminPageShell
         wideLayout
         title="API Key Management"
@@ -240,7 +325,7 @@ const ApiKeyManagement: React.FC = () => {
           </div>
         }
       >
-        <div className="space-y-6">
+        <div id="main-content" className="space-y-6">
           <div className="rounded-2xl border border-indigo-200/70 bg-indigo-50/60 px-5 py-4 flex gap-3">
             <Shield className="w-5 h-5 text-indigo-800 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-indigo-950 space-y-1">
@@ -326,6 +411,22 @@ const ApiKeyManagement: React.FC = () => {
                 <table className="min-w-full text-sm font-sans">
                   <thead>
                     <tr className="border-b border-nilin-border/50 bg-nilin-blush/20">
+                      <th className="px-5 py-3 text-left">
+                        <button
+                          type="button"
+                          onClick={toggleSelectAll}
+                          className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-nilin-blush/60"
+                          aria-label={selectedKeys.size === apiKeys.length ? 'Deselect all' : 'Select all'}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={apiKeys.length > 0 && selectedKeys.size === apiKeys.length}
+                            onChange={toggleSelectAll}
+                            className="w-4 h-4 rounded border-nilin-border accent-nilin-coral"
+                            aria-label="Select all"
+                          />
+                        </button>
+                      </th>
                       {['Name', 'Prefix', 'Permissions', 'Rate', 'Expires', 'Last used', 'Status', 'Actions'].map(
                         (h) => (
                           <th
@@ -400,8 +501,9 @@ const ApiKeyManagement: React.FC = () => {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => handleToggle(key)}
-                                className="p-2 rounded-lg hover:bg-nilin-blush/50 disabled:opacity-50"
+                                className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-blush/50 disabled:opacity-50"
                                 title={key.isActive ? 'Deactivate' : 'Activate'}
+                                aria-label={key.isActive ? 'Deactivate key' : 'Activate key'}
                               >
                                 {busy ? (
                                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -417,8 +519,9 @@ const ApiKeyManagement: React.FC = () => {
                                 onClick={() =>
                                   setConfirm({ type: 'regenerate', id: key._id, name: key.name })
                                 }
-                                className="p-2 rounded-lg hover:bg-sky-50"
+                                className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-sky-50"
                                 title="Regenerate"
+                                aria-label="Regenerate key"
                               >
                                 <RotateCcw className="w-4 h-4 text-sky-700" />
                               </button>
@@ -428,8 +531,9 @@ const ApiKeyManagement: React.FC = () => {
                                 onClick={() =>
                                   setConfirm({ type: 'delete', id: key._id, name: key.name })
                                 }
-                                className="p-2 rounded-lg hover:bg-red-50"
+                                className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-red-50"
                                 title="Delete"
+                                aria-label="Delete key"
                               >
                                 <Trash2 className="w-4 h-4 text-red-600" />
                               </button>
@@ -449,7 +553,8 @@ const ApiKeyManagement: React.FC = () => {
                   type="button"
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="px-4 py-2 rounded-xl border disabled:opacity-40"
+                  className="px-4 min-h-[44px] flex items-center justify-center rounded-xl border disabled:opacity-40"
+                  aria-label="Previous page"
                 >
                   Previous
                 </button>
@@ -460,7 +565,8 @@ const ApiKeyManagement: React.FC = () => {
                   type="button"
                   disabled={page >= totalPages}
                   onClick={() => setPage((p) => p + 1)}
-                  className="px-4 py-2 rounded-xl border disabled:opacity-40"
+                  className="px-4 min-h-[44px] flex items-center justify-center rounded-xl border disabled:opacity-40"
+                  aria-label="Next page"
                 >
                   Next
                 </button>
@@ -474,7 +580,7 @@ const ApiKeyManagement: React.FC = () => {
             <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-nilin-border/50">
               <div className="flex items-center justify-between px-6 py-4 border-b">
                 <h2 className="text-lg font-serif">Create API key</h2>
-                <button type="button" onClick={() => setShowModal(false)} className="p-2 rounded-lg hover:bg-nilin-blush/40">
+                <button type="button" onClick={() => setShowModal(false)} className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-blush/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2" aria-label="Close modal">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -553,14 +659,14 @@ const ApiKeyManagement: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowModal(false)}
-                    className="px-4 py-2 rounded-xl border text-sm"
+                    className="px-4 min-h-[44px] flex items-center justify-center rounded-xl border text-sm"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={saving}
-                    className="btn-nilin inline-flex items-center gap-2 disabled:opacity-50"
+                    className="btn-nilin inline-flex items-center gap-2 disabled:opacity-50 min-h-[44px]"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                     Create key
@@ -584,7 +690,8 @@ const ApiKeyManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => copyKey(plainKey)}
-                  className="px-3 py-2 rounded-xl bg-nilin-blush hover:bg-nilin-blush/80"
+                  className="w-11 h-11 flex items-center justify-center rounded-xl bg-nilin-blush hover:bg-nilin-blush/80"
+                  aria-label="Copy API key"
                 >
                   <Copy className="w-5 h-5" />
                 </button>
@@ -595,7 +702,7 @@ const ApiKeyManagement: React.FC = () => {
                   setShowKeyModal(false);
                   setPlainKey(null);
                 }}
-                className="w-full btn-nilin"
+                className="w-full btn-nilin min-h-[44px]"
               >
                 I have saved this key
               </button>
@@ -633,7 +740,7 @@ const ApiKeyManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setConfirm(null)}
-                  className="px-4 py-2 rounded-lg border"
+                  className="px-4 py-2.5 min-h-[44px] flex items-center justify-center rounded-lg border"
                 >
                   Cancel
                 </button>
@@ -642,7 +749,7 @@ const ApiKeyManagement: React.FC = () => {
                   disabled={!!actionId}
                   onClick={runConfirm}
                   className={cn(
-                    'px-4 py-2 rounded-lg text-white disabled:opacity-50',
+                    'px-4 py-2.5 min-h-[44px] flex items-center justify-center rounded-lg text-white disabled:opacity-50',
                     confirm.type === 'delete' ? 'bg-red-600' : 'bg-amber-600'
                   )}
                 >

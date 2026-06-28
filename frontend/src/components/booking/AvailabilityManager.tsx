@@ -410,11 +410,21 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
   const handleSaveBreakTimes = async () => {
     // Save break times to provider settings
     try {
-      // This would typically call an API endpoint
+      // Transform break times to API format (remove client-generated IDs)
+      const breakTimesPayload = Object.entries(breakTimes).reduce((acc, [day, breaks]) => {
+        if (breaks.length > 0) {
+          acc[day] = breaks.map(({ start, end, label }) => ({ start, end, label }));
+        }
+        return acc;
+      }, {} as Record<string, Array<{ start: string; end: string; label: string }>>);
+
+      await api.put('/availability/break-times', { breakTimes: breakTimesPayload });
       setSuccessMessage('Break times saved successfully!');
       setHasBreakTimeChanges(false);
-    } catch {
-      // Error handled by store
+    } catch (err) {
+      console.error('Failed to save break times:', err);
+      setSuccessMessage('');
+      // Error handled by store or toast
     }
   };
 

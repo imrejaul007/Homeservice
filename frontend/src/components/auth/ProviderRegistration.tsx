@@ -11,9 +11,11 @@ import { Eye, EyeOff, Mail, Phone, Building, MapPin, AlertCircle, CheckCircle, C
 import NavigationHeader from '../layout/NavigationHeader';
 import Footer from '../layout/Footer';
 import PasswordStrengthIndicator from './PasswordStrengthIndicator';
+import CaptchaWidget from './CaptchaWidget';
 import { Sparkles } from '../ui/sparkles';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ApiError } from '../../services/AuthService';
+import type { RegisterProviderData } from '../../stores/authStore';
 
 const SUPPORTED_CITIES = [
   { value: 'dubai', label: 'Dubai', coords: [55.2708, 25.2048] },
@@ -29,16 +31,66 @@ const providerRegistrationSchema = z.object({
   firstName: z.string().min(2, 'First name must be at least 2 characters').max(50).regex(/^[a-zA-Z\s-']+$/, 'Name can only contain letters'),
   lastName: z.string().min(2, 'Last name must be at least 2 characters').max(50).regex(/^[a-zA-Z\s-']+$/, 'Name can only contain letters'),
   email: z.string().email('Please enter a valid email').toLowerCase(),
-  password: z.string().min(8, 'Password must be at least 8 characters').regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, 'Must have uppercase, lowercase, number & special character'),
+  password: z.string().min(12, 'Password must be at least 12 characters').regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, 'Must have uppercase, lowercase, number & special character'),
   confirmPassword: z.string(),
   phone: z.string().optional().or(z.literal('')),
+  dateOfBirth: z.string().min(1, 'Date of birth is required'),
   businessName: z.string().min(2, 'Business name required').max(100),
+  businessDescription: z.string().min(50, 'Business description must be at least 50 characters').max(1000),
   city: z.string().min(1, 'City is required'),
   categories: z.array(z.string()).min(1, 'Select at least one category'),
   agreeToTermsAndPrivacy: z.boolean().refine(v => v === true, 'You must agree to Terms of Service and Privacy Policy'),
+  agreeToBackground: z.boolean().refine(v => v === true, 'You must agree to the background check'),
 }).refine(d => d.password === d.confirmPassword, { message: "Passwords don't match", path: ['confirmPassword'] });
 
 type ProviderRegistrationForm = z.infer<typeof providerRegistrationSchema>;
+
+function buildProviderPayload(
+  data: ProviderRegistrationForm,
+  selectedCategoryIds: string[],
+  categoryList: Array<{ _id: string; name: string }>
+): RegisterProviderData {
+  const cityConfig = SUPPORTED_CITIES.find((c) => c.value === data.city);
+  const selectedCats = categoryList.filter((c) => selectedCategoryIds.includes(c._id));
+
+  return {
+    firstName: data.firstName,
+    lastName: data.lastName,
+    email: data.email,
+    password: data.password,
+    phone: data.phone || undefined,
+    dateOfBirth: data.dateOfBirth,
+    role: 'provider',
+    agreeToTermsAndPrivacy: data.agreeToTermsAndPrivacy,
+    agreeToBackground: data.agreeToBackground,
+    businessInfo: {
+      businessName: data.businessName,
+      businessType: 'individual',
+      description: data.businessDescription,
+    },
+    locationInfo: {
+      primaryAddress: {
+        street: data.businessName,
+        city: cityConfig?.label || data.city,
+        state: cityConfig?.label || data.city,
+        zipCode: '00000',
+        country: 'AE',
+        ...(cityConfig
+          ? { coordinates: { type: 'Point', coordinates: cityConfig.coords as [number, number] } }
+          : {}),
+      },
+      mobileService: true,
+      hasFixedLocation: false,
+    },
+    services: selectedCats.map((cat) => ({
+      name: cat.name,
+      category: cat.name,
+      description: `${cat.name} services offered by ${data.businessName}`,
+      duration: 60,
+      price: { amount: 0, currency: 'AED', type: 'fixed' as const },
+    })),
+  };
+}
 
 // Network error detection helper
 const isNetworkError = (error: unknown): boolean => {
@@ -60,6 +112,7 @@ const ProviderRegistration: React.FC = () => {
   const [isSuccess, setIsSuccess] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [isValidating, setIsValidating] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
 
   const { registerProvider, isLoading, errors } = useAuthStore();
   const { categories } = useCategories();
@@ -70,6 +123,7 @@ const ProviderRegistration: React.FC = () => {
     defaultValues: {
       categories: [],
       agreeToTermsAndPrivacy: false,
+      agreeToBackground: false,
       city: '',
     },
   });
@@ -100,7 +154,7 @@ const ProviderRegistration: React.FC = () => {
   };
 
   const validateStep1 = async () => {
-    const fields: (keyof ProviderRegistrationForm)[] = ['firstName', 'lastName', 'email', 'password', 'confirmPassword', 'businessName', 'city'];
+    const fields: (keyof ProviderRegistrationForm)[] = ['firstName', 'lastName', 'email', 'password', 'confirmPassword', 'businessName', 'businessDescription', 'dateOfBirth', 'city'];
     let isValid = true;
     for (const field of fields) {
       const value = watch(field) as string | undefined;
@@ -123,16 +177,8 @@ const ProviderRegistration: React.FC = () => {
     try {
       clearErrors();
       await registerProvider({
-        firstName: data.firstName,
-        lastName: data.lastName,
-        email: data.email,
-        password: data.password,
-        phone: data.phone,
-        businessName: data.businessName,
-        city: data.city,
-        categories: selectedCategories,
-        agreeToTermsAndPrivacy: data.agreeToTermsAndPrivacy,
-        role: 'provider',
+        ...buildProviderPayload(data, selectedCategories, categories),
+        ...(captchaToken ? { captchaToken } : {}),
       });
       setIsSuccess(true);
     } catch (err: unknown) {
@@ -287,6 +333,27 @@ const ProviderRegistration: React.FC = () => {
                       {formErrors.phone && <p id="phone-error" className="mt-2 text-sm text-red-500" role="alert" aria-live="polite">{formErrors.phone.message}</p>}
                     </motion.div>
 
+                    {/* Date of Birth */}
+                    <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.28 }}>
+                      <label htmlFor="dateOfBirth" className="block text-base font-medium text-nilin-charcoal mb-3">Date of Birth *</label>
+                      <input {...register('dateOfBirth')} id="dateOfBirth" type="date"
+                        aria-invalid={!!formErrors.dateOfBirth}
+                        aria-describedby={formErrors.dateOfBirth ? 'dateOfBirth-error' : undefined}
+                        className="w-full px-5 py-4 rounded-xl bg-nilin-cream/80 border-2 border-nilin-border text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-3 focus:ring-nilin-coral/20 transition-all text-base" />
+                      {formErrors.dateOfBirth && <p id="dateOfBirth-error" className="mt-2 text-sm text-red-500" role="alert" aria-live="polite">{formErrors.dateOfBirth.message}</p>}
+                    </motion.div>
+
+                    {/* Business Description */}
+                    <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.29 }}>
+                      <label htmlFor="businessDescription" className="block text-base font-medium text-nilin-charcoal mb-3">Business Description *</label>
+                      <textarea {...register('businessDescription')} id="businessDescription" rows={4}
+                        placeholder="Describe your business, experience, and the services you offer (min. 50 characters)"
+                        aria-invalid={!!formErrors.businessDescription}
+                        aria-describedby={formErrors.businessDescription ? 'businessDescription-error' : undefined}
+                        className="w-full px-5 py-4 rounded-xl bg-nilin-cream/80 border-2 border-nilin-border text-nilin-charcoal placeholder:text-nilin-lightGray focus:outline-none focus:border-nilin-coral focus:ring-3 focus:ring-nilin-coral/20 transition-all text-base resize-y" />
+                      {formErrors.businessDescription && <p id="businessDescription-error" className="mt-2 text-sm text-red-500" role="alert" aria-live="polite">{formErrors.businessDescription.message}</p>}
+                    </motion.div>
+
                     {/* Business Name */}
                     <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}>
                       <label htmlFor="businessName" className="block text-base font-medium text-nilin-charcoal mb-3">Business Name *</label>
@@ -403,6 +470,20 @@ const ProviderRegistration: React.FC = () => {
                       {formErrors.categories && <p id="categories-error" className="mt-2 text-sm text-red-500" role="alert" aria-live="polite">{formErrors.categories.message}</p>}
                     </motion.div>
 
+                    {/* Background check agreement */}
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.22 }} className="pt-2">
+                      <label className="flex items-start gap-4 cursor-pointer">
+                        <input {...register('agreeToBackground')} id="agreeToBackground" type="checkbox"
+                          aria-invalid={!!formErrors.agreeToBackground}
+                          aria-describedby={formErrors.agreeToBackground ? 'agreeToBackground-error' : undefined}
+                          className="mt-1 w-5 h-5 rounded border-2 border-nilin-border bg-white text-nilin-coral focus:ring-nilin-coral/30 focus:ring-offset-0 accent-nilin-coral cursor-pointer" />
+                        <span className="text-base text-nilin-warmGray">
+                          I agree to a background check as required for all NILIN providers *
+                        </span>
+                      </label>
+                      {formErrors.agreeToBackground && <p id="agreeToBackground-error" className="text-sm text-red-500 mt-2" role="alert" aria-live="polite">{formErrors.agreeToBackground.message}</p>}
+                    </motion.div>
+
                     {/* Terms */}
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }} className="pt-2">
                       <label className="flex items-start gap-4 cursor-pointer">
@@ -444,6 +525,8 @@ const ProviderRegistration: React.FC = () => {
                         </motion.div>
                       )}
                     </AnimatePresence>
+
+                    <CaptchaWidget onToken={setCaptchaToken} className="mt-2" />
 
                     {/* Buttons */}
                     <div className="flex gap-4">

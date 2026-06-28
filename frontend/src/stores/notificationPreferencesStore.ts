@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { capacitorStorageAdapter } from '../lib/storageAdapters';
 import { notificationApi, type NotificationPreferencesResponse, type QuietHours } from '../services/notificationApi';
 
 export interface NotificationPreferencesData {
@@ -121,7 +123,9 @@ interface NotificationPreferencesState {
   invalidate: () => void;
 }
 
-export const useNotificationPreferencesStore = create<NotificationPreferencesState>((set, get) => ({
+export const useNotificationPreferencesStore = create<NotificationPreferencesState>()(
+  persist(
+    (set, get) => ({
   preferences: null,
   isLoading: false,
   isSaving: false,
@@ -147,7 +151,20 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
 
   updatePreferences: async (partial) => {
     const current = get().preferences ?? defaultPreferences();
-    set({ isSaving: true, error: null });
+
+    // OPTIMISTIC UPDATE: Apply changes immediately for instant UI feedback
+    const merged: NotificationPreferencesData = {
+      ...current,
+      ...partial,
+      email: { ...current.email, ...(partial.email || {}) },
+      sms: { ...current.sms, ...(partial.sms || {}) },
+      push: { ...current.push, ...(partial.push || {}) },
+      quietHours: partial.quietHours
+        ? { ...current.quietHours, ...partial.quietHours }
+        : current.quietHours,
+    };
+    set({ preferences: merged, isSaving: true, error: null });
+
     try {
       await notificationApi.updatePreferences({
         email: partial.email ?? current.email,
@@ -158,16 +175,9 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
         timezone: partial.timezone ?? current.timezone,
         currency: partial.currency ?? current.currency,
       });
-      const merged: NotificationPreferencesData = {
-        ...current,
-        ...partial,
-        email: { ...current.email, ...partial.email },
-        sms: { ...current.sms, ...partial.sms },
-        push: { ...current.push, ...partial.push },
-        quietHours: { ...current.quietHours, ...partial.quietHours },
-      };
-      set({ preferences: merged, isSaving: false });
+      set({ isSaving: false });
 
+      // Update auth store language if changed
       if (partial.language) {
         const { useAuthStore } = await import('./authStore');
         const user = useAuthStore.getState().user;
@@ -176,8 +186,10 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
         }
       }
     } catch (error: unknown) {
+      // ROLLBACK: Restore previous state on failure
+      set({ preferences: current, isSaving: false, error: null });
       const message = getApiErrorMessage(error, 'Failed to save preferences');
-      set({ error: message, isSaving: false });
+      set({ error: message });
       throw error;
     }
   },
@@ -185,6 +197,16 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
   invalidate: () => {
     set({ preferences: null });
   },
-}));
+}),
+    {
+      name: 'notification-preferences-storage',
+      version: 1,
+      storage: createJSONStorage(() => capacitorStorageAdapter),
+      partialize: (state) => ({
+        preferences: state.preferences,
+      }),
+    }
+  )
+);
 
 export { defaultPreferences, mapApiToPreferences };

@@ -3,6 +3,9 @@
 // Centralized constants for booking-related values
 // =============================================================================
 
+export type { BookingStatus, PaymentStatus } from '../types/booking.types';
+export { BOOKING_STATUSES } from '../types/booking.types';
+
 /**
  * Cancellation reasons used when a booking is cancelled.
  * These values must match the backend enum in refund.service.ts

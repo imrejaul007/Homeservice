@@ -10,8 +10,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { TrendingUp, TrendingDown, DollarSign, Loader, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, DollarSign, Loader, ArrowUpRight, ArrowDownRight, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface AOVTrendProps {
   customerId?: string;
@@ -36,58 +37,49 @@ interface AOVStats {
   targetAOV: number;
 }
 
-const MOCK_DATA: Record<string, AOVData[]> = {
-  '7d': [
-    { date: 'Mon', aov: 210, orderCount: 2, totalSpent: 420 },
-    { date: 'Tue', aov: 185, orderCount: 1, totalSpent: 185 },
-    { date: 'Wed', aov: 230, orderCount: 3, totalSpent: 690 },
-    { date: 'Thu', aov: 195, orderCount: 1, totalSpent: 195 },
-    { date: 'Fri', aov: 220, orderCount: 2, totalSpent: 440 },
-    { date: 'Sat', aov: 245, orderCount: 4, totalSpent: 980 },
-    { date: 'Sun', aov: 180, orderCount: 1, totalSpent: 180 },
-  ],
-  '30d': [
-    { date: 'Week 1', aov: 205, orderCount: 8, totalSpent: 1640 },
-    { date: 'Week 2', aov: 220, orderCount: 12, totalSpent: 2640 },
-    { date: 'Week 3', aov: 195, orderCount: 7, totalSpent: 1365 },
-    { date: 'Week 4', aov: 235, orderCount: 15, totalSpent: 3525 },
-  ],
-  '90d': [
-    { date: 'Jan', aov: 198, orderCount: 28, totalSpent: 5544 },
-    { date: 'Feb', aov: 212, orderCount: 35, totalSpent: 7420 },
-    { date: 'Mar', aov: 228, orderCount: 42, totalSpent: 9576 },
-  ],
-  '1y': [
-    { date: 'Q1', aov: 195, orderCount: 85, totalSpent: 16575 },
-    { date: 'Q2', aov: 210, orderCount: 112, totalSpent: 23520 },
-    { date: 'Q3', aov: 225, orderCount: 98, totalSpent: 22050 },
-    { date: 'Q4', aov: 240, orderCount: 145, totalSpent: 34800 },
-  ],
-};
-
-const MOCK_STATS: AOVStats = {
-  currentAOV: 235,
-  previousAOV: 210,
-  change: 25,
-  changePercent: 11.9,
-  lifetimeAverage: 218,
-  highestOrder: 450,
-  lowestOrder: 85,
-  targetAOV: 250,
+const EMPTY_STATS: AOVStats = {
+  currentAOV: 0,
+  previousAOV: 0,
+  change: 0,
+  changePercent: 0,
+  lifetimeAverage: 0,
+  highestOrder: 0,
+  lowestOrder: 0,
+  targetAOV: 0,
 };
 
 export const AOVTrend: React.FC<AOVTrendProps> = ({ customerId, timeRange = '30d' }) => {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AOVData[]>([]);
-  const [stats, setStats] = useState<AOVStats>(MOCK_STATS);
+  const [stats, setStats] = useState<AOVStats>(EMPTY_STATS);
   const [selectedRange, setSelectedRange] = useState(timeRange);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA[selectedRange] || []);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getCustomerAOVTrend(selectedRange, customerId);
+        setData(apiData.timeSeries || []);
+        setStats({
+          currentAOV: apiData.currentAOV,
+          previousAOV: apiData.previousAOV,
+          change: apiData.change,
+          changePercent: apiData.changePercent,
+          lifetimeAverage: apiData.lifetimeAverage,
+          highestOrder: apiData.highestOrder,
+          lowestOrder: apiData.lowestOrder,
+          targetAOV: apiData.targetAOV || apiData.lifetimeAverage * 1.15,
+        });
+      } catch (err) {
+        setData([]);
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load AOV trend data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [customerId, selectedRange]);
@@ -129,7 +121,20 @@ export const AOVTrend: React.FC<AOVTrendProps> = ({ customerId, timeRange = '30d
     { key: '1y', label: '1 Year' },
   ];
 
-  const progressToTarget = Math.min((stats.currentAOV / stats.targetAOV) * 100, 100);
+  const progressToTarget = stats.targetAOV > 0
+    ? Math.min((stats.currentAOV / stats.targetAOV) * 100, 100)
+    : 0;
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="flex items-center gap-2 text-red-600">
+          <AlertCircle className="h-5 w-5" />
+          <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <motion.div
@@ -239,6 +244,10 @@ export const AOVTrend: React.FC<AOVTrendProps> = ({ customerId, timeRange = '30d
         <div className="h-64 flex items-center justify-center">
           <Loader className="h-8 w-8 text-green-600 animate-spin" />
         </div>
+      ) : data.length === 0 ? (
+        <div className="h-64 flex items-center justify-center text-gray-500">
+          No order value data for this period.
+        </div>
       ) : (
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
@@ -301,7 +310,7 @@ export const AOVTrend: React.FC<AOVTrendProps> = ({ customerId, timeRange = '30d
           <div className="flex items-start gap-2 text-sm">
             <DollarSign className="h-4 w-4 text-blue-600 mt-0.5" />
             <p className="text-gray-600">
-              You're {(stats.currentAOV / stats.targetAOV * 100).toFixed(0)}% of the way to your target AOV of{' '}
+              You're {stats.targetAOV > 0 ? (stats.currentAOV / stats.targetAOV * 100).toFixed(0) : '0'}% of the way to your target AOV of{' '}
               {formatCurrency(stats.targetAOV)}.
             </p>
           </div>

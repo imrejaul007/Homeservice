@@ -138,8 +138,8 @@ export const generateSecureId = (length: number = 32): string => {
 };
 
 /**
- * Secure token storage (uses sessionStorage as fallback)
- * FIX #12: Added SSR guards for all localStorage/sessionStorage access
+ * Secure token storage backed by sessionStorage (not encrypted localStorage).
+ * Name reflects intent to keep auth state in a tab-scoped store; values are stored in sessionStorage when available.
  */
 declare global {
   interface Window {

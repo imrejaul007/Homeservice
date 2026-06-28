@@ -262,6 +262,62 @@ const processWebhookEventInTransaction = async (
       break;
     }
 
+    // ===========================================
+    // PAYOUT WEBHOOK HANDLERS
+    // These handlers update withdrawal (payout) status when Stripe reports payout completion/failure
+    // ===========================================
+
+    case 'payout.paid': {
+      const payout = event.data.object as Stripe.Payout;
+      // Process payout completed - update withdrawal status
+      await WebhookOutbox.create([{
+        eventId: event.id,
+        eventType: event.type,
+        payload: event,
+        status: 'pending',
+        createdAt: new Date(),
+        attempts: 0,
+        nextRetryAt: null,
+        maxRetries: 10,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }], { session });
+      break;
+    }
+
+    case 'payout.failed': {
+      const payout = event.data.object as Stripe.Payout;
+      // Process payout failed - update withdrawal status
+      await WebhookOutbox.create([{
+        eventId: event.id,
+        eventType: event.type,
+        payload: event,
+        status: 'pending',
+        createdAt: new Date(),
+        attempts: 0,
+        nextRetryAt: null,
+        maxRetries: 10,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }], { session });
+      break;
+    }
+
+    case 'payout.canceled': {
+      const payout = event.data.object as Stripe.Payout;
+      // Process payout canceled - update withdrawal status
+      await WebhookOutbox.create([{
+        eventId: event.id,
+        eventType: event.type,
+        payload: event,
+        status: 'pending',
+        createdAt: new Date(),
+        attempts: 0,
+        nextRetryAt: null,
+        maxRetries: 10,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }], { session });
+      break;
+    }
+
     default:
       return { handled: false, message: `Unhandled event type: ${event.type}` };
   }

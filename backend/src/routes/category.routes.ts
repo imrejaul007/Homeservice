@@ -6,6 +6,7 @@ import {
   getSubcategories,
   getCategoryServices,
   getCategoryStats,
+  getCategoryPageStats,
   searchCategories,
   updateSubcategory,
   deleteSubcategory
@@ -48,6 +49,9 @@ router.get('/:slug/subcategories', getSubcategories);
 // GET /api/categories/:slug/services - Get services under a category
 // Query params: subcategory, page, limit, sortBy
 router.get('/:slug/services', getCategoryServices);
+
+// GET /api/categories/:slug/page-stats - Live category landing page metrics
+router.get('/:slug/page-stats', getCategoryPageStats);
 
 // Subcategory management routes (require authentication)
 router.put('/:slug/subcategories/:subSlug', authenticate, requireRole('admin'), updateSubcategory);

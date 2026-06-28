@@ -98,7 +98,7 @@ function buildProfileFormData(
 
 const ProviderProfilePage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, providerProfile } = useAuthStore();
+  const { user, providerProfile, refreshProviderProfile } = useAuthStore();
   const toast = useToastActions();
 
   // Redirect if not a provider
@@ -258,7 +258,7 @@ const ProviderProfilePage: React.FC = () => {
       } else {
         throw new Error(data.message || 'Upload failed');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error uploading profile image:', error);
       setProfileImage(user?.avatar || null);
       setErrorMessage(error.message || 'Failed to upload image');
@@ -316,6 +316,19 @@ const ProviderProfilePage: React.FC = () => {
       const response = await api.patch('/auth/me', payload);
 
       if (response.data.success) {
+        const providerPayload: Record<string, unknown> = {};
+        if (profileData.bio) providerPayload.bio = profileData.bio;
+        if (profileData.yearsExperience != null) {
+          providerPayload.experience = profileData.yearsExperience;
+        }
+        if (serviceAreasPayload.length > 0) {
+          providerPayload.serviceAreas = serviceAreasPayload;
+        }
+
+        if (Object.keys(providerPayload).length > 0) {
+          await api.patch('/provider/profile', providerPayload);
+        }
+
         const updatedUser = response.data.data?.user ?? response.data.user;
         const updatedProviderProfile =
           response.data.data?.providerProfile ?? response.data.providerProfile;
@@ -342,9 +355,10 @@ const ProviderProfilePage: React.FC = () => {
 
         setSaveMessage('Profile updated successfully!');
         setIsEditing(false);
+        void refreshProviderProfile();
         setTimeout(() => setSaveMessage(''), 3000);
       }
-    } catch (error: any) {
+    } catch (error) {
       setErrorMessage(error.response?.data?.message || 'Failed to update profile');
       setTimeout(() => setErrorMessage(''), 5000);
     } finally {
@@ -379,7 +393,7 @@ const ProviderProfilePage: React.FC = () => {
         setSaveMessage(response.data.message || 'Status updated!');
         setTimeout(() => setSaveMessage(''), 3000);
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error toggling provider status:', error);
       setErrorMessage(error.response?.data?.message || 'Failed to update status');
       toast.error(
@@ -396,11 +410,27 @@ const ProviderProfilePage: React.FC = () => {
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {saveMessage}
+        {errorMessage}
+        {isSaving ? 'Saving profile...' : ''}
+        {isUploading ? 'Uploading profile image...' : ''}
+      </div>
+
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
           <div className="mb-8">
@@ -450,7 +480,8 @@ const ProviderProfilePage: React.FC = () => {
                     </div>
                     <label
                       htmlFor="profile-upload"
-                      className="absolute bottom-4 right-0 bg-nilin-coral rounded-full p-2 cursor-pointer hover:bg-nilin-rose transition-colors shadow-nilin-warm"
+                      className="absolute bottom-4 right-0 bg-nilin-coral rounded-full p-2 cursor-pointer hover:bg-nilin-rose transition-colors shadow-nilin-warm focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2"
+                      title="Upload profile photo"
                     >
                       <Camera className="h-4 w-4 text-white" />
                       <input
@@ -524,6 +555,8 @@ const ProviderProfilePage: React.FC = () => {
                     <button
                       onClick={handleToggleActiveStatus}
                       disabled={isTogglingStatus}
+                      aria-label={stats.isActive ? 'Hide profile from customers' : 'Show profile to customers'}
+                      aria-pressed={stats.isActive}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2 ${
                         stats.isActive ? 'bg-green-600' : 'bg-gray-300'
                       }`}
@@ -567,25 +600,29 @@ const ProviderProfilePage: React.FC = () => {
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-nilin-charcoal mb-2">First Name</label>
+                      <label htmlFor="first-name" className="block text-sm font-medium text-nilin-charcoal mb-2">First Name</label>
                       <input
+                        id="first-name"
                         type="text"
                         name="firstName"
                         value={profileData.firstName}
                         onChange={handleInputChange}
                         disabled={!isEditing}
+                        aria-required="true"
                         className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-nilin-charcoal mb-2">Last Name</label>
+                      <label htmlFor="last-name" className="block text-sm font-medium text-nilin-charcoal mb-2">Last Name</label>
                       <input
+                        id="last-name"
                         type="text"
                         name="lastName"
                         value={profileData.lastName}
                         onChange={handleInputChange}
                         disabled={!isEditing}
+                        aria-required="true"
                         className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all"
                       />
                     </div>
@@ -607,10 +644,11 @@ const ProviderProfilePage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-2">Phone Number</label>
+                    <label htmlFor="phone" className="block text-sm font-medium text-nilin-charcoal mb-2">Phone Number</label>
                     <div className="relative">
                       <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" />
                       <input
+                        id="phone"
                         type="tel"
                         name="phone"
                         value={profileData.phone}
@@ -623,26 +661,29 @@ const ProviderProfilePage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-2">Bio / About Me</label>
+                    <label htmlFor="bio" className="block text-sm font-medium text-nilin-charcoal mb-2">Bio / About Me</label>
                     <textarea
+                      id="bio"
                       name="bio"
                       value={profileData.bio}
                       onChange={handleInputChange}
                       disabled={!isEditing}
                       rows={4}
                       maxLength={500}
+                      aria-describedby="bio-char-count"
                       placeholder="Tell customers about yourself, your experience, and what makes your services special..."
                       className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all resize-none"
                     />
-                    <p className="text-xs text-nilin-warmGray mt-1 text-right">
+                    <p id="bio-char-count" className="text-xs text-nilin-warmGray mt-1 text-right">
                       {profileData.bio.length}/500 characters
                     </p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-nilin-charcoal mb-2">Years of Experience</label>
+                      <label htmlFor="years-experience" className="block text-sm font-medium text-nilin-charcoal mb-2">Years of Experience</label>
                       <input
+                        id="years-experience"
                         type="number"
                         name="yearsExperience"
                         value={profileData.yearsExperience}
@@ -730,7 +771,7 @@ const ProviderProfilePage: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
     </div>

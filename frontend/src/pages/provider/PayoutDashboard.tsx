@@ -31,6 +31,7 @@ import {
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import { useNavigate } from 'react-router-dom';
+import ProviderHubNav from '../../components/provider/ProviderHubNav';
 import { useAuthStore } from '../../stores/authStore';
 import { payoutApi } from '../../services/payoutApi';
 import { useToast } from '../../components/common/Toast';
@@ -435,7 +436,7 @@ const PayoutDashboard: React.FC = () => {
       if (earningsRes.success) setEarnings(earningsRes.data);
       if (statsRes.success) setPayoutStats(statsRes.data);
       if (summaryRes.success) setSettlementSummary(summaryRes.data);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch overview data:', err);
       setError(err.response?.data?.message || err.message || 'Failed to load data');
     } finally {
@@ -458,7 +459,7 @@ const PayoutDashboard: React.FC = () => {
         setPayoutsPage(page);
         setPayoutsTotalPages(response.pagination.pages);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch payouts:', err);
     }
   }, [payoutStatusFilter]);
@@ -477,7 +478,7 @@ const PayoutDashboard: React.FC = () => {
         setSettlementsPage(page);
         setSettlementsTotalPages(response.pagination.pages);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch settlements:', err);
     }
   }, [settlementStatusFilter]);
@@ -489,7 +490,7 @@ const PayoutDashboard: React.FC = () => {
       if (response.success) {
         setPayoutConfig(response.data);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch payout config:', err);
     }
   }, []);
@@ -650,7 +651,7 @@ const PayoutDashboard: React.FC = () => {
         fetchPayouts(payoutsPage);
         fetchOverviewData(true);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to cancel payout:', err);
       toast.addToast({
         title: 'Failed to cancel payout',
@@ -673,7 +674,7 @@ const PayoutDashboard: React.FC = () => {
           variant: 'success'
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to update payout config:', err);
       toast.addToast({
         title: 'Update Failed',
@@ -1175,8 +1176,23 @@ const PayoutDashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <NavigationHeader />
+      <ProviderHubNav />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isRefreshing ? 'Refreshing payout data...' : ''}
+        {error ? `Error: ${error}` : ''}
+      </div>
+
+      <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div>
@@ -1245,19 +1261,20 @@ const PayoutDashboard: React.FC = () => {
             {activeTab === 'settings' && renderSettingsTab()}
           </>
         )}
-      </div>
+      </main>
 
       <Footer />
 
       {/* Payout Detail Modal */}
       {selectedPayout && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="payout-detail-title">
           <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-900">Payout Details</h2>
+              <h2 id="payout-detail-title" className="text-xl font-semibold text-gray-900">Payout Details</h2>
               <button
                 onClick={() => setSelectedPayout(null)}
-                className="text-gray-400 hover:text-gray-600"
+                aria-label="Close payout details"
+                className="w-11 h-11 flex items-center justify-center text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-lg"
               >
                 <X className="w-6 h-6" />
               </button>

@@ -11,7 +11,7 @@ import { Types } from 'mongoose';
 import { ApiError, ERROR_CODES } from '../../utils/ApiError';
 
 /**
- * Booking status enumeration
+ * Booking status enumeration (aligned with frontend and booking-status.ts value object)
  */
 export enum BookingStatus {
   PENDING = 'pending',
@@ -20,6 +20,8 @@ export enum BookingStatus {
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
   NO_SHOW = 'no_show',
+  REFUNDED = 'refunded',
+  REJECTED = 'rejected',
 }
 
 /**

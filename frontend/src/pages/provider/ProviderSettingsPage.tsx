@@ -18,8 +18,11 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  Menu,
+  X,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
+import ProviderHubNav from '../../components/provider/ProviderHubNav';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
@@ -118,12 +121,17 @@ const ProviderSettingsPage: React.FC = () => {
   const handleSectionChange = (section: string) => {
     setActiveSection(section);
     setSearchParams({ section });
+    setMobileNavOpen(false);
   };
 
   // UI state
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Pending state for individual toggles
+  const [pendingToggles, setPendingToggles] = useState<Set<string>>(new Set());
 
   // Notification settings state
   const [notifications, setNotifications] = useState<NotificationSettings>({
@@ -326,8 +334,9 @@ const ProviderSettingsPage: React.FC = () => {
       }
 
       setSaveMessage({ type: 'success', text: 'Notification settings saved!' });
-    } catch (error: any) {
-      setSaveMessage({ type: 'error', text: error.response?.data?.message || 'Failed to save' });
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { message?: string } } };
+      setSaveMessage({ type: 'error', text: axiosErr.response?.data?.message || 'Failed to save' });
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(null), 3000);
@@ -339,27 +348,21 @@ const ProviderSettingsPage: React.FC = () => {
     setIsSaving(true);
     setSaveMessage(null);
     try {
-      await Promise.all([
-        api.patch('/provider/settings', {
-          businessSettings: {
-            autoAcceptBookings: business.autoAcceptBookings,
-            maxAdvanceBookingDays: business.maxAdvanceBookingDays,
-            minBookingNoticeHours: business.minBookingNoticeHours,
-            cancellationPolicyHours: business.cancellationPolicyHours,
-          },
-          locationInfo: {
-            serviceAreas: business.serviceAreas,
-          },
-        }),
-        api.patch('/availability/settings', {
-          maxAdvanceBookingDays: business.maxAdvanceBookingDays,
-          minNoticeTime: business.minBookingNoticeHours,
+      await api.patch('/provider/settings', {
+        businessSettings: {
           autoAcceptBookings: business.autoAcceptBookings,
-        }),
-      ]);
+          maxAdvanceBookingDays: business.maxAdvanceBookingDays,
+          minBookingNoticeHours: business.minBookingNoticeHours,
+          cancellationPolicyHours: business.cancellationPolicyHours,
+        },
+        locationInfo: {
+          serviceAreas: business.serviceAreas,
+        },
+      });
       setSaveMessage({ type: 'success', text: 'Business settings saved!' });
-    } catch (error: any) {
-      setSaveMessage({ type: 'error', text: error.response?.data?.message || 'Failed to save' });
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { message?: string } } };
+      setSaveMessage({ type: 'error', text: axiosErr.response?.data?.message || 'Failed to save' });
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(null), 3000);
@@ -375,8 +378,9 @@ const ProviderSettingsPage: React.FC = () => {
         privacySettings: privacy,
       });
       setSaveMessage({ type: 'success', text: 'Privacy settings saved!' });
-    } catch (error: any) {
-      setSaveMessage({ type: 'error', text: error.response?.data?.message || 'Failed to save' });
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { message?: string } } };
+      setSaveMessage({ type: 'error', text: axiosErr.response?.data?.message || 'Failed to save' });
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(null), 3000);
@@ -399,35 +403,101 @@ const ProviderSettingsPage: React.FC = () => {
 
     setIsSaving(true);
     try {
-      await api.post('/auth/password', {
+      await api.post('/auth/change-password', {
         currentPassword: passwordData.currentPassword,
         newPassword: passwordData.newPassword,
+        confirmPassword: passwordData.confirmPassword,
       });
       setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
       setSaveMessage({ type: 'success', text: 'Password changed successfully!' });
-    } catch (error: any) {
-      setPasswordError(error.response?.data?.message || 'Failed to change password');
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { message?: string } } };
+      setPasswordError(axiosErr.response?.data?.message || 'Failed to change password');
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(null), 3000);
     }
   };
 
-  // Toggle boolean settings
-  const toggleBusiness = (key: keyof BusinessSettings) => {
-    if (typeof business[key] === 'boolean') {
+  // Toggle boolean settings with immediate API call and pending state
+  const toggleBusiness = async (key: keyof BusinessSettings) => {
+    if (typeof business[key] !== 'boolean') return;
+
+    const toggleKey = `business.${key}`;
+    const newValue = !business[key];
+    const previousValue = business[key];
+
+    // Set pending state
+    setPendingToggles(prev => new Set(prev).add(toggleKey));
+
+    // Optimistic update
+    setBusiness(prev => ({
+      ...prev,
+      [key]: newValue,
+    }));
+
+    try {
+      await api.patch('/provider/settings', {
+        businessSettings: { [key]: newValue },
+      });
+    } catch (err) {
+      // Rollback on failure
       setBusiness(prev => ({
         ...prev,
-        [key]: !prev[key as keyof typeof prev],
+        [key]: previousValue,
       }));
+      const error = err as { response?: { data?: { message?: string } } };
+      setSaveMessage({
+        type: 'error',
+        text: error.response?.data?.message || `Failed to update ${key}`,
+      });
+      setTimeout(() => setSaveMessage(null), 3000);
+    } finally {
+      setPendingToggles(prev => {
+        const next = new Set(prev);
+        next.delete(toggleKey);
+        return next;
+      });
     }
   };
 
-  const togglePrivacy = (key: keyof PrivacySettings) => {
+  const togglePrivacy = async (key: keyof PrivacySettings) => {
+    const toggleKey = `privacy.${key}`;
+    const newValue = !privacy[key];
+    const previousValue = privacy[key];
+
+    // Set pending state
+    setPendingToggles(prev => new Set(prev).add(toggleKey));
+
+    // Optimistic update
     setPrivacy(prev => ({
       ...prev,
-      [key]: !prev[key],
+      [key]: newValue,
     }));
+
+    try {
+      await api.patch('/provider/settings', {
+        privacySettings: { [key]: newValue },
+      });
+    } catch (err) {
+      // Rollback on failure
+      setPrivacy(prev => ({
+        ...prev,
+        [key]: previousValue,
+      }));
+      const error = err as { response?: { data?: { message?: string } } };
+      setSaveMessage({
+        type: 'error',
+        text: error.response?.data?.message || `Failed to update ${key}`,
+      });
+      setTimeout(() => setSaveMessage(null), 3000);
+    } finally {
+      setPendingToggles(prev => {
+        const next = new Set(prev);
+        next.delete(toggleKey);
+        return next;
+      });
+    }
   };
 
   const sections = [
@@ -449,27 +519,81 @@ const ProviderSettingsPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <ProviderHubNav />
+
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {saveMessage ? saveMessage.text : ''}
+        {isSaving ? 'Saving settings...' : ''}
+      </div>
 
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1 py-6">
+      <main id="main-content" className="flex-1 py-6">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="mb-6">
             <h1 className="text-2xl font-serif text-nilin-charcoal">Settings</h1>
             <p className="text-sm text-nilin-warmGray">Manage your account settings</p>
           </div>
 
+          <div className="mb-4 lg:hidden">
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 bg-white border border-nilin-border rounded-xl text-sm font-medium text-nilin-charcoal"
+            >
+              <Menu className="h-5 w-5" />
+              {sections.find((s) => s.id === activeSection)?.label || 'Sections'}
+            </button>
+          </div>
+
+          {mobileNavOpen && (
+            <button
+              type="button"
+              aria-label="Close settings menu"
+              className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+              onClick={() => setMobileNavOpen(false)}
+            />
+          )}
+
           <div className="flex flex-col lg:flex-row gap-6">
             {/* Sidebar Navigation */}
-            <div className="lg:w-64 flex-shrink-0">
-              <div className="bg-white rounded-xl shadow-sm border border-nilin-border/50 overflow-hidden">
+            <nav
+              className={`lg:w-64 flex-shrink-0 ${
+                mobileNavOpen
+                  ? 'fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] shadow-xl lg:static lg:shadow-none'
+                  : 'hidden lg:block'
+              }`}
+              aria-label="Settings sections"
+            >
+              <div className="bg-white rounded-xl lg:rounded-xl h-full lg:h-auto shadow-sm border border-nilin-border/50 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-nilin-border/50 lg:hidden">
+                  <span className="text-sm font-semibold text-nilin-charcoal">Settings</span>
+                  <button
+                    type="button"
+                    onClick={() => setMobileNavOpen(false)}
+                    className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-blush/30"
+                    aria-label="Close menu"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
                 {sections.map((section) => (
                   <button
                     key={section.id}
                     onClick={() => handleSectionChange(section.id)}
-                    className={`w-full flex items-center px-4 py-3 text-left transition-colors ${
+                    aria-current={activeSection === section.id ? 'page' : undefined}
+                    className={`w-full flex items-center px-4 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-inset ${
                       activeSection === section.id
                         ? 'bg-nilin-blush/50 text-nilin-coral border-l-4 border-nilin-coral'
                         : 'text-nilin-charcoal hover:bg-nilin-blush/30 border-l-4 border-transparent'
@@ -480,7 +604,7 @@ const ProviderSettingsPage: React.FC = () => {
                   </button>
                 ))}
               </div>
-            </div>
+            </nav>
 
             {/* Main Content */}
             <div className="flex-1">
@@ -669,8 +793,12 @@ const ProviderSettingsPage: React.FC = () => {
                             type="checkbox"
                             checked={business.autoAcceptBookings}
                             onChange={() => toggleBusiness('autoAcceptBookings')}
-                            className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral"
+                            disabled={pendingToggles.has('business.autoAcceptBookings')}
+                            className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral disabled:opacity-50"
                           />
+                          {pendingToggles.has('business.autoAcceptBookings') && (
+                            <Loader2 className="h-4 w-4 animate-spin text-nilin-coral ml-2" />
+                          )}
                         </label>
 
                         <div className="p-3 bg-gray-50 rounded-lg">
@@ -783,12 +911,18 @@ const ProviderSettingsPage: React.FC = () => {
                         <span className="text-sm text-nilin-charcoal block">Show email publicly</span>
                         <span className="text-xs text-nilin-warmGray">Display your email on your profile</span>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={privacy.showEmail}
-                        onChange={() => togglePrivacy('showEmail')}
-                        className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral"
-                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={privacy.showEmail}
+                          onChange={() => togglePrivacy('showEmail')}
+                          disabled={pendingToggles.has('privacy.showEmail')}
+                          className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral disabled:opacity-50"
+                        />
+                        {pendingToggles.has('privacy.showEmail') && (
+                          <Loader2 className="h-4 w-4 animate-spin text-nilin-coral" />
+                        )}
+                      </div>
                     </label>
 
                     <label className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -796,12 +930,18 @@ const ProviderSettingsPage: React.FC = () => {
                         <span className="text-sm text-nilin-charcoal block">Show phone publicly</span>
                         <span className="text-xs text-nilin-warmGray">Display your phone on your profile</span>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={privacy.showPhone}
-                        onChange={() => togglePrivacy('showPhone')}
-                        className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral"
-                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={privacy.showPhone}
+                          onChange={() => togglePrivacy('showPhone')}
+                          disabled={pendingToggles.has('privacy.showPhone')}
+                          className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral disabled:opacity-50"
+                        />
+                        {pendingToggles.has('privacy.showPhone') && (
+                          <Loader2 className="h-4 w-4 animate-spin text-nilin-coral" />
+                        )}
+                      </div>
                     </label>
 
                     <label className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -809,12 +949,18 @@ const ProviderSettingsPage: React.FC = () => {
                         <span className="text-sm text-nilin-charcoal block">Show reviews publicly</span>
                         <span className="text-xs text-nilin-warmGray">Display your reviews on your profile</span>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={privacy.showReviewsPublicly}
-                        onChange={() => togglePrivacy('showReviewsPublicly')}
-                        className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral"
-                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={privacy.showReviewsPublicly}
+                          onChange={() => togglePrivacy('showReviewsPublicly')}
+                          disabled={pendingToggles.has('privacy.showReviewsPublicly')}
+                          className="h-5 w-5 text-nilin-coral rounded focus:ring-nilin-coral disabled:opacity-50"
+                        />
+                        {pendingToggles.has('privacy.showReviewsPublicly') && (
+                          <Loader2 className="h-4 w-4 animate-spin text-nilin-coral" />
+                        )}
+                      </div>
                     </label>
                   </div>
 
@@ -939,7 +1085,7 @@ const ProviderSettingsPage: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Ticket,
   Plus,
@@ -15,10 +15,14 @@ import {
   Link2,
   ToggleLeft,
   ToggleRight,
+  CheckCircle,
+  Ban,
+  Download,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import { BulkActionToolbar, type BulkAction } from '../../components/admin/BulkActionToolbar';
 import { formatPrice } from '../../utils/currency';
 import { cn } from '../../lib/utils';
 import {
@@ -105,6 +109,58 @@ function extractError(err: unknown): string | undefined {
   return undefined;
 }
 
+// Map server field names to client-side ValidationErrors keys.
+// Only fields the form actually displays are returned; everything else
+// falls through to a generic form-level error.
+const SERVER_FIELD_TO_FORM_KEY: Record<string, keyof ValidationErrors> = {
+  code: 'code',
+  title: 'title',
+  value: 'value',
+  maxDiscount: 'value',
+  minOrderAmount: 'minOrderAmount',
+  minOrderValue: 'minOrderAmount',
+  usageLimit: 'usageLimit',
+  maxUses: 'usageLimit',
+  maxUsesPerUser: 'maxUsesPerUser',
+  validFrom: 'validFrom',
+  validUntil: 'validUntil',
+};
+
+function extractServerFieldErrors(err: unknown): ValidationErrors {
+  const data = (err as { response?: { data?: unknown } } | undefined)?.response?.data;
+  const errors: ValidationErrors = {};
+  if (!data || typeof data !== 'object') return errors;
+
+  const record = data as Record<string, unknown>;
+  const candidates: unknown[] = [];
+
+  if (Array.isArray(record.errors)) {
+    candidates.push(...record.errors);
+  }
+  if (record.fieldErrors && Array.isArray(record.fieldErrors)) {
+    candidates.push(...(record.fieldErrors as unknown[]));
+  }
+  // Some APIs return a flat { field: 'msg', field2: 'msg' } object.
+  for (const [key, value] of Object.entries(record)) {
+    if (['errors', 'fieldErrors', 'message', 'error'].includes(key)) continue;
+    if (typeof value === 'string') candidates.push({ field: key, message: value });
+  }
+
+  for (const entry of candidates) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as { field?: string; path?: string; message?: string; msg?: string };
+    const rawField = e.field || e.path;
+    if (!rawField) continue;
+    const formKey = SERVER_FIELD_TO_FORM_KEY[rawField] ?? (rawField as keyof ValidationErrors);
+    if (!formKey) continue;
+    if (!errors[formKey] && (e.message || e.msg)) {
+      errors[formKey] = e.message || e.msg;
+    }
+  }
+
+  return errors;
+}
+
 const typeBadgeClass = (type: string) => {
   switch (type) {
     case 'percentage':
@@ -150,6 +206,8 @@ const CouponManagement: React.FC = () => {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
   const [formData, setFormData] = useState<CouponFormPayload>(emptyForm());
+  const [selectedCoupons, setSelectedCoupons] = useState<Set<string>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -201,6 +259,16 @@ const CouponManagement: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  // Clear selection when coupons list changes (e.g., on filter/page change)
+  useEffect(() => {
+    setSelectedCoupons(prev => {
+      // Keep only selections that still exist in the new coupons list
+      const validIds = new Set(coupons.map(c => c._id));
+      const newSet = new Set([...prev].filter(id => validIds.has(id)));
+      return newSet;
+    });
+  }, [coupons]);
+
   const openCreate = () => {
     setEditingCoupon(null);
     setFormData(emptyForm());
@@ -248,14 +316,60 @@ const CouponManagement: React.FC = () => {
       setEditingCoupon(null);
       await loadData();
     } catch (err) {
-      toast.error(extractError(err) || 'Failed to save coupon');
+      // Surface server-side validation errors inline next to the
+      // relevant field rather than only as a toast.
+      const serverErrors = extractServerFieldErrors(err);
+      if (Object.keys(serverErrors).length > 0) {
+        setValidationErrors((prev) => ({ ...prev, ...serverErrors }));
+        const firstField = Object.keys(serverErrors)[0];
+        const message = serverErrors[firstField as keyof ValidationErrors];
+        toast.error(message || extractError(err) || 'Please correct the highlighted fields');
+      } else {
+        toast.error(extractError(err) || 'Failed to save coupon');
+      }
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeactivate = async (coupon: AdminCoupon) => {
-    if (!confirm(`Deactivate "${coupon.code}"? It will no longer work at checkout.`)) return;
+    // Show custom confirmation instead of window.confirm
+    const confirmed = await new Promise<boolean>((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 z-[9999] bg-black/40 backdrop-blur-sm flex items-center justify-center';
+      overlay.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-xl p-6 max-w-sm mx-4 border border-nilin-border">
+          <h3 class="text-lg font-serif text-nilin-charcoal mb-2">Deactivate Coupon</h3>
+          <p class="text-sm text-nilin-warmGray mb-6">Deactivate "${coupon.code}"? It will no longer work at checkout.</p>
+          <div class="flex justify-end gap-3">
+            <button class="cancel-btn px-4 py-2 rounded-xl border border-nilin-border/60 text-sm hover:bg-gray-50">Cancel</button>
+            <button class="confirm-btn px-4 py-2 rounded-xl bg-amber-600 text-white text-sm hover:bg-amber-700">Deactivate</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const cleanup = () => {
+        overlay.remove();
+      };
+
+      overlay.querySelector('.cancel-btn')?.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+      overlay.querySelector('.confirm-btn')?.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          cleanup();
+          resolve(false);
+        }
+      });
+    });
+
+    if (!confirmed) return;
     try {
       await adminCouponApi.deactivate(coupon._id);
       toast.success('Coupon deactivated');
@@ -279,7 +393,43 @@ const CouponManagement: React.FC = () => {
   };
 
   const handleDelete = async (coupon: AdminCoupon) => {
-    if (!confirm(`Permanently delete "${coupon.code}"? This cannot be undone.`)) return;
+    // Show custom confirmation instead of window.confirm
+    const confirmed = await new Promise<boolean>((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 z-[9999] bg-black/40 backdrop-blur-sm flex items-center justify-center';
+      overlay.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-xl p-6 max-w-sm mx-4 border border-nilin-border">
+          <h3 class="text-lg font-serif text-nilin-charcoal mb-2">Delete Coupon</h3>
+          <p class="text-sm text-nilin-warmGray mb-6">Permanently delete "${coupon.code}"? This cannot be undone.</p>
+          <div class="flex justify-end gap-3">
+            <button class="cancel-btn px-4 py-2 rounded-xl border border-nilin-border/60 text-sm hover:bg-gray-50">Cancel</button>
+            <button class="confirm-btn px-4 py-2 rounded-xl bg-red-600 text-white text-sm hover:bg-red-700">Delete</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const cleanup = () => {
+        overlay.remove();
+      };
+
+      overlay.querySelector('.cancel-btn')?.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+      overlay.querySelector('.confirm-btn')?.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          cleanup();
+          resolve(false);
+        }
+      });
+    });
+
+    if (!confirmed) return;
     try {
       await adminCouponApi.delete(coupon._id);
       toast.success('Coupon deleted');
@@ -288,6 +438,165 @@ const CouponManagement: React.FC = () => {
       toast.error(extractError(err) || 'Failed to delete coupon');
     }
   };
+
+  // Selection handlers
+  const toggleCouponSelection = (couponId: string) => {
+    setSelectedCoupons(prev => {
+      const next = new Set(prev);
+      if (next.has(couponId)) {
+        next.delete(couponId);
+      } else {
+        next.add(couponId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllCoupons = () => {
+    if (selectedCoupons.size === coupons.length) {
+      setSelectedCoupons(new Set());
+    } else {
+      setSelectedCoupons(new Set(coupons.map(c => c._id)));
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedCoupons(new Set());
+  };
+
+  const isAllSelected = coupons.length > 0 && selectedCoupons.size === coupons.length;
+  const isIndeterminate = selectedCoupons.size > 0 && selectedCoupons.size < coupons.length;
+
+  // Bulk action handlers
+  const handleBulkAction = async (actionId: string, _selectedIds: string[], items: AdminCoupon[]) => {
+    setBulkActionLoading(actionId);
+    const selectedIds = items.map(i => i._id);
+
+    try {
+      switch (actionId) {
+        case 'bulk-activate': {
+          const inactiveCoupons = selectedIds.filter(id => {
+            const coupon = coupons.find(c => c._id === id);
+            return coupon && !coupon.isActive;
+          });
+          if (inactiveCoupons.length === 0) {
+            toast.success('All selected coupons are already active');
+            return;
+          }
+          await Promise.all(inactiveCoupons.map(id => adminCouponApi.setActive(id, true)));
+          toast.success(`${inactiveCoupons.length} coupon(s) activated`);
+          break;
+        }
+        case 'bulk-deactivate': {
+          const activeCoupons = selectedIds.filter(id => {
+            const coupon = coupons.find(c => c._id === id);
+            return coupon && coupon.isActive;
+          });
+          if (activeCoupons.length === 0) {
+            toast.success('No active coupons selected');
+            return;
+          }
+          await adminCouponApi.bulkDeactivate(activeCoupons);
+          toast.success(`${activeCoupons.length} coupon(s) deactivated`);
+          break;
+        }
+        case 'bulk-delete': {
+          await adminCouponApi.bulkDelete(selectedIds);
+          toast.success(`${selectedIds.length} coupon(s) permanently deleted`);
+          break;
+        }
+        case 'bulk-export': {
+          const exportData = items.map(c => ({
+            code: c.code,
+            title: c.title,
+            type: c.type,
+            value: c.value,
+            maxDiscount: c.maxDiscount,
+            minOrderAmount: c.minOrderValue,
+            usageLimit: c.maxUses,
+            currentUses: c.currentUses,
+            isActive: c.isActive,
+            featured: c.featured,
+            validFrom: c.validFrom,
+            validUntil: c.validUntil,
+          }));
+          const csv = [
+            ['Code', 'Title', 'Type', 'Value', 'Max Discount', 'Min Order', 'Usage Limit', 'Current Uses', 'Active', 'Featured', 'Valid From', 'Valid Until'].join(','),
+            ...exportData.map(row => [
+              row.code,
+              `"${row.title}"`,
+              row.type,
+              row.value,
+              row.maxDiscount,
+              row.minOrderAmount,
+              row.usageLimit,
+              row.currentUses,
+              row.isActive,
+              row.featured,
+              row.validFrom?.split('T')[0] || '',
+              row.validUntil?.split('T')[0] || '',
+            ].join(','))
+          ].join('\n');
+
+          const blob = new Blob([csv], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `coupons-export-${new Date().toISOString().split('T')[0]}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          toast.success(`${selectedIds.length} coupon(s) exported`);
+          return; // Don't reload data for export
+        }
+        default:
+          return;
+      }
+      await loadData();
+      clearSelection();
+    } catch (err) {
+      toast.error(extractError(err) || `Bulk action failed`);
+    } finally {
+      setBulkActionLoading(null);
+    }
+  };
+
+  // Bulk actions configuration
+  const bulkActions: BulkAction[] = useMemo(() => [
+    {
+      id: 'bulk-activate',
+      label: 'Activate',
+      icon: <CheckCircle className="w-4 h-4" />,
+      variant: 'success',
+    },
+    {
+      id: 'bulk-deactivate',
+      label: 'Deactivate',
+      icon: <Ban className="w-4 h-4" />,
+      variant: 'warning',
+    },
+    {
+      id: 'bulk-export',
+      label: 'Export',
+      icon: <Download className="w-4 h-4" />,
+      variant: 'default',
+    },
+    {
+      id: 'bulk-delete',
+      label: 'Delete',
+      icon: <Trash2 className="w-4 h-4" />,
+      variant: 'danger',
+      requiresConfirm: true,
+      confirmTitle: 'Confirm Bulk Delete',
+      confirmDescription: 'This will permanently delete the selected coupons. This action cannot be undone.',
+    },
+  ], []);
+
+  const selectedCouponItems = useMemo(() =>
+    coupons.filter(c => selectedCoupons.has(c._id)),
+    [coupons, selectedCoupons]
+  );
 
   const formatCouponValue = (coupon: AdminCoupon) => {
     if (coupon.type === 'percentage') {
@@ -300,6 +609,12 @@ const CouponManagement: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <AdminPageShell
         wideLayout
         title="Coupon Management"
@@ -326,7 +641,7 @@ const CouponManagement: React.FC = () => {
           </div>
         }
       >
-        <div className="space-y-6">
+        <main id="main-content" className="space-y-6">
           <div className="rounded-2xl border border-amber-200/80 bg-amber-50/70 px-5 py-4 flex gap-3">
             <Info className="w-5 h-5 text-amber-800 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-950 font-sans space-y-1">
@@ -424,6 +739,24 @@ const CouponManagement: React.FC = () => {
                 <table className="min-w-full text-sm font-sans">
                   <thead>
                     <tr className="border-b border-nilin-border/50 bg-nilin-blush/20">
+                      <th className="px-4 py-3 text-left w-12">
+                        <button
+                          type="button"
+                          onClick={toggleAllCoupons}
+                          className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-nilin-blush/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                          aria-label={isAllSelected ? 'Deselect all coupons' : 'Select all coupons'}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isAllSelected}
+                            ref={(el) => {
+                              if (el) el.indeterminate = isIndeterminate;
+                            }}
+                            onChange={toggleAllCoupons}
+                            className="w-4 h-4 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral cursor-pointer"
+                          />
+                        </button>
+                      </th>
                       <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
                         Code
                       </th>
@@ -454,8 +787,31 @@ const CouponManagement: React.FC = () => {
                         coupon.validUntil,
                         coupon.isActive
                       );
+                      const isSelected = selectedCoupons.has(coupon._id);
                       return (
-                        <tr key={coupon._id} className="hover:bg-nilin-blush/10 transition-colors">
+                        <tr
+                          key={coupon._id}
+                          className={cn(
+                            'hover:bg-nilin-blush/10 transition-colors',
+                            isSelected && 'bg-nilin-coral/5'
+                          )}
+                        >
+                          <td className="px-4 py-4">
+                            <button
+                              type="button"
+                              onClick={() => toggleCouponSelection(coupon._id)}
+                              className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-nilin-blush/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                              aria-label={`Select coupon ${coupon.code}`}
+                              aria-pressed={isSelected}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleCouponSelection(coupon._id)}
+                                className="w-4 h-4 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral cursor-pointer"
+                              />
+                            </button>
+                          </td>
                           <td className="px-5 py-4">
                             <div className="font-mono font-semibold text-nilin-charcoal">{coupon.code}</div>
                             <div className="text-nilin-warmGray text-xs mt-0.5">{coupon.title}</div>
@@ -518,8 +874,8 @@ const CouponManagement: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => openEdit(coupon)}
-                                className="p-2 rounded-lg text-nilin-charcoal hover:bg-nilin-blush/50"
-                                title="Edit"
+                                className="w-11 h-11 flex items-center justify-center rounded-lg text-nilin-charcoal hover:bg-nilin-blush/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                                aria-label="Edit coupon"
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
@@ -527,8 +883,8 @@ const CouponManagement: React.FC = () => {
                                 type="button"
                                 onClick={() => handleToggleActive(coupon)}
                                 disabled={togglingId === coupon._id}
-                                className="p-2 rounded-lg text-nilin-charcoal hover:bg-nilin-blush/50 disabled:opacity-50"
-                                title={coupon.isActive ? 'Deactivate' : 'Reactivate'}
+                                className="w-11 h-11 flex items-center justify-center rounded-lg text-nilin-charcoal hover:bg-nilin-blush/50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                                aria-label={coupon.isActive ? 'Deactivate coupon' : 'Reactivate coupon'}
                               >
                                 {togglingId === coupon._id ? (
                                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -542,7 +898,8 @@ const CouponManagement: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleDeactivate(coupon)}
-                                  className="px-2 py-1 text-xs text-amber-700 hover:bg-amber-50 rounded-lg"
+                                  className="h-11 px-4 flex items-center justify-center text-sm text-amber-700 hover:bg-amber-50 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                                  aria-label="Turn off coupon"
                                 >
                                   Off
                                 </button>
@@ -550,8 +907,8 @@ const CouponManagement: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => handleDelete(coupon)}
-                                className="p-2 rounded-lg text-red-600 hover:bg-red-50"
-                                title="Delete"
+                                className="w-11 h-11 flex items-center justify-center rounded-lg text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                                aria-label="Delete coupon"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -589,7 +946,19 @@ const CouponManagement: React.FC = () => {
               </button>
             </div>
           )}
-        </div>
+
+        {/* Bulk Action Toolbar */}
+        <BulkActionToolbar
+          selectedItems={selectedCouponItems}
+          totalCount={stats?.total}
+          entityName="coupons"
+          actions={bulkActions}
+          onAction={handleBulkAction}
+          onClear={clearSelection}
+          getItemId={(item) => item._id}
+          hideOnSuccess={true}
+        />
+      </main>
 
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -601,7 +970,8 @@ const CouponManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="p-2 rounded-lg hover:bg-nilin-blush/40"
+                  className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-blush/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                  aria-label="Close modal"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -672,8 +1042,18 @@ const CouponManagement: React.FC = () => {
                       onChange={(e) =>
                         setFormData({ ...formData, value: Number(e.target.value) })
                       }
-                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                      aria-invalid={!!validationErrors.value}
+                      aria-describedby={validationErrors.value ? 'coupon-value-error' : undefined}
+                      className={cn(
+                        'w-full px-3 py-2 rounded-xl border',
+                        validationErrors.value ? 'border-red-400' : 'border-nilin-border/60'
+                      )}
                     />
+                    {validationErrors.value && (
+                      <p id="coupon-value-error" className="text-xs text-red-600 mt-1" role="alert">
+                        {validationErrors.value}
+                      </p>
+                    )}
                   </div>
                 </div>
                 {formData.type === 'percentage' && (
@@ -700,8 +1080,18 @@ const CouponManagement: React.FC = () => {
                       onChange={(e) =>
                         setFormData({ ...formData, minOrderAmount: Number(e.target.value) })
                       }
-                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                      aria-invalid={!!validationErrors.minOrderAmount}
+                      aria-describedby={validationErrors.minOrderAmount ? 'coupon-min-order-error' : undefined}
+                      className={cn(
+                        'w-full px-3 py-2 rounded-xl border',
+                        validationErrors.minOrderAmount ? 'border-red-400' : 'border-nilin-border/60'
+                      )}
                     />
+                    {validationErrors.minOrderAmount && (
+                      <p id="coupon-min-order-error" className="text-xs text-red-600 mt-1" role="alert">
+                        {validationErrors.minOrderAmount}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">Usage limit (global)</label>
@@ -712,8 +1102,18 @@ const CouponManagement: React.FC = () => {
                       onChange={(e) =>
                         setFormData({ ...formData, usageLimit: Number(e.target.value) })
                       }
-                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                      aria-invalid={!!validationErrors.usageLimit}
+                      aria-describedby={validationErrors.usageLimit ? 'coupon-usage-limit-error' : undefined}
+                      className={cn(
+                        'w-full px-3 py-2 rounded-xl border',
+                        validationErrors.usageLimit ? 'border-red-400' : 'border-nilin-border/60'
+                      )}
                     />
+                    {validationErrors.usageLimit && (
+                      <p id="coupon-usage-limit-error" className="text-xs text-red-600 mt-1" role="alert">
+                        {validationErrors.usageLimit}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">Max uses per customer</label>
@@ -743,8 +1143,18 @@ const CouponManagement: React.FC = () => {
                       onChange={(e) =>
                         setFormData({ ...formData, validFrom: e.target.value })
                       }
-                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                      aria-invalid={!!validationErrors.validFrom}
+                      aria-describedby={validationErrors.validFrom ? 'coupon-valid-from-error' : undefined}
+                      className={cn(
+                        'w-full px-3 py-2 rounded-xl border',
+                        validationErrors.validFrom ? 'border-red-400' : 'border-nilin-border/60'
+                      )}
                     />
+                    {validationErrors.validFrom && (
+                      <p id="coupon-valid-from-error" className="text-xs text-red-600 mt-1" role="alert">
+                        {validationErrors.validFrom}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">Valid until</label>

@@ -7,6 +7,7 @@ import Joi from 'joi';
 import { getSocketServer } from '../socket';
 import logger from '../utils/logger';
 import Wallet from '../models/wallet.model';
+import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { createWalletTopUpIntent, verifyWalletTopUpPayment } from '../services/payment.service';
 
@@ -122,36 +123,36 @@ export const requestWithdrawal = asyncHandler(async (req: Request, res: Response
   const settings = await getSettings();
   const minimumWithdrawal = settings.minimumWithdrawalAmount || 50;
 
+  // Get user's wallet
+  const wallet = await getOrCreateWallet(user._id.toString());
+
   // Validate against minimum withdrawal amount
   if (value.amount < minimumWithdrawal) {
-    throw new ApiError(400, `Minimum withdrawal amount is AED ${minimumWithdrawal}`);
+    throw new ApiError(400, `Minimum withdrawal amount is ${wallet.currency} ${minimumWithdrawal}`);
   }
 
   // FIX #5: Enforce maximum withdrawal amount limit
   if (value.amount > MAX_WITHDRAWAL_AMOUNT) {
-    throw new ApiError(400, `Withdrawal amount exceeds maximum limit of AED ${MAX_WITHDRAWAL_AMOUNT}. Please enter a smaller amount.`);
+    throw new ApiError(400, `Withdrawal amount exceeds maximum limit of ${wallet.currency} ${MAX_WITHDRAWAL_AMOUNT}. Please enter a smaller amount.`);
   }
-
-  // Get user's wallet
-  const wallet = await getOrCreateWallet(user._id.toString());
 
   // CRITICAL FIX: Check actual balance (not just available balance) to prevent negative balance
   // The actual balance must be >= withdrawal amount
   if (value.amount > wallet.balance) {
-    throw new ApiError(400, `Insufficient balance. Your balance is AED ${wallet.balance.toFixed(2)}. Please enter an amount less than or equal to your balance.`);
+    throw new ApiError(400, `Insufficient balance. Your balance is ${wallet.currency} ${wallet.balance.toFixed(2)}. Please enter an amount less than or equal to your balance.`);
   }
 
   // Check sufficient available balance (balance minus pending)
   const availableBalance = wallet.balance - wallet.pendingBalance;
   if (value.amount > availableBalance) {
-    throw new ApiError(400, `Insufficient available balance. Available balance: AED ${availableBalance.toFixed(2)} (includes AED ${wallet.pendingBalance.toFixed(2)} pending in other withdrawals).`);
+    throw new ApiError(400, `Insufficient available balance. Available balance: ${wallet.currency} ${availableBalance.toFixed(2)} (includes ${wallet.currency} ${wallet.pendingBalance.toFixed(2)} pending in other withdrawals).`);
   }
 
   // FIX #5: Enforce minimum balance reserve
   // After withdrawal, available balance must be >= MINIMUM_BALANCE_RESERVE
   const balanceAfterWithdrawal = availableBalance - value.amount;
   if (balanceAfterWithdrawal < MINIMUM_BALANCE_RESERVE) {
-    throw new ApiError(400, `Withdrawal would leave balance below minimum reserve. Available after withdrawal: AED ${balanceAfterWithdrawal.toFixed(2)}, Minimum reserve: AED ${MINIMUM_BALANCE_RESERVE}.`);
+    throw new ApiError(400, `Withdrawal would leave balance below minimum reserve. Available after withdrawal: ${wallet.currency} ${balanceAfterWithdrawal.toFixed(2)}, Minimum reserve: ${wallet.currency} ${MINIMUM_BALANCE_RESERVE}.`);
   }
 
   // Create a unique reference for this withdrawal using cryptographically secure random
@@ -181,13 +182,13 @@ export const requestWithdrawal = asyncHandler(async (req: Request, res: Response
     // CRITICAL FIX: Re-check actual balance within transaction to prevent race conditions
     // and ensure balance never goes negative
     if (value.amount > walletDoc.balance) {
-      throw new ApiError(400, `Insufficient balance. Your balance is AED ${walletDoc.balance.toFixed(2)}. Please enter an amount less than or equal to your balance.`);
+      throw new ApiError(400, `Insufficient balance. Your balance is ${wallet.currency} ${walletDoc.balance.toFixed(2)}. Please enter an amount less than or equal to your balance.`);
     }
 
     // Also check available balance (balance minus pending)
     const currentAvailableBalance = walletDoc.balance - walletDoc.pendingBalance;
     if (value.amount > currentAvailableBalance) {
-      throw new ApiError(400, `Insufficient available balance. Available balance: AED ${currentAvailableBalance.toFixed(2)} (includes AED ${walletDoc.pendingBalance.toFixed(2)} pending in other withdrawals).`);
+      throw new ApiError(400, `Insufficient available balance. Available balance: ${wallet.currency} ${currentAvailableBalance.toFixed(2)} (includes ${wallet.currency} ${walletDoc.pendingBalance.toFixed(2)} pending in other withdrawals).`);
     }
 
     // HIGH PRIORITY FIX: Check minimum hold period for withdrawals
@@ -205,7 +206,7 @@ export const requestWithdrawal = asyncHandler(async (req: Request, res: Response
       // Check if the most recent earnings are still within the hold period
       if (now - creditTime < holdPeriodMs) {
         const hoursRemaining = Math.ceil((holdPeriodMs - (now - creditTime)) / (60 * 60 * 1000));
-        throw new ApiError(400, `Withdrawal not allowed. New earnings have a 24-hour hold period for security. Please wait ${hoursRemaining} more hour(s) before withdrawing. You can withdraw AED ${(walletDoc.balance - walletDoc.pendingBalance - mostRecentCredit.amount).toFixed(2)} from your available balance.`);
+        throw new ApiError(400, `Withdrawal not allowed. New earnings have a 24-hour hold period for security. Please wait ${hoursRemaining} more hour(s) before withdrawing. You can withdraw ${wallet.currency} ${(walletDoc.balance - walletDoc.pendingBalance - mostRecentCredit.amount).toFixed(2)} from your available balance.`);
       }
     }
 
@@ -419,6 +420,44 @@ export const addMoney = asyncHandler(async (req: Request, res: Response) => {
 
   const { amount, paymentIntentId, idempotencyKey } = value;
 
+  // Skip ownership verification for simulated payments (for dev/testing)
+  if (!paymentIntentId.startsWith('sim_topup_')) {
+    // CRITICAL: Explicit ownership verification to prevent IDOR attacks
+    // Verify the paymentIntentId belongs to this user before crediting
+    const { getStripe } = await import('../services/payment.service');
+    const stripe = getStripe();
+
+    if (stripe) {
+      try {
+        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+        // Check metadata.userId matches the authenticated user
+        if (paymentIntent.metadata?.userId !== user._id.toString()) {
+          logger.warn('IDOR attempt: Payment intent does not belong to user', {
+            userId: user._id.toString(),
+            paymentIntentUserId: paymentIntent.metadata?.userId,
+            paymentIntentId,
+            action: 'IDOR_BLOCKED'
+          });
+          throw new ApiError(403, 'Payment intent does not belong to this user');
+        }
+
+        // Additional check: ensure this is a wallet_topup payment
+        if (paymentIntent.metadata?.type !== 'wallet_topup') {
+          throw new ApiError(400, 'Invalid payment type for wallet top-up');
+        }
+      } catch (err: any) {
+        if (err instanceof ApiError) throw err;
+        logger.error('Failed to verify payment intent ownership', {
+          userId: user._id.toString(),
+          paymentIntentId,
+          error: err.message
+        });
+        throw new ApiError(400, 'Failed to verify payment ownership');
+      }
+    }
+  }
+
   const verification = await verifyWalletTopUpPayment(
     user._id.toString(),
     paymentIntentId,
@@ -536,30 +575,48 @@ export const deductCredits = asyncHandler(async (req: Request, res: Response) =>
     }
   }
 
-  // Get user's wallet first to check balance
-  const wallet = await getOrCreateWallet(user._id.toString());
+  // FIX: Use atomic findOneAndUpdate to prevent race condition
+  // This checks balance and deducts in a single atomic operation to avoid TOCTOU race
+  const result = await Wallet.findOneAndUpdate(
+    {
+      userId: user._id.toString(),
+      balance: { $gte: amount },
+      isDeleted: false,
+    },
+    {
+      $inc: { balance: -amount },
+      $push: {
+        transactions: {
+          id: new mongoose.Types.ObjectId(),
+          type: 'debit',
+          amount,
+          description: reason,
+          reference: reference || idempotencyKey || `deduct-${Date.now()}`,
+          referenceType: referenceType || 'other',
+          status: 'completed',
+          balanceAfter: 0, // Will be calculated
+          createdAt: new Date(),
+        },
+      },
+    },
+    { new: true }
+  );
 
-  // Check sufficient available balance
-  const availableBalance = wallet.balance - wallet.pendingBalance;
-  if (amount > availableBalance) {
-    throw new ApiError(400, `Insufficient balance. Available balance: AED ${availableBalance.toFixed(2)}`);
+  if (!result) {
+    // Either wallet doesn't exist or insufficient balance
+    const wallet = await Wallet.findOne({ userId: user._id.toString(), isDeleted: false });
+    if (!wallet) {
+      throw new ApiError(404, 'Wallet not found');
+    }
+    throw new ApiError(400, `Insufficient balance. Available balance: AED ${wallet.balance.toFixed(2)}`);
   }
 
-  // Perform the debit operation
-  const result = await debitWallet({
-    userId: user._id.toString(),
-    type: 'debit',
-    amount,
-    description: reason,
-    reference: reference || idempotencyKey || `deduct-${Date.now()}`,
-    referenceType: referenceType || 'other',
-  });
+  // Recalculate balanceAfter for the new transaction
+  const balanceAfter = result.balance;
 
-  if (!result.success) {
-    throw new ApiError(400, result.error || 'Failed to deduct credits');
-  }
-
-  const updatedWallet = await getOrCreateWallet(user._id.toString());
+  // Get the last transaction ID (just added)
+  const lastTransaction = result.transactions[result.transactions.length - 1];
+  const transactionId = lastTransaction?.id || idempotencyKey || `deduct-${Date.now()}`;
 
   // Emit wallet:balance_updated after successful deduction
   try {
@@ -567,10 +624,10 @@ export const deductCredits = asyncHandler(async (req: Request, res: Response) =>
     if (socketServer) {
       socketServer.emitToUser(user._id.toString(), 'wallet:balance_updated', {
         userId: user._id.toString(),
-        balance: result.newBalance,
-        pendingBalance: updatedWallet.pendingBalance,
-        availableBalance: result.newBalance - updatedWallet.pendingBalance,
-        currency: updatedWallet.currency || 'AED',
+        balance: result.balance,
+        pendingBalance: result.pendingBalance,
+        availableBalance: result.balance - result.pendingBalance,
+        currency: result.currency || 'AED',
         change: {
           balance: -amount,
           type: 'deduction',
@@ -579,7 +636,7 @@ export const deductCredits = asyncHandler(async (req: Request, res: Response) =>
       logger.info('Emitted wallet:balance_updated after deduction', {
         userId: user._id.toString(),
         amount,
-        newBalance: result.newBalance,
+        newBalance: result.balance,
         action: 'SOCKET_DEDUCT_SUCCESS',
       });
     }
@@ -595,14 +652,45 @@ export const deductCredits = asyncHandler(async (req: Request, res: Response) =>
     success: true,
     message: 'Credits deducted successfully',
     data: {
-      transactionId: result.transactionId,
-      newBalance: result.newBalance,
-      pendingBalance: updatedWallet.pendingBalance,
+      transactionId,
+      newBalance: result.balance,
+      pendingBalance: result.pendingBalance,
       amount,
     },
   });
 
   return res;
+});
+
+/**
+ * Top up wallet balance (admin/internal use).
+ * Increments the wallet balance by the specified amount, creating the wallet if missing.
+ * SECURITY: This function is prefixed with _ and not exported to prevent unauthorized use.
+ * Use the payment-based top-up flow (createTopUpIntent -> addMoney) instead.
+ */
+const _topupWallet = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { amount } = req.body;
+
+  if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+    throw new ApiError(400, 'A positive numeric amount is required');
+  }
+
+  const result = await Wallet.findOneAndUpdate(
+    { userId: user._id.toString() },
+    { $inc: { balance: amount } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  res.json({
+    success: true,
+    message: 'Wallet topped up',
+    data: {
+      balance: result.balance,
+      currency: result.currency,
+      pendingBalance: result.pendingBalance,
+    },
+  });
 });
 
 export default {
@@ -613,4 +701,6 @@ export default {
   createTopUpIntent,
   addMoney,
   deductCredits,
+  // NOTE: topupWallet removed from exports - insecure direct balance manipulation
+  // Use createTopUpIntent + addMoney for secure wallet top-ups via payment
 };

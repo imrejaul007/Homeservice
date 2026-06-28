@@ -592,21 +592,29 @@ export class VerifiedBadgeService {
       endDate: { $lt: new Date() },
     });
 
-    for (const purchase of expiredPurchases) {
-      purchase.status = 'expired';
-      await purchase.save();
-
-      // Remove badge from provider profile
-      await ProviderProfile.findOneAndUpdate(
-        { userId: purchase.providerId },
-        { $unset: { 'badges.verified': 1 } }
-      );
-
-      logger.info('Expired badge processed', {
-        purchaseId: purchase.purchaseId,
-        providerId: purchase.providerId.toString(),
-      });
+    if (expiredPurchases.length === 0) {
+      return { processed: 0 };
     }
+
+    const expiredPurchaseIds = expiredPurchases.map((p: any) => p._id);
+    const providerIds = expiredPurchases.map((p: any) => p.providerId);
+
+    // Bulk update expired purchases
+    await this.purchaseModel.updateMany(
+      { _id: { $in: expiredPurchaseIds } },
+      { $set: { status: 'expired' } }
+    );
+
+    // Bulk remove badges from provider profiles
+    await ProviderProfile.updateMany(
+      { userId: { $in: providerIds } },
+      { $unset: { 'badges.verified': 1 } }
+    );
+
+    logger.info('Expired badges processed in bulk', {
+      count: expiredPurchases.length,
+      purchaseIds: expiredPurchaseIds.map((id: any) => id.toString()),
+    });
 
     return { processed: expiredPurchases.length };
   }

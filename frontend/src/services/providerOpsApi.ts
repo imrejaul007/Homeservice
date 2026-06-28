@@ -299,6 +299,135 @@ export interface ProviderActionResponse {
 }
 
 // ============================================
+// Provider Services Types
+// ============================================
+
+export interface ProviderService {
+  _id: string;
+  name: string;
+  category: string;
+  description: string;
+  shortDescription?: string;
+  price: {
+    amount: number;
+    currency: string;
+    pricingType: 'fixed' | 'hourly' | 'starting_from';
+  };
+  duration: number;
+  durationUnit: 'minutes' | 'hours' | 'days';
+  status: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
+  rating?: {
+    average: number;
+    count: number;
+  };
+  isFeatured: boolean;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================
+// Provider Bookings Types
+// ============================================
+
+export interface ProviderBooking {
+  _id: string;
+  customerId: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone?: string;
+  };
+  serviceId: {
+    _id: string;
+    name: string;
+    category: string;
+  };
+  providerId: string;
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+  scheduledDate: string;
+  scheduledTime: string;
+  totalAmount: {
+    amount: number;
+    currency: string;
+  };
+  platformFee?: {
+    amount: number;
+    percentage: number;
+  };
+  providerEarnings?: {
+    amount: number;
+    currency: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  cancellationReason?: string;
+}
+
+export interface BookingsFilters {
+  status?: ProviderBooking['status'];
+  startDate?: string;
+  endDate?: string;
+  page?: number;
+  limit?: number;
+}
+
+// ============================================
+// Provider Earnings Types
+// ============================================
+
+export interface EarningsBreakdown {
+  totalEarnings: number;
+  currency: string;
+  period: {
+    start: string;
+    end: string;
+  };
+  byPeriod: Array<{
+    period: string;
+    amount: number;
+    bookingsCount: number;
+  }>;
+  byService: Array<{
+    serviceId: string;
+    serviceName: string;
+    amount: number;
+    bookingsCount: number;
+    percentage: number;
+  }>;
+  byStatus: {
+    completed: number;
+    pending: number;
+    withdrawn: number;
+  };
+  platformFees: {
+    total: number;
+    percentage: number;
+  };
+}
+
+export interface MessageThread {
+  _id: string;
+  providerId: string;
+  adminId: string;
+  subject: string;
+  messages: Message[];
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+export interface Message {
+  _id: string;
+  senderId: string;
+  senderType: 'admin' | 'provider';
+  content: string;
+  sentAt: string;
+  readAt?: string;
+}
+
+// ============================================
 // API Methods
 // ============================================
 
@@ -613,32 +742,147 @@ export const providerOpsApiService = {
 
   /**
    * Get dashboard overview statistics
+   * Returns PROVIDER-specific stats (own data only).
+   * Endpoint: GET /api/provider/dashboard/stats
    */
   getDashboardStats: async (): Promise<{
     success: boolean;
     data: {
       providers: {
-        total: number;
         pending: number;
-        inProgress: number;
-        approved: number;
-        suspended: number;
-        rejected: number;
       };
       metrics: {
-        avgQualityScore: number;
-        avgReliabilityScore: number;
-        totalBookings: number;
+        totalEarnings: number;
+        pendingPayout: number;
+        completedBookings: number;
         avgRating: number;
+        responseRate: number;
+        acceptanceRate: number;
+        qualityScore: number;
       };
-      fraud: FraudStats;
-      sla: {
-        compliantProviders: number;
-        violationsCount: number;
+      growth: {
+        earnings: number;
+        bookings: number;
       };
     };
   }> => {
-    const response = await api.get('/provider-ops/dashboard/stats');
+    const response = await api.get('/provider/dashboard/stats');
+    return response.data;
+  },
+
+  // ========================================
+  // Provider Services
+  // ========================================
+
+  /**
+   * Get provider's services
+   */
+  getProviderServices: async (
+    providerId: string,
+    params?: { status?: string; page?: number; limit?: number }
+  ): Promise<{
+    success: boolean;
+    data: {
+      services: ProviderService[];
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    };
+  }> => {
+    const response = await api.get(`/admin/providers/${providerId}/services`, { params });
+    return response.data;
+  },
+
+  // ========================================
+  // Provider Bookings
+  // ========================================
+
+  /**
+   * Get provider's booking history
+   */
+  getProviderBookings: async (
+    providerId: string,
+    filters?: BookingsFilters
+  ): Promise<{
+    success: boolean;
+    data: {
+      bookings: ProviderBooking[];
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+      };
+    };
+  }> => {
+    const response = await api.get(`/admin/providers/${providerId}/bookings`, { params: filters });
+    return response.data;
+  },
+
+  // ========================================
+  // Provider Earnings
+  // ========================================
+
+  /**
+   * Get provider's earnings breakdown
+   */
+  getProviderEarnings: async (
+    providerId: string,
+    params?: { period?: 'week' | 'month' | 'quarter' | 'year'; startDate?: string; endDate?: string }
+  ): Promise<{
+    success: boolean;
+    data: EarningsBreakdown;
+  }> => {
+    const response = await api.get(`/admin/providers/${providerId}/earnings`, { params });
+    return response.data;
+  },
+
+  // ========================================
+  // Provider Messaging
+  // ========================================
+
+  /**
+   * Send message to provider
+   */
+  sendProviderMessage: async (
+    providerId: string,
+    message: string,
+    subject?: string
+  ): Promise<{
+    success: boolean;
+    data: {
+      messageId: string;
+      sentAt: string;
+    };
+  }> => {
+    const response = await api.post(`/admin/providers/${providerId}/message`, { message, subject });
+    return response.data;
+  },
+
+  /**
+   * Get message history with provider
+   */
+  getProviderMessages: async (
+    providerId: string,
+    params?: { page?: number; limit?: number }
+  ): Promise<{
+    success: boolean;
+    data: {
+      messages: Message[];
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    };
+  }> => {
+    const response = await api.get(`/admin/providers/${providerId}/messages`, { params });
     return response.data;
   },
 };

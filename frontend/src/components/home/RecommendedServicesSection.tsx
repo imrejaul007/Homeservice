@@ -106,7 +106,7 @@ const RecommendedServicesSection: React.FC<RecommendedServicesSectionProps> = ({
         });
         toast.success('Added to favorites');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to toggle favorite:', err);
       toast.error('Failed to update favorites');
     }

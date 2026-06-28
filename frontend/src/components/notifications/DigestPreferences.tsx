@@ -337,7 +337,7 @@ const DigestPreferences: React.FC<DigestPreferencesProps> = ({
       </div>
 
       {error && (
-        <div className="p-4 rounded-lg bg-red-50 border border-red-200 flex items-center gap-3">
+        <div role="alert" className="p-4 rounded-lg bg-red-50 border border-red-200 flex items-center gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
           <span className="text-red-800 text-sm">{error}</span>
         </div>

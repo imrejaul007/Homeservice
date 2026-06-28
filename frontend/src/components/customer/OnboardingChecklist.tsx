@@ -91,96 +91,11 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = ({
       if (response.data?.success) {
         setChecklist(response.data.data);
       } else {
-        // Mock data for demo
-        setChecklist({
-          _id: 'checklist-001',
-          userId: 'user-001',
-          role: 'customer',
-          tasks: [
-            {
-              taskId: 'profile_photo',
-              title: 'Add Profile Photo',
-              description: 'Upload a clear photo of yourself to help providers recognize you',
-              category: 'profile',
-              priority: 'required',
-              status: 'completed',
-              completedAt: new Date().toISOString(),
-              order: 1,
-            },
-            {
-              taskId: 'profile_phone',
-              title: 'Verify Phone Number',
-              description: 'Add and verify your phone number for booking notifications',
-              category: 'profile',
-              priority: 'required',
-              status: 'completed',
-              completedAt: new Date().toISOString(),
-              order: 2,
-            },
-            {
-              taskId: 'profile_address',
-              title: 'Add Your Address',
-              description: 'Add your home address for at-home services',
-              category: 'profile',
-              priority: 'required',
-              status: 'in_progress',
-              order: 3,
-            },
-            {
-              taskId: 'payment_setup',
-              title: 'Set Up Payment Method',
-              description: 'Add a credit card or payment method for seamless bookings',
-              category: 'payment',
-              priority: 'required',
-              status: 'pending',
-              order: 4,
-            },
-            {
-              taskId: 'first_search',
-              title: 'Search for a Service',
-              description: 'Explore available services and providers in your area',
-              category: 'booking',
-              priority: 'optional',
-              status: 'pending',
-              order: 5,
-            },
-            {
-              taskId: 'first_booking',
-              title: 'Complete Your First Booking',
-              description: 'Book your first home service and experience NILIN',
-              category: 'booking',
-              priority: 'optional',
-              status: 'pending',
-              order: 6,
-            },
-            {
-              taskId: 'enable_notifications',
-              title: 'Enable Notifications',
-              description: 'Turn on push notifications for booking updates and reminders',
-              category: 'profile',
-              priority: 'optional',
-              status: 'pending',
-              order: 7,
-            },
-            {
-              taskId: 'add_preferences',
-              title: 'Set Service Preferences',
-              description: 'Tell us your preferred service types and time slots',
-              category: 'profile',
-              priority: 'optional',
-              status: 'pending',
-              order: 8,
-            },
-          ],
-          progressPercentage: 25,
-          currentStep: 4,
-          totalSteps: 8,
-          startedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-        });
+        setError('Failed to load your onboarding checklist');
       }
     } catch (err) {
       console.error('Error fetching checklist:', err);
-      setError('Failed to load your onboarding checklist');
+      setError('Failed to load your onboarding checklist. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -201,7 +116,7 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = ({
     try {
       const response = await api.post(`/customer/onboarding/checklist/${taskId}/complete`);
 
-      if (response.data?.success || true) {
+      if (response.data?.success) {
         // Update local state
         setChecklist(prev => {
           if (!prev) return prev;

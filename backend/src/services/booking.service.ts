@@ -2,6 +2,7 @@
 import crypto from 'crypto';
 import Booking from '../models/booking.model';
 import BookingNotification from '../models/bookingNotification.model';
+import Experience from '../models/experience.model';
 import { notificationService } from './notification.service';
 import User from '../models/user.model';
 import Service from '../models/service.model';
@@ -184,7 +185,9 @@ async function assertBookingPolicy(
     });
   }
 
-  if (dailyCount >= policy.maxDailyBookings) {
+  // Skip daily booking limit check in development/demo mode
+  const skipDailyLimit = process.env.SKIP_DAILY_BOOKING_LIMIT === 'true';
+  if (!skipDailyLimit && dailyCount >= policy.maxDailyBookings) {
     throw new ApiError(
       400,
       `You have reached the maximum of ${policy.maxDailyBookings} bookings per day`
@@ -1043,6 +1046,43 @@ export class BookingService {
       ttl: lockResult.expiresIn,
     });
 
+    // FIX 3: Orphan Prevention - Validate all referenced entities exist BEFORE booking creation
+    // Use .exists() for efficient existence checks that return only { _id: ... } or null
+    // This prevents orphaned bookings with invalid references
+
+    // Validate service exists and is not deleted
+    const serviceExists = await Service.exists({
+      _id: data.serviceId,
+      isDeleted: { $ne: true }
+    });
+    if (!serviceExists) {
+      await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
+      throw new ApiError(404, 'Service not found or has been removed');
+    }
+
+    // Validate provider exists, is a provider role, and is not deleted
+    const providerExists = await User.exists({
+      _id: data.providerId,
+      role: 'provider',
+      isDeleted: { $ne: true }
+    });
+    if (!providerExists) {
+      await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
+      throw new ApiError(404, 'Provider not found or account has been deactivated');
+    }
+
+    // Validate customer exists and is not deleted (for registered users, not guests)
+    if (!isGuestBooking && normalizedCustomerId) {
+      const customerExists = await User.exists({
+        _id: normalizedCustomerId,
+        isDeleted: { $ne: true }
+      });
+      if (!customerExists) {
+        await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
+        throw new ApiError(404, 'Customer account not found or has been deactivated');
+      }
+    }
+
     // STEP 2: Validate service and provider (outside transaction - read-only)
     const service = await Service.findById(data.serviceId).populate('providerId');
     if (!service || !service.isActive) {
@@ -1260,9 +1300,9 @@ export class BookingService {
         await booking.save({ session });
       }
 
-      await session.commitTransaction();
-
-      // Cash bookings: redeem coupon immediately (no Stripe webhook)
+      // CRITICAL FIX: Move coupon redemption INSIDE the main transaction
+      // Cash bookings: redeem coupon immediately within the same transaction (no Stripe webhook)
+      // This ensures atomicity - if coupon redemption fails, the whole transaction rolls back
       if (
         couponCode &&
         couponDiscount > 0 &&
@@ -1272,23 +1312,19 @@ export class BookingService {
         !booking.couponReservation.usedAt
       ) {
         try {
-          const redeemSession = await mongoose.startSession();
-          await redeemSession.withTransaction(async () => {
-            const { OfferService } = await import('./offer.service');
-            const offerService = new OfferService();
-            const marked = await offerService.markCouponAsUsedAtomic(
-              couponCode,
-              normalizedCustomerId,
-              booking._id.toString(),
-              redeemSession,
-              couponDiscount
-            );
-            if (marked) {
-              booking.couponReservation!.usedAt = new Date();
-              await booking.save({ session: redeemSession });
-            }
-          });
-          redeemSession.endSession();
+          const { OfferService } = await import('./offer.service');
+          const offerService = new OfferService();
+          const marked = await offerService.markCouponAsUsedAtomic(
+            couponCode,
+            normalizedCustomerId,
+            booking._id.toString(),
+            session, // Use same session for atomicity
+            couponDiscount
+          );
+          if (marked) {
+            booking.couponReservation!.usedAt = new Date();
+            await booking.save({ session });
+          }
         } catch (redeemError) {
           logger.error('Cash booking coupon redemption failed', {
             context: 'BookingService',
@@ -1296,8 +1332,12 @@ export class BookingService {
             couponCode,
             error: redeemError instanceof Error ? redeemError.message : String(redeemError),
           });
+          // Re-throw to abort transaction - coupon redemption is critical for cash bookings
+          throw redeemError;
         }
       }
+
+      await session.commitTransaction();
 
       // Log successful booking creation with status transition
       logStatusTransition({
@@ -2269,7 +2309,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     const limit = Math.min(filters?.limit || options?.limit || 20, 100);
     const skip = (page - 1) * limit;
 
-    const allowedSortFields = ['createdAt', 'scheduledDate', 'status', 'updatedAt'] as const;
+    const allowedSortFields = ['createdAt', 'scheduledDate', 'status', 'updatedAt', 'totalAmount'] as const;
     const sortField = allowedSortFields.includes(filters?.sortBy as typeof allowedSortFields[number])
       ? filters!.sortBy!
       : 'scheduledDate';
@@ -2305,9 +2345,21 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       if (filters.startDate) query.scheduledDate.$gte = new Date(filters.startDate);
       if (filters.endDate) query.scheduledDate.$lte = new Date(filters.endDate);
     }
+
+    // Price range filter
+    if (filters?.minPrice !== undefined || filters?.maxPrice !== undefined) {
+      query['pricing.totalAmount'] = {};
+      if (filters.minPrice !== undefined) query['pricing.totalAmount'].$gte = filters.minPrice;
+      if (filters.maxPrice !== undefined) query['pricing.totalAmount'].$lte = filters.maxPrice;
+    }
+
+    // Expanded search - searches booking number, service name, and provider name
+    // Note: For basic query, we search bookingNumber. Service/provider names require aggregation
+    const hasSearchFilter = !!filters?.search;
     if (filters?.search) {
+      const escapedSearch = escapeRegex(filters.search);
       query.$or = [
-        { bookingNumber: { $regex: escapeRegex(filters.search), $options: 'i' } }
+        { bookingNumber: { $regex: new RegExp(escapedSearch, 'i') } }
       ];
     }
 
@@ -2331,6 +2383,8 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       statusHistory: 1,
       payment: 1,
       paymentStatus: 1,
+      customerReview: 1,
+      providerReview: 1,
       serviceId: 1,
       providerId: 1,
       createdAt: 1,
@@ -2346,72 +2400,101 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     let bookings: any[];
     let total: number;
 
-    if (hasCategoryFilter) {
-      // Use aggregation pipeline to properly filter on populated serviceId.category
+    // Determine if we need aggregation (category filter, search filter with service/provider lookup, or price sort)
+    const needsAggregation = hasCategoryFilter || hasSearchFilter || sortField === 'totalAmount';
+
+    if (needsAggregation) {
+      // Use aggregation pipeline to support category filter, expanded search, and totalAmount sort
       const matchStage: any = { ...baseQuery };
 
+      // Build search filter for aggregation (searches service name and provider name)
+      if (hasSearchFilter) {
+        const escapedSearch = escapeRegex(filters.search!);
+        matchStage.$expr = {
+          $or: [
+            { $regexMatch: { input: '$bookingNumber', regex: escapedSearch, options: 'i' } }
+          ]
+        };
+      }
+
       // Count query for total (before pagination)
-      const countResult = await Booking.aggregate([
-        { $match: matchStage },
-        {
-          $lookup: {
-            from: 'services',
-            localField: 'serviceId',
-            foreignField: '_id',
-            as: 'servicePopulated'
-          }
-        },
-        { $unwind: { path: '$servicePopulated', preserveNullAndEmptyArrays: true } },
-        { $match: { 'servicePopulated.category': filters.category } },
-        { $count: 'total' }
-      ]);
+      const countPipeline: any[] = [
+        { $match: matchStage }
+      ];
+
+      // Add service lookup for category filter
+      if (hasCategoryFilter) {
+        countPipeline.push(
+          { $lookup: { from: 'services', localField: 'serviceId', foreignField: '_id', as: 'servicePopulated' } },
+          { $unwind: { path: '$servicePopulated', preserveNullAndEmptyArrays: true } },
+          { $match: { 'servicePopulated.category': filters.category } }
+        );
+      }
+
+      // Add service and provider lookups for expanded search
+      if (hasSearchFilter) {
+        countPipeline.push(
+          { $lookup: { from: 'services', localField: 'serviceId', foreignField: '_id', as: 'servicePopulated' } },
+          { $lookup: { from: 'providers', localField: 'providerId', foreignField: '_id', as: 'providerPopulated' } }
+        );
+      }
+
+      countPipeline.push({ $count: 'total' });
+
+      const countResult = await Booking.aggregate(countPipeline);
       total = countResult.length > 0 ? countResult[0].total : 0;
 
-      // Paginated query
-      bookings = await Booking.aggregate([
-        { $match: matchStage },
-        {
-          $lookup: {
-            from: 'services',
-            localField: 'serviceId',
-            foreignField: '_id',
-            as: 'servicePopulated'
+      // Paginated query with full lookups
+      const paginatedPipeline: any[] = [
+        { $match: matchStage }
+      ];
+
+      // Add lookups
+      paginatedPipeline.push(
+        { $lookup: { from: 'services', localField: 'serviceId', foreignField: '_id', as: 'servicePopulated' } },
+        { $lookup: { from: 'providers', localField: 'providerId', foreignField: '_id', as: 'providerPopulated' } }
+      );
+
+      // Unwind service if category filter exists
+      if (hasCategoryFilter) {
+        paginatedPipeline.push(
+          { $match: { 'servicePopulated.category': filters.category } }
+        );
+      }
+
+      // Project with populated fields
+      paginatedPipeline.push({
+        $project: {
+          ...projection,
+          serviceId: {
+            _id: { $arrayElemAt: ['$servicePopulated._id', 0] },
+            name: { $arrayElemAt: ['$servicePopulated.name', 0] },
+            category: { $arrayElemAt: ['$servicePopulated.category', 0] },
+            images: { $arrayElemAt: ['$servicePopulated.images', 0] }
+          },
+          providerId: {
+            _id: { $arrayElemAt: ['$providerPopulated._id', 0] },
+            firstName: { $arrayElemAt: ['$providerPopulated.firstName', 0] },
+            lastName: { $arrayElemAt: ['$providerPopulated.lastName', 0] }
           }
-        },
-        { $unwind: { path: '$servicePopulated', preserveNullAndEmptyArrays: true } },
-        { $match: { 'servicePopulated.category': filters.category } },
-        {
-          $lookup: {
-            from: 'providers',
-            localField: 'providerId',
-            foreignField: '_id',
-            as: 'providerPopulated'
-          }
-        },
-        {
-          $project: {
-            ...projection,
-            serviceId: {
-              _id: '$servicePopulated._id',
-              name: '$servicePopulated.name',
-              category: '$servicePopulated.category',
-              images: '$servicePopulated.images'
-            },
-            providerId: {
-              $cond: {
-                if: { $gt: [{ $size: '$providerPopulated' }, 0] },
-                then: { _id: { $arrayElemAt: ['$providerPopulated._id', 0] }, firstName: { $arrayElemAt: ['$providerPopulated.firstName', 0] }, lastName: { $arrayElemAt: ['$providerPopulated.lastName', 0] } },
-                else: null
-              }
-            }
-          }
-        },
-        { $sort: sortSpec },
+        }
+      });
+
+      // Apply sort (handle totalAmount sort by accessing pricing.totalAmount)
+      if (sortField === 'totalAmount') {
+        paginatedPipeline.push({ $sort: { 'pricing.totalAmount': sortDirection } });
+      } else {
+        paginatedPipeline.push({ $sort: sortSpec });
+      }
+
+      paginatedPipeline.push(
         { $skip: skip },
         { $limit: limit }
-      ]);
+      );
+
+      bookings = await Booking.aggregate(paginatedPipeline);
     } else {
-      // Standard query without category filter
+      // Standard query without aggregation
       const [bookingsResult, countResult] = await Promise.all([
         Booking.find(baseQuery, projection)
           .populate('service', 'name category images duration price')
@@ -2424,6 +2507,32 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       ]);
       bookings = bookingsResult;
       total = countResult;
+    }
+
+    // Enrich bookings with experience submission state for customer UI
+    const bookingIds = bookings
+      .map((booking) => booking?._id?.toString())
+      .filter((id): id is string => Boolean(id));
+
+    if (bookingIds.length > 0) {
+      const existingExperiences = await Experience.find({
+        userId: new mongoose.Types.ObjectId(customerId),
+        bookingId: { $in: bookingIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        isDeleted: false,
+      })
+        .select('bookingId')
+        .lean();
+
+      const experiencedBookingIds = new Set(
+        existingExperiences
+          .map((experience) => experience.bookingId?.toString())
+          .filter((id): id is string => Boolean(id))
+      );
+
+      bookings = bookings.map((booking) => ({
+        ...booking,
+        hasExperience: experiencedBookingIds.has(booking._id?.toString()),
+      }));
     }
 
     return {
@@ -3144,6 +3253,11 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         throw new ApiError(404, 'Booking not found or not in progress');
       }
 
+      if (booking.payment?.status !== 'completed') {
+        await session.abortTransaction();
+        throw new ApiError(400, 'Payment must be marked as completed before completing the booking');
+      }
+
       // CRITICAL: Validate state transition
       validateStateTransition(booking.status, 'completed');
 
@@ -3269,6 +3383,51 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     }
   }
 
+  async markBookingPaymentCompleted(
+    bookingId: string,
+    providerId: string,
+    data?: { transactionId?: string; notes?: string }
+  ): Promise<any> {
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+      throw new ApiError(400, 'Invalid booking ID');
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(providerId)) {
+      throw new ApiError(400, 'Invalid provider ID');
+    }
+
+    const booking = await Booking.findOne({
+      _id: new mongoose.Types.ObjectId(bookingId),
+      providerId: new mongoose.Types.ObjectId(providerId),
+      deletedAt: { $exists: false },
+    });
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found');
+    }
+
+    if (!['confirmed', 'in_progress', 'completed'].includes(booking.status)) {
+      throw new ApiError(400, 'Payment can only be updated for confirmed, in-progress, or completed bookings');
+    }
+
+    if (booking.payment?.status !== 'completed') {
+      booking.payment = booking.payment || { status: 'pending' };
+      booking.payment.status = 'completed';
+      booking.payment.paidAt = new Date();
+      if (data?.transactionId) {
+        booking.payment.transactionId = data.transactionId;
+      }
+    }
+
+    if (data?.notes) {
+      booking.providerResponse = booking.providerResponse || {};
+      booking.providerResponse.notes = data.notes;
+    }
+
+    await booking.save();
+    return booking;
+  }
+
   // ========================================
   // Create Guest Booking (Interface Implementation)
   // ========================================
@@ -3305,7 +3464,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
   // Track Booking (Interface Implementation)
   // ========================================
 
-  async trackBooking(bookingNumber: string): Promise<any> {
+  async trackBooking(
+    bookingNumber: string,
+    options?: { verificationEmail?: string; includeInternalIds?: boolean }
+  ): Promise<any> {
     const booking = await Booking.findOne({ bookingNumber, deletedAt: { $exists: false } })
       .populate('serviceId', 'name category subcategory images')
       .populate('providerId', 'firstName lastName businessInfo phone');
@@ -3319,20 +3481,47 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       | { firstName?: string; lastName?: string; email?: string; phone?: string }
       | undefined;
 
+    const bookingEmail = (guest?.email || customerSnapshot?.email || '').toLowerCase().trim();
+    const verificationEmail = options?.verificationEmail?.toLowerCase().trim();
+
+    if (verificationEmail && bookingEmail && verificationEmail !== bookingEmail) {
+      throw new ApiError(403, 'Email does not match this booking');
+    }
+
+    const emailVerified = Boolean(verificationEmail && bookingEmail && verificationEmail === bookingEmail);
+
     const providerDoc = booking.providerId as
       | { _id?: mongoose.Types.ObjectId; firstName?: string; lastName?: string; businessInfo?: { businessName?: string }; phone?: string }
       | mongoose.Types.ObjectId
       | undefined;
 
-    return {
-      _id: booking._id,
+    const sanitizeLocation = (fullLocation: typeof booking.location) => {
+      if (!fullLocation) return undefined;
+      if (emailVerified || options?.includeInternalIds) {
+        return fullLocation;
+      }
+      return {
+        type: fullLocation.type,
+        address: {
+          city: fullLocation.address?.city,
+          state: fullLocation.address?.state,
+          country: fullLocation.address?.country,
+        },
+      };
+    };
+
+    const providerName = providerDoc && typeof providerDoc === 'object' && 'firstName' in providerDoc
+      ? `${providerDoc.firstName || ''} ${providerDoc.lastName || ''}`.trim()
+      : undefined;
+
+    const publicResult: Record<string, unknown> = {
       bookingNumber: booking.bookingNumber,
-      customerId: booking.customerId?.toString(),
-      providerId: providerDoc && typeof providerDoc === 'object' && '_id' in providerDoc
-        ? providerDoc._id?.toString()
-        : booking.providerId?.toString(),
       status: booking.status,
-      statusHistory: booking.statusHistory || [],
+      statusHistory: (booking.statusHistory || []).map((entry: { status: string; timestamp: Date; reason?: string }) => ({
+        status: entry.status,
+        timestamp: entry.timestamp,
+        ...(emailVerified ? { reason: entry.reason } : {}),
+      })),
       service: booking.serviceId
         ? {
             name: (booking.serviceId as any).name,
@@ -3344,28 +3533,58 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       scheduledDate: booking.scheduledDate,
       scheduledTime: booking.scheduledTime,
       duration: booking.duration,
-      location: booking.location,
-      pricing: booking.pricing,
+      location: sanitizeLocation(booking.location),
+      pricing: emailVerified || options?.includeInternalIds
+        ? booking.pricing
+        : {
+            totalAmount: booking.pricing?.totalAmount,
+            currency: booking.pricing?.currency,
+          },
       isGuestBooking: Boolean(booking.isGuestBooking),
       createdAt: booking.createdAt,
-      provider: providerDoc && typeof providerDoc === 'object' && 'firstName' in providerDoc
+      provider: providerName
         ? {
-            _id: providerDoc._id?.toString(),
-            name: `${providerDoc.firstName || ''} ${providerDoc.lastName || ''}`.trim(),
-            businessName: providerDoc.businessInfo?.businessName,
-            phone: providerDoc.phone,
+            name: providerName,
+            businessName: providerDoc && typeof providerDoc === 'object' && 'businessInfo' in providerDoc
+              ? providerDoc.businessInfo?.businessName
+              : undefined,
+            ...(emailVerified && providerDoc && typeof providerDoc === 'object' && 'phone' in providerDoc
+              ? { phone: providerDoc.phone }
+              : {}),
           }
         : undefined,
-      customerInfo: booking.isGuestBooking && guest
+      emailVerificationRequired: !emailVerified && Boolean(bookingEmail),
+    };
+
+    if (emailVerified) {
+      publicResult.customerInfo = booking.isGuestBooking && guest
         ? {
             firstName: guest.name?.split(' ')[0],
             lastName: guest.name?.split(' ').slice(1).join(' '),
             email: guest.email,
             phone: guest.phone,
           }
-        : customerSnapshot,
-      guestEmail: guest?.email,
-    };
+        : customerSnapshot
+          ? {
+              firstName: customerSnapshot.firstName,
+              lastName: customerSnapshot.lastName,
+              email: customerSnapshot.email,
+              phone: customerSnapshot.phone,
+            }
+          : undefined;
+    } else if (verificationEmail && !bookingEmail) {
+      throw new ApiError(403, 'Email verification is not available for this booking');
+    }
+
+    if (options?.includeInternalIds) {
+      publicResult._id = booking._id;
+      publicResult.customerId = booking.customerId?.toString();
+      publicResult.providerId = providerDoc && typeof providerDoc === 'object' && '_id' in providerDoc
+        ? providerDoc._id?.toString()
+        : booking.providerId?.toString();
+    }
+
+    return publicResult;
   }
 
   // ========================================

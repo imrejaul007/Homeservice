@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw,
@@ -124,152 +125,11 @@ export const RefundAnalytics: React.FC<RefundAnalyticsProps> = ({
         setRefunds(response.data.data.refunds || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setRefunds([
-          {
-            id: 'ref-001',
-            refundId: 'REF-2024-001',
-            bookingId: 'booking-123',
-            customerId: 'cust-001',
-            customerName: 'Ahmed Hassan',
-            providerId: 'prov-001',
-            providerName: 'Elite Cleaners',
-            serviceName: 'Deep Cleaning',
-            amount: 450,
-            refundAmount: 450,
-            refundPercentage: 100,
-            reason: 'Service was not completed as requested. Provider left early without finishing the job.',
-            category: 'quality_issue',
-            status: 'completed',
-            requestDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            processedDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            processingTime: 48,
-            paymentMethod: 'Credit Card'
-          },
-          {
-            id: 'ref-002',
-            refundId: 'REF-2024-002',
-            bookingId: 'booking-456',
-            customerId: 'cust-002',
-            customerName: 'Sarah Khan',
-            providerId: 'prov-002',
-            providerName: 'Professional Plumbers',
-            serviceName: 'Pipe Repair',
-            amount: 350,
-            refundAmount: 175,
-            refundPercentage: 50,
-            reason: 'Partial refund for delayed service. Job took 4 hours instead of promised 2 hours.',
-            category: 'service_issue',
-            status: 'processing',
-            requestDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-            processingTime: 12,
-            paymentMethod: 'Wallet'
-          },
-          {
-            id: 'ref-003',
-            refundId: 'REF-2024-003',
-            bookingId: 'booking-789',
-            customerId: 'cust-003',
-            customerName: 'Mohammed Ali',
-            providerId: 'prov-003',
-            providerName: 'Quick Electricians',
-            serviceName: 'Wiring Installation',
-            amount: 600,
-            refundAmount: 0,
-            refundPercentage: 0,
-            reason: 'Customer requested cancellation after provider already started work.',
-            category: 'customer_request',
-            status: 'rejected',
-            requestDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-            processedDate: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
-            processingTime: 24,
-            paymentMethod: 'Credit Card'
-          },
-          {
-            id: 'ref-004',
-            refundId: 'REF-2024-004',
-            bookingId: 'booking-321',
-            customerId: 'cust-004',
-            customerName: 'Fatima Omar',
-            providerId: 'prov-004',
-            providerName: 'Garden Experts',
-            serviceName: 'Lawn Maintenance',
-            amount: 280,
-            refundAmount: 140,
-            refundPercentage: 50,
-            reason: 'Provider cancelled last minute. Customer had to book another provider at higher cost.',
-            category: 'provider_cancellation',
-            status: 'approved',
-            requestDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            processingTime: 4,
-            paymentMethod: 'Credit Card'
-          },
-          {
-            id: 'ref-005',
-            refundId: 'REF-2024-005',
-            bookingId: 'booking-654',
-            customerId: 'cust-005',
-            customerName: 'Omar Farouk',
-            providerId: 'prov-005',
-            providerName: 'Beauty Studio',
-            serviceName: 'Hair Styling',
-            amount: 180,
-            refundAmount: 180,
-            refundPercentage: 100,
-            reason: 'Provider did not show up for appointment.',
-            category: 'no_show',
-            status: 'pending',
-            requestDate: new Date().toISOString(),
-            processingTime: 0,
-            paymentMethod: 'Credit Card'
-          }
-        ]);
-        setStats({
-          totalRefunds: 1247,
-          totalAmount: 456780,
-          pendingCount: 45,
-          avgProcessingTime: 18,
-          refundRate: 3.2,
-          approvalRate: 72.5,
-          rejectionRate: 12.8,
-          monthlyTrend: [
-            { month: 'Jan', count: 189, amount: 67890, rate: 3.1 },
-            { month: 'Feb', count: 201, amount: 72340, rate: 3.4 },
-            { month: 'Mar', count: 234, amount: 81230, rate: 3.6 },
-            { month: 'Apr', count: 198, amount: 68920, rate: 3.2 },
-            { month: 'May', count: 215, amount: 78450, rate: 3.3 },
-            { month: 'Jun', count: 210, amount: 87950, rate: 3.1 }
-          ],
-          byCategory: [
-            { category: 'Quality Issue', count: 356, amount: 134560, color: '#EF4444' },
-            { category: 'Service Issue', count: 289, amount: 98760, color: '#F59E0B' },
-            { category: 'Customer Request', count: 234, amount: 67890, color: '#3B82F6' },
-            { category: 'Provider Cancellation', count: 198, amount: 78900, color: '#8B5CF6' },
-            { category: 'No Show', count: 112, amount: 45670, color: '#DC2626' },
-            { category: 'Other', count: 58, amount: 31000, color: '#6B7280' }
-          ],
-          byStatus: [
-            { status: 'Completed', count: 902, color: '#10B981' },
-            { status: 'Approved', count: 156, color: '#3B82F6' },
-            { status: 'Processing', count: 89, color: '#8B5CF6' },
-            { status: 'Pending', count: 45, color: '#F59E0B' },
-            { status: 'Rejected', count: 55, color: '#EF4444' }
-          ],
-          topReasons: [
-            { reason: 'Service quality below expectations', count: 289, percentage: 23.2 },
-            { reason: 'Provider cancelled/rescheduled', count: 234, percentage: 18.8 },
-            { reason: 'Customer changed plans', count: 198, percentage: 15.9 },
-            { reason: 'Item damaged during service', count: 156, percentage: 12.5 },
-            { reason: 'Provider no-show', count: 145, percentage: 11.6 }
-          ],
-          avgRefundAmount: 366,
-          highestRefund: 2500,
-          lowestRefund: 25
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching refund data:', err);
-      setError('Failed to load refund analytics');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

@@ -477,23 +477,18 @@ export class RBACService {
     session.startTransaction();
 
     let success = 0;
-    const errors: string[] = [];
+    let failed = 0;
 
     try {
-      for (const userId of data.userIds) {
-        try {
-          const user = await User.findById(userId).session(session);
-          if (user) {
-            user.role = data.roleName as UserRole;
-            await user.save({ session });
-            success++;
-          } else {
-            errors.push(`User not found: ${userId}`);
-          }
-        } catch (error) {
-          errors.push(`Failed to assign to ${userId}: ${(error as Error).message}`);
-        }
-      }
+      // Bulk update user roles
+      const result = await User.updateMany(
+        { _id: { $in: data.userIds } },
+        { $set: { role: data.roleName as UserRole } },
+        { session }
+      );
+
+      success = result.modifiedCount;
+      failed = data.userIds.length - success;
 
       await session.commitTransaction();
 
@@ -506,14 +501,14 @@ export class RBACService {
         metadata: {
           roleName: data.roleName,
           success,
-          failed: data.userIds.length - success,
+          failed,
         },
       });
 
       logger.info(`Bulk role assignment completed`, {
         roleName: data.roleName,
         success,
-        failed: data.userIds.length - success,
+        failed,
         assignedBy,
       });
     } catch (error) {
@@ -525,8 +520,8 @@ export class RBACService {
 
     return {
       success,
-      failed: data.userIds.length - success,
-      errors,
+      failed,
+      errors: [],
     };
   }
 

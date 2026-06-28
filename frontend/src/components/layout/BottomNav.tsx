@@ -102,7 +102,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     return (
       <>
         {/* Main Bottom Nav */}
-        <nav className={cn(
+        <nav aria-label="Main navigation" className={cn(
           'fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-40',
           'flex items-center justify-around py-2 px-2 safe-area-bottom',
           className
@@ -112,7 +112,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               key={item.href}
               to={item.href}
               className={cn(
-                'flex flex-col items-center justify-center py-1 px-3 rounded-xl transition-all',
+                'flex flex-col items-center justify-center py-2 px-3 rounded-xl transition-all',
                 isActive(item.href)
                   ? 'text-nilin-coral'
                   : 'text-gray-400 hover:text-gray-600'
@@ -127,7 +127,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           <button
             onClick={() => setShowMore(!showMore)}
             className={cn(
-              'flex flex-col items-center justify-center py-1 px-3 rounded-xl transition-all',
+              'flex flex-col items-center justify-center py-2 px-3 rounded-xl transition-all',
               showMore ? 'text-nilin-coral' : 'text-gray-400 hover:text-gray-600'
             )}
           >
@@ -184,7 +184,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
   // Simple nav for provider/admin
   return (
-    <nav className={cn(
+    <nav aria-label="Main navigation" className={cn(
       'fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-40',
       'flex items-center justify-around py-2 px-2 safe-area-bottom',
       className
@@ -194,7 +194,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           key={item.href}
           to={item.href}
           className={cn(
-            'flex flex-col items-center justify-center py-1 px-3 rounded-xl transition-all',
+            'flex flex-col items-center justify-center py-2 px-3 rounded-xl transition-all',
             isActive(item.href)
               ? 'text-nilin-coral'
               : 'text-gray-400 hover:text-gray-600'

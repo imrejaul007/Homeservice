@@ -11,6 +11,7 @@ import type {
 const api = axios.create({
   baseURL: `${API_BASE_URL}/categories`,
   timeout: 10000,
+  withCredentials: true,
 });
 
 export const categoryApi = {
@@ -66,11 +67,29 @@ export const categoryApi = {
     return response.data;
   },
 
-  // FIX: Get service categories for frontend portfolio dropdown
+  // Get service categories for frontend portfolio dropdown
   // Returns simple category names for UI dropdown
   getServiceCategories: async (): Promise<{ categories: string[] }> => {
     const response = await api.get('/service-categories/list');
     return response.data?.data || { categories: [] };
+  },
+
+  getCategoryPageStats: async (
+    slug: string,
+    signal?: AbortSignal
+  ): Promise<{
+    success: boolean;
+    data: {
+      slug: string;
+      name: string;
+      services: number;
+      providers: number;
+      bookings: string;
+      bookingCount: number;
+    };
+  }> => {
+    const response = await api.get(`/${slug}/page-stats`, { signal });
+    return response.data;
   },
 };
 

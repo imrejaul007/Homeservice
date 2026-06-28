@@ -8,6 +8,4 @@ export { default as PaymentMethodsPage } from './PaymentMethodsPage';
 export { default as NotificationsPage } from './NotificationsPage';
 export { default as ReviewsPage } from './ReviewsPage';
 export { default as NotificationSettingsPage } from './NotificationSettings';
-export { default as HelpCenter } from './HelpCenter';
-export { default as ContactUs } from './ContactUs';
 export { default as MessagesPage } from './MessagesPage';

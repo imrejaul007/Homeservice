@@ -27,28 +27,6 @@ interface ServiceProfitabilityProps {
   hidePeriodSelector?: boolean;
 }
 
-// Default mock data for fallback when API is unavailable
-const DEFAULT_SERVICE_DATA: ServiceData[] = [
-  { serviceId: '1', serviceName: 'Deep Cleaning', revenue: 4500, costs: 900, profit: 3600, margin: 80, bookings: 45, avgPrice: 100, trend: 12, category: 'Cleaning' },
-  { serviceId: '2', serviceName: 'AC Repair', revenue: 6200, costs: 1860, profit: 4340, margin: 70, bookings: 31, avgPrice: 200, trend: 8, category: 'HVAC' },
-  { serviceId: '3', serviceName: 'Plumbing', revenue: 3800, costs: 1140, profit: 2660, margin: 70, bookings: 38, avgPrice: 100, trend: -5, category: 'Plumbing' },
-  { serviceId: '4', serviceName: 'Electrical', revenue: 2900, costs: 870, profit: 2030, margin: 70, bookings: 29, avgPrice: 100, trend: 15, category: 'Electrical' },
-  { serviceId: '5', serviceName: 'Handyman', revenue: 2200, costs: 880, profit: 1320, margin: 60, bookings: 44, avgPrice: 50, trend: 3, category: 'General' },
-  { serviceId: '6', serviceName: 'Pest Control', revenue: 1800, costs: 720, profit: 1080, margin: 60, bookings: 18, avgPrice: 100, trend: 20, category: 'Pest Control' },
-  { serviceId: '7', serviceName: 'Gardening', revenue: 1500, costs: 750, profit: 750, margin: 50, bookings: 25, avgPrice: 60, trend: -8, category: 'Outdoor' },
-  { serviceId: '8', serviceName: 'Window Cleaning', revenue: 1200, costs: 600, profit: 600, margin: 50, bookings: 30, avgPrice: 40, trend: 5, category: 'Cleaning' },
-];
-
-const DEFAULT_PROFITABILITY_STATS: ProfitabilityStats = {
-  totalRevenue: 24100,
-  totalCosts: 7220,
-  totalProfit: 16880,
-  averageMargin: 70,
-  topPerformer: 'Deep Cleaning',
-  worstPerformer: 'Gardening',
-  potentialSavings: 1200,
-};
-
 export const ServiceProfitability: React.FC<ServiceProfitabilityProps> = ({
   providerId,
   timeRange = '30d',

@@ -2,6 +2,37 @@ import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
 import multer from 'multer';
 import path from 'path';
+import { sanitizeFilename } from './security';
+
+// Multer fileFilter for validating uploads
+const createFileFilter = (allowedTypes: string[]) => {
+  return (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type not allowed. Allowed types: ${allowedTypes.join(', ')}`));
+    }
+  };
+};
+
+// Multer storage for Cloudinary with secure filename handling
+const createCloudinaryStorage = (folder: string = 'general') => {
+  return new CloudinaryStorage({
+    cloudinary,
+    params: {
+      folder: `nilin/${folder}`,
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+      transformation: [{ width: 500, height: 500, crop: 'limit' }],
+      resource_type: 'auto',
+      // SECURITY FIX: Generate unique public_id with sanitized filename to prevent path traversal
+      public_id: (_req: any, file: Express.Multer.File) => {
+        const uniqueId = Date.now() + Math.random().toString(36).substring(7);
+        const sanitizedName = sanitizeFilename(file.originalname.replace(/\.[^.]+$/, ''));
+        return `${sanitizedName}_${uniqueId}`;
+      },
+    } as any,
+  });
+};
 
 // Configure Cloudinary
 cloudinary.config({
@@ -93,17 +124,27 @@ export const uploadBufferToCloudinary = async (
   });
 };
 
-// Upload file to Cloudinary
+// Upload file to Cloudinary with secure filename handling
 export const uploadFileToCloudinary = async (
   filePath: string,
   folder: string = 'general'
 ): Promise<{ publicId: string; url: string; secureUrl: string }> => {
-  const result = await cloudinary.uploader.upload(filePath, {
+  // SECURITY FIX: Validate file path to prevent path traversal
+  const pathModule = require('path');
+  const resolvedPath = pathModule.resolve(filePath);
+  const basename = pathModule.basename(resolvedPath);
+
+  // Generate unique public_id with timestamp to prevent collisions
+  const uniqueId = Date.now() + Math.random().toString(36).substring(7);
+  const publicId = `nilin_${folder}_${uniqueId}`;
+
+  const result = await cloudinary.uploader.upload(resolvedPath, {
     folder: `nilin/${folder}`,
     resource_type: 'image',
     format: 'webp',
     quality: 'auto',
     fetch_format: 'auto',
+    public_id: publicId,
   });
 
   return {
@@ -128,19 +169,7 @@ export const extractPublicIdFromUrl = (url: string): string | null => {
   return withoutVersion.replace(/\.[^.]+$/, '') || null;
 };
 
-// Multer storage for Cloudinary
-export const createCloudinaryStorage = (folder: string = 'general') => {
-  return new CloudinaryStorage({
-    cloudinary,
-    params: {
-      folder: `nilin/${folder}`,
-      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
-      transformation: [{ width: 500, height: 500, crop: 'limit' }],
-      resource_type: 'auto',
-    } as any,
-  });
-};
-
+// Re-export the secure createCloudinaryStorage
 // Export multer upload middleware for specific folders
 export const uploadToCloudinary = (folder: string = 'general') => {
   const storage = createCloudinaryStorage(folder);
@@ -246,5 +275,43 @@ const multerChatUpload = multer({
 });
 
 export const uploadChatFiles = multerChatUpload.array('files', 5);
+
+// Service image upload configuration (up to 5 images)
+const multerServiceUpload = multer({
+  storage: createCloudinaryStorage('services'),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB per image
+    files: 5, // Max 5 images per service
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and WebP images are allowed'));
+    }
+  },
+});
+
+export const uploadServiceImages = multerServiceUpload.array('images', 5);
+
+// Direct service image upload (without serviceId, for initial upload before service creation)
+const multerServiceDirectUpload = multer({
+  storage: createCloudinaryStorage('services'),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB per image
+    files: 5, // Max 5 images
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and WebP images are allowed'));
+    }
+  },
+});
+
+export const uploadServiceDirect = multerServiceDirectUpload.array('images', 5);
 
 export default cloudinary;

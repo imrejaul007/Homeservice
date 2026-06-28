@@ -257,10 +257,27 @@ const ToastProvider: React.FC<ToastProviderProps> = ({
   defaultDuration = 5000,
 }) => {
   const [toasts, setToasts] = useState<ToastData[]>([]);
+  const recentToastKeysRef = React.useRef<Map<string, number>>(new Map());
+  const TOAST_COOLDOWN = 5000;
 
   const addToast = useCallback((toast: Omit<ToastData, 'id'>) => {
+    const dedupeKey = `${toast.variant ?? 'default'}:${toast.title}:${toast.description ?? ''}`;
+    const now = Date.now();
+    const lastShown = recentToastKeysRef.current.get(dedupeKey);
+    if (lastShown !== undefined && now - lastShown < TOAST_COOLDOWN) {
+      return;
+    }
+    recentToastKeysRef.current.set(dedupeKey, now);
+
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    setToasts((prev) => [...prev, { ...toast, id, duration: toast.duration ?? defaultDuration }]);
+    setToasts((prev) => {
+      // Cap visible toasts at 3: dismiss oldest first
+      const next = [...prev, { ...toast, id, duration: toast.duration ?? defaultDuration }];
+      if (next.length > 3) {
+        return next.slice(next.length - 3);
+      }
+      return next;
+    });
   }, [defaultDuration]);
 
   const removeToast = useCallback((id: string) => {

@@ -39,7 +39,7 @@ const SavedAddressSelector: React.FC<SavedAddressSelectorProps> = ({
           onSelect(response.data.addresses[0]);
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       const message = err.response?.data?.message || 'Failed to load saved addresses';
       setError(message);
       console.error('[SavedAddressSelector] Error fetching addresses:', err);

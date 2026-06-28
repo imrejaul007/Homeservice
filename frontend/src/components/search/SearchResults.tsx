@@ -61,13 +61,14 @@ const SearchResults: React.FC<SearchResultsProps> = ({
     const service = services.find(s => s._id === serviceId);
     if (!service?.providerId) return;
 
+    // Store the previous value for rollback
+    const previousValue = favorites[serviceId];
+    const isCurrentlyFavorited = previousValue;
+
     // Set loading state for this specific service
     setFavoritesLoading(prev => ({ ...prev, [serviceId]: true }));
 
     try {
-      // Check current favorite status
-      const isCurrentlyFavorited = favorites[serviceId];
-
       // Optimistic update
       setFavorites(prev => ({ ...prev, [serviceId]: !isCurrentlyFavorited }));
 
@@ -80,9 +81,9 @@ const SearchResults: React.FC<SearchResultsProps> = ({
         toast.success('Added to favorites');
       }
     } catch (error) {
-      // Revert on error
-      setFavorites(prev => ({ ...prev, [serviceId]: favorites[serviceId] }));
-      toast.error('Failed to update favorites');
+      // Rollback on error - use the stored previous value
+      setFavorites(prev => ({ ...prev, [serviceId]: previousValue }));
+      toast.error('Failed to update favorites. Please try again.');
       console.error('Favorite toggle error:', error);
     } finally {
       setFavoritesLoading(prev => ({ ...prev, [serviceId]: false }));
@@ -101,7 +102,6 @@ const SearchResults: React.FC<SearchResultsProps> = ({
         toast.success('Shared successfully');
       }).catch((error) => {
         // User cancelled share, no need to show error
-        console.log('Share cancelled');
       });
     } else {
       // Fallback to copying to clipboard

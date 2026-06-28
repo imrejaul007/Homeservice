@@ -137,6 +137,7 @@ export interface BookingSummary {
 
 export interface LoyaltyData {
   points: number;
+  coins?: number;
   tier: 'bronze' | 'silver' | 'gold' | 'platinum';
   totalEarned: number;
   totalSpent: number;
@@ -385,32 +386,44 @@ class CustomerDashboardApiService {
   }
 
   /**
-   * Get recommended professionals with optional location for distance calculation
-   * Returns both recommended pros and recently used providers
+   * Get recommended professionals with optional location for distance calculation.
+   * Returns recommended pros, recently used providers, and hasMore for pagination.
+   * Accepts an external AbortSignal so callers (e.g. modal) can cancel on unmount.
    */
   async getRecommendedPros(
     limit: number = 10,
-    location?: { latitude: number; longitude: number }
-  ): Promise<{ pros: RecommendedPro[]; recentlyUsed: RecommendedPro[] }> {
+    location?: { latitude: number; longitude: number },
+    options?: { signal?: AbortSignal; category?: string; offset?: number }
+  ): Promise<{ pros: RecommendedPro[]; recentlyUsed: RecommendedPro[]; hasMore: boolean }> {
     try {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), 10000);
+      // Use caller's signal if provided, otherwise fall back to a 10s internal timeout
+      const internalController = options?.signal ? null : new AbortController();
+      const timeoutId = internalController
+        ? setTimeout(() => internalController.abort(), 10000)
+        : null;
+      const signal = options?.signal ?? internalController!.signal;
 
-      // Build params with optional location for geospatial queries
       const params: Record<string, any> = { limit };
       if (location?.latitude !== undefined && location?.longitude !== undefined) {
         params.latitude = location.latitude;
         params.longitude = location.longitude;
       }
+      if (options?.category) {
+        params.category = options.category;
+      }
+      if (options?.offset) {
+        params.offset = options.offset;
+      }
 
-      const response = await api.get('/dashboard/recommended-pros', { params, signal: controller.signal });
+      const response = await api.get('/dashboard/recommended-pros', { params, signal });
+      if (timeoutId) clearTimeout(timeoutId);
+
       const data = response.data.data;
 
-      // Backend returns: { pros: [], recentlyUsed: [], pagination: {} }
-      // Extract and return both arrays
       return {
         pros: Array.isArray(data?.pros) ? data.pros : [],
         recentlyUsed: Array.isArray(data?.recentlyUsed) ? data.recentlyUsed : [],
+        hasMore: data?.pagination?.hasMore === true,
       };
     } catch (error) {
       const err = error as AxiosError;

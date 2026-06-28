@@ -48,6 +48,9 @@ import {
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
 
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
+
 interface VerificationItem {
   id: string;
   providerId: string;
@@ -179,137 +182,15 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
         setStats(response.data.data.stats);
         setIsDemoMode(false);
       } else {
-        // API returned but not in expected format - show error instead of mock data
+        // API returned but not in expected format - show error
         console.error('Unexpected API response format:', response.data);
         setError('Unable to load verification data. Please try again.');
         setIsDemoMode(false);
-        return;
       }
     } catch (err) {
       console.error('Error fetching verification queue:', err);
-      // Only use demo data as a last resort fallback
-      setError('Using demo data - API unavailable');
-      setIsDemoMode(true);
-      setItems([
-        {
-          id: 'vq-001',
-          providerId: 'prov-001',
-          providerName: 'Ahmed Al-Rashid',
-          providerEmail: 'ahmed.rashid@email.com',
-          providerPhone: '+971501234567',
-          submittedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-          status: 'pending',
-          priority: 'urgent',
-          documents: [
-            { id: 'doc-1', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-001.jpg', status: 'pending' },
-            { id: 'doc-2', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-001.jpg', status: 'pending' },
-            { id: 'doc-3', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-001.jpg', status: 'pending' },
-            { id: 'doc-4', type: 'address_proof', label: 'Utility Bill', url: '/docs/utility-001.pdf', status: 'pending' }
-          ],
-          profile: {
-            avatar: '/avatars/prov-001.jpg',
-            bio: 'Professional electrician with 10+ years experience.',
-            services: ['Electrical', 'AC Repair'],
-            experience: '10 years',
-            certifications: ['Dubai Electricity Authority Licensed'],
-            rating: 4.8,
-            completedJobs: 245
-          },
-          verificationData: {
-            identityVerified: false,
-            addressVerified: false,
-            phoneVerified: true,
-            emailVerified: true,
-            backgroundChecked: false
-          },
-          notes: [],
-          reviewHistory: []
-        },
-        {
-          id: 'vq-002',
-          providerId: 'prov-002',
-          providerName: 'Fatima Hassan',
-          providerEmail: 'fatima.h@email.com',
-          providerPhone: '+971552345678',
-          submittedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-          status: 'in_review',
-          priority: 'high',
-          documents: [
-            { id: 'doc-5', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-002.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 2).toISOString() },
-            { id: 'doc-6', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-002.jpg', status: 'pending' },
-            { id: 'doc-7', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-002.jpg', status: 'pending' }
-          ],
-          profile: {
-            avatar: '/avatars/prov-002.jpg',
-            bio: 'Experienced beauty therapist.',
-            services: ['Hair Styling', 'Makeup', 'Nail Care'],
-            experience: '7 years',
-            certifications: ['DHCC Certified'],
-            rating: 4.9,
-            completedJobs: 312
-          },
-          verificationData: {
-            identityVerified: true,
-            addressVerified: false,
-            phoneVerified: true,
-            emailVerified: true,
-            backgroundChecked: true
-          },
-          notes: [],
-          reviewHistory: []
-        },
-        {
-          id: 'vq-003',
-          providerId: 'prov-003',
-          providerName: 'Omar Malik',
-          providerEmail: 'omar.malik@email.com',
-          providerPhone: '+971504567890',
-          submittedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-          status: 'pending',
-          priority: 'normal',
-          documents: [
-            { id: 'doc-10', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-003.jpg', status: 'pending' },
-            { id: 'doc-11', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-003.jpg', status: 'pending' },
-            { id: 'doc-12', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-003.jpg', status: 'pending' },
-            { id: 'doc-13', type: 'address_proof', label: 'Tenancy Contract', url: '/docs/tenancy-003.pdf', status: 'pending' }
-          ],
-          profile: {
-            avatar: '/avatars/prov-003.jpg',
-            bio: 'Expert plumber for all your needs.',
-            services: ['Plumbing', 'Drain Cleaning'],
-            experience: '8 years',
-            certifications: ['Dubai Municipality Licensed'],
-            rating: 4.6,
-            completedJobs: 189
-          },
-          verificationData: {
-            identityVerified: false,
-            addressVerified: false,
-            phoneVerified: true,
-            emailVerified: true,
-            backgroundChecked: false
-          },
-          notes: [],
-          reviewHistory: []
-        }
-      ]);
-      setStats({
-        total: 3,
-        pending: 2,
-        inReview: 1,
-        approved: 0,
-        rejected: 0,
-        needsInfo: 0,
-        avgReviewTime: 2.5,
-        completionRate: 85,
-        urgentCount: 1,
-        byDocument: [
-          { type: 'ID Document', count: 3, pending: 1, verified: 2 },
-          { type: 'Selfie', count: 3, pending: 2, verified: 1 },
-          { type: 'Address Proof', count: 2, pending: 2, verified: 0 }
-        ],
-        recentDecisions: []
-      });
+      setError('Failed to load verification queue. Please check your connection and try again.');
+      setIsDemoMode(false);
     } finally {
       setLoading(false);
     }
@@ -326,6 +207,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   };
 
   const handleStatusUpdate = async (itemId: string, newStatus: VerificationItem['status']) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(itemId);
     try {
       await api.patch(`/admin/verification-queue/${itemId}`, { status: newStatus });
@@ -340,6 +222,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   };
 
   const handleAssignToMe = async (itemId: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(itemId);
     const currentUserEmail = user?.email || 'unknown@user.com';
     try {
@@ -361,6 +244,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   };
 
   const handleBulkAction = async (action: 'approve' | 'reject' | 'request_info') => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     if (selectedItems.length === 0) return;
 
     setActionLoading('bulk');
@@ -384,6 +268,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   };
 
   const handleDecision = async () => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     if (!selectedItem || !decisionReason.trim()) return;
 
     setActionLoading('decision');
@@ -430,6 +315,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   };
 
   const handleDocumentVerify = async (itemId: string, docId: string, status: 'verified' | 'rejected', reason?: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(docId);
     try {
       await api.patch(`/admin/verification-queue/${itemId}/documents/${docId}`, { status, rejectionReason: reason });
@@ -727,11 +613,6 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      {isDemoMode && (
-                        <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">
-                          Demo
-                        </span>
-                      )}
                       <span className="font-medium text-nilin-charcoal">{item.providerName}</span>
                       {item.priority !== 'normal' && (
                         <span className={cn(

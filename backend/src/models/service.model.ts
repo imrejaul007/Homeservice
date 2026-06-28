@@ -9,6 +9,7 @@ export interface IService extends Document {
   
   // Basic Service Information
   name: string;
+  slug: string;
   category: string;
   subcategory?: string;
   description: string;
@@ -36,6 +37,7 @@ export interface IService extends Document {
     label: string;
   }>; // Alternative duration options for booking
   images: string[];
+  thumbnail?: string;
   tags: string[]; // For enhanced search
   requirements?: string[];
   includedItems?: string[];
@@ -126,6 +128,9 @@ export interface IService extends Document {
   // Service Management Status
   status: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
 
+  // Reason provided by admin when service is rejected
+  rejectionReason?: string | null;
+
   // Audit Fields
   createdAt: Date;
   updatedAt: Date;
@@ -166,6 +171,12 @@ const serviceSchema = new Schema<IService>(
       trim: true,
       maxlength: [100, 'Service name cannot exceed 100 characters'],
       index: 'text' // For text search
+    },
+    slug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      index: true
     },
     category: {
       type: String,
@@ -252,6 +263,7 @@ const serviceSchema = new Schema<IService>(
     },
 
     images: [String],
+    thumbnail: String,
     tags: [{
       type: String,
       trim: true,
@@ -433,6 +445,12 @@ const serviceSchema = new Schema<IService>(
       index: true
     },
 
+    // Reason provided by admin when service is rejected
+    rejectionReason: {
+      type: String,
+      default: null
+    },
+
     // Audit Fields
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -453,6 +471,18 @@ const serviceSchema = new Schema<IService>(
 // ===================================
 // INDEXES FOR SEARCH OPTIMIZATION
 // ===================================
+
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+serviceSchema.index({ isDeleted: 1, status: 1 }); // Soft deleted services by status
+serviceSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted services sorted by date
+serviceSchema.index({ isDeleted: 1, isActive: 1 }); // Active services query
+serviceSchema.index({ providerId: 1, isDeleted: 1 }); // Provider's services including deleted
+
+// FIX 12: Add missing compound indexes for common query patterns
+// Provider's services with status filter
+serviceSchema.index({ providerId: 1, status: 1 });
+// Category browsing with active filter
+serviceSchema.index({ category: 1, isActive: 1 });
 
 // Geospatial index for location-based search
 serviceSchema.index({ 'location.coordinates': '2dsphere' });
@@ -742,15 +772,29 @@ serviceSchema.pre('save', function(next) {
 // Add static method for updateBookingCount
 serviceSchema.statics.updateBookingCount = async function(serviceId: string | mongoose.Types.ObjectId): Promise<void> {
   const Booking = mongoose.model('Booking');
+  const Review = mongoose.model('Review');
 
-  const bookingCount = await Booking.countDocuments({
-    serviceId: serviceId,
-    status: { $in: ['completed', 'confirmed'] }
-  });
+  // FIX: Use Promise.all to avoid N+1 queries
+  const [bookingCount, ratingData] = await Promise.all([
+    Booking.countDocuments({
+      serviceId: serviceId,
+      status: { $in: ['completed', 'confirmed'] }
+    }),
+    Review.aggregate([
+      { $match: { serviceId: new mongoose.Types.ObjectId(serviceId as string) } },
+      { $group: { _id: null, avgRating: { $avg: '$rating' }, totalReviews: { $sum: 1 } } }
+    ])
+  ]);
+
+  const rating = ratingData[0] || { avgRating: 0, totalReviews: 0 };
 
   await this.updateOne(
     { _id: serviceId },
-    { $set: { 'searchMetadata.bookingCount': bookingCount } }
+    { $set: {
+      'searchMetadata.bookingCount': bookingCount,
+      'rating.average': Math.round(rating.avgRating * 10) / 10,
+      'rating.count': rating.totalReviews
+    }}
   );
 
   const service = await this.findById(serviceId);

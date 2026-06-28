@@ -12,8 +12,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { Calendar, TrendingUp, Loader, Sun, Snowflake, Leaf, CloudRain } from 'lucide-react';
+import { Calendar, TrendingUp, Loader, Sun, Snowflake, Leaf, CloudRain, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface SeasonalPatternsProps {
   customerId?: string;
@@ -54,34 +55,18 @@ interface PatternStats {
   forecast: number;
 }
 
-const MOCK_MONTHLY_DATA: MonthlyData[] = [
-  { month: 'Jan', monthNum: 1, bookings: 8, spending: 1640, avgValue: 205, season: 'winter' },
-  { month: 'Feb', monthNum: 2, bookings: 6, spending: 1200, avgValue: 200, season: 'winter' },
-  { month: 'Mar', monthNum: 3, bookings: 10, spending: 2100, avgValue: 210, season: 'spring' },
-  { month: 'Apr', monthNum: 4, bookings: 12, spending: 2520, avgValue: 210, season: 'spring' },
-  { month: 'May', monthNum: 5, bookings: 15, spending: 3300, avgValue: 220, season: 'spring' },
-  { month: 'Jun', monthNum: 6, bookings: 18, spending: 4140, avgValue: 230, season: 'summer' },
-  { month: 'Jul', monthNum: 7, bookings: 22, spending: 5060, avgValue: 230, season: 'summer' },
-  { month: 'Aug', monthNum: 8, bookings: 20, spending: 4600, avgValue: 230, season: 'summer' },
-  { month: 'Sep', monthNum: 9, bookings: 14, spending: 3080, avgValue: 220, season: 'fall' },
-  { month: 'Oct', monthNum: 10, bookings: 12, spending: 2640, avgValue: 220, season: 'fall' },
-  { month: 'Nov', monthNum: 11, bookings: 16, spending: 3520, avgValue: 220, season: 'fall' },
-  { month: 'Dec', monthNum: 12, bookings: 24, spending: 5520, avgValue: 230, season: 'winter' },
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
 ];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const MOCK_HOLIDAY_DATA: HolidayData[] = [
-  { name: 'Eid Al Adha', date: 'Jun', bookings: 28, spending: 6440 },
-  { name: 'National Day', date: 'Dec', bookings: 32, spending: 7360 },
-  { name: 'Ramadan', date: 'Mar', bookings: 18, spending: 3960 },
-  { name: 'Summer Break', date: 'Jul', bookings: 35, spending: 8050 },
-];
-
-const MOCK_STATS: PatternStats = {
-  peakMonth: 'December',
-  slowMonth: 'February',
-  seasonalityIndex: 1.4,
-  trendDirection: 'up',
-  forecast: 285,
+const EMPTY_STATS: PatternStats = {
+  peakMonth: 'N/A',
+  slowMonth: 'N/A',
+  seasonalityIndex: 0,
+  trendDirection: 'stable',
+  forecast: 0,
 };
 
 const getSeasonConfig = (season: string) => {
@@ -96,24 +81,72 @@ const getSeasonConfig = (season: string) => {
 
 export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
   customerId,
-  year = new Date().getFullYear(),
+  year: initialYear = new Date().getFullYear(),
 }) => {
   const [loading, setLoading] = useState(true);
-  const [monthlyData, setMonthlyData] = useState<MonthlyData[]>(MOCK_MONTHLY_DATA);
-  const [holidayData] = useState<HolidayData[]>(MOCK_HOLIDAY_DATA);
-  const [stats, setStats] = useState<PatternStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [monthlyData, setMonthlyData] = useState<MonthlyData[]>([]);
+  const [holidayData, setHolidayData] = useState<HolidayData[]>([]);
+  const [stats, setStats] = useState<PatternStats>(EMPTY_STATS);
+  const [selectedYear, setSelectedYear] = useState(initialYear);
   const [viewMode, setViewMode] = useState<'area' | 'bar'>('area');
   const [showSeasonal, setShowSeasonal] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setMonthlyData(MOCK_MONTHLY_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getCustomerSeasonalPatterns(selectedYear, customerId);
+        const mappedMonthly = (apiData.monthlyData || []).map((entry) => ({
+          month: MONTH_SHORT[entry.month - 1] || `M${entry.month}`,
+          monthNum: entry.month,
+          bookings: entry.bookings,
+          spending: entry.spending,
+          avgValue: entry.averageValue,
+          season: entry.season,
+        }));
+
+        const peakMonthName = apiData.peakMonth?.month
+          ? MONTH_NAMES[apiData.peakMonth.month - 1]
+          : 'N/A';
+        const slowMonthName = apiData.slowMonth?.month
+          ? MONTH_NAMES[apiData.slowMonth.month - 1]
+          : 'N/A';
+        const peakEntry = mappedMonthly.find((entry) => entry.monthNum === apiData.peakMonth?.month);
+        const avgSpending = mappedMonthly.reduce((sum, entry) => sum + entry.avgValue, 0)
+          / Math.max(mappedMonthly.filter((entry) => entry.bookings > 0).length, 1);
+
+        setMonthlyData(mappedMonthly);
+        setHolidayData(
+          peakEntry
+            ? [{
+                name: 'Peak Month',
+                date: peakEntry.month,
+                bookings: peakEntry.bookings,
+                spending: peakEntry.spending,
+              }]
+            : [],
+        );
+        setStats({
+          peakMonth: peakMonthName,
+          slowMonth: slowMonthName,
+          seasonalityIndex: apiData.seasonalityIndex || 0,
+          trendDirection: apiData.seasonalityIndex > 1 ? 'up' : 'stable',
+          forecast: Math.round(avgSpending),
+        });
+      } catch (err) {
+        setMonthlyData([]);
+        setHolidayData([]);
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load seasonal patterns');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
-  }, [customerId, year]);
+  }, [customerId, selectedYear]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-AE', {
@@ -146,7 +179,20 @@ export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
   };
 
   const seasonalData = aggregateSeasonalData();
-  const avgBookings = monthlyData.reduce((sum, d) => sum + d.bookings, 0) / monthlyData.length;
+  const avgBookings = monthlyData.length > 0
+    ? monthlyData.reduce((sum, d) => sum + d.bookings, 0) / monthlyData.length
+    : 0;
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="flex items-center gap-2 text-red-600">
+          <AlertCircle className="h-5 w-5" />
+          <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -158,7 +204,7 @@ export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
             <div className={`w-6 h-6 rounded-full ${seasonConfig.bgColor} flex items-center justify-center`} style={{ color: seasonConfig.color }}>
               {seasonConfig.icon}
             </div>
-            <p className="font-semibold text-gray-900">{item.month} {year}</p>
+            <p className="font-semibold text-gray-900">{item.month} {selectedYear}</p>
           </div>
           <div className="space-y-1 text-sm">
             <p className="text-blue-600">
@@ -224,8 +270,8 @@ export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
           </div>
 
           <select
-            value={year}
-            onChange={(e) => {}}
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(Number(e.target.value))}
             className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value={2024}>2024</option>
@@ -261,6 +307,10 @@ export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
       {loading ? (
         <div className="h-72 flex items-center justify-center">
           <Loader className="h-8 w-8 text-purple-600 animate-spin" />
+        </div>
+      ) : monthlyData.length === 0 ? (
+        <div className="h-72 flex items-center justify-center text-gray-500">
+          No seasonal booking data for {selectedYear}.
         </div>
       ) : showSeasonal ? (
         <>
@@ -362,6 +412,7 @@ export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
           </div>
 
           {/* Holiday Impact */}
+          {holidayData.length > 0 && (
           <div className="mt-6 pt-6 border-t border-gray-200">
             <h4 className="text-sm font-medium text-gray-900 mb-4 flex items-center gap-2">
               <Calendar className="h-4 w-4 text-gray-400" />
@@ -384,6 +435,7 @@ export const SeasonalPatterns: React.FC<SeasonalPatternsProps> = ({
               })}
             </div>
           </div>
+          )}
         </>
       )}
 

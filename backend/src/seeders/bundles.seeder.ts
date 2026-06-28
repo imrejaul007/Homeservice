@@ -86,8 +86,10 @@ async function seedBundles() {
     const services = await Service.find({});
     const serviceMap = new Map(services.map(svc => [svc.name, svc]));
 
-    // Create bundles
-    const createdBundles = [];
+    // Prepare all bundle data first
+    const CHUNK_SIZE = 50;
+    const bundlesToCreate = [];
+    let skippedBundles = 0;
 
     for (const bundleData of SAMPLE_BUNDLES) {
       // Build services array for the bundle
@@ -115,6 +117,7 @@ async function seedBundles() {
       // Skip if no services found for this bundle
       if (bundleServices.length === 0) {
         logger.warn(`Bundles seeder: No services found for bundle: ${bundleData.name}. Skipping.`);
+        skippedBundles++;
         continue;
       }
 
@@ -132,7 +135,7 @@ async function seedBundles() {
       const tenant = await Tenant.findOne({ slug: 'default', isActive: true });
       const tenantId = tenant?._id || new mongoose.Types.ObjectId();
 
-      const bundle = await Bundle.create({
+      bundlesToCreate.push({
         name: bundleData.name,
         tenantId: tenantId,
         description: bundleData.description,
@@ -158,12 +161,18 @@ async function seedBundles() {
         providerCount: 1,
         createdBy: createdBy,
       });
-
-      createdBundles.push(bundle);
     }
 
-    logger.info(`Bundles seeder: Created ${createdBundles.length} bundles`);
-    return { success: true, count: createdBundles.length };
+    // Bulk insert bundles in chunks
+    let createdCount = 0;
+    for (let i = 0; i < bundlesToCreate.length; i += CHUNK_SIZE) {
+      const chunk = bundlesToCreate.slice(i, i + CHUNK_SIZE);
+      const inserted = await Bundle.insertMany(chunk, { ordered: false });
+      createdCount += inserted.length;
+    }
+
+    logger.info(`Bundles seeder: Created ${createdCount} bundles (skipped ${skippedBundles})`);
+    return { success: true, count: createdCount };
   } catch (error: any) {
     logger.error('Bundles seeder error:', error);
     throw error;

@@ -165,21 +165,31 @@ router.get(
       status = 'active',
       type,
       limit = '20',
-      skip = '0'
+      skip = '0',
+      page = '1'
     } = req.query;
+
+    const limitNum = Math.min(parseInt(limit as string, 10) || 20, 100);
+    const pageNum = Math.max(parseInt(page as string, 10) || 1, 1);
+    const skipNum = parseInt(skip as string, 10) || (pageNum - 1) * limitNum;
 
     const result = await chatService.getChatRooms(userId, {
       status: status as 'active' | 'archived' | 'blocked',
       type: type as 'direct' | 'booking' | 'support' | undefined,
-      limit: parseInt(limit as string, 10),
-      skip: parseInt(skip as string, 10)
+      limit: limitNum,
+      skip: skipNum
     });
+
+    const totalPages = Math.ceil(result.total / limitNum);
 
     res.json({
       success: true,
       data: {
         rooms: result.rooms,
-        total: result.total
+        total: result.total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages
       }
     });
   })
@@ -469,6 +479,7 @@ router.post(
 /**
  * PATCH /api/chat/messages/read
  * Mark messages as read (by message IDs)
+ * Uses direct Message lookup to find chat room — avoids the O(n²) all-rooms scan.
  */
 router.patch(
   '/messages/read',
@@ -488,27 +499,18 @@ router.patch(
       }
     }
 
-    // Get the message to find the chat room
-    const { rooms } = await chatService.getChatRooms(userId, { limit: 100 });
+    // Directly find which chat room this message belongs to — O(1) indexed lookup
+    const Message = (await import('../models/message.model')).default;
+    const firstMessage = await Message.findOne({
+      _id: new mongoose.Types.ObjectId(messageIds[0]),
+      isDeleted: false,
+    }).select('chatRoomId').lean();
 
-    // Find the chat room containing this message
-    let chatRoomId: string | null = null;
-    for (const room of rooms) {
-      const roomId = room._id.toString();
-      const { messages } = await chatService.getMessages(
-        roomId,
-        userId,
-        { limit: 1000 }
-      );
-      if (messages.some(m => m._id.toString() === messageIds[0])) {
-        chatRoomId = roomId;
-        break;
-      }
-    }
-
-    if (!chatRoomId) {
+    if (!firstMessage) {
       throw new ApiError(404, 'Message not found');
     }
+
+    const chatRoomId = firstMessage.chatRoomId.toString();
 
     const count = await chatService.markMessagesAsRead(chatRoomId, userId, messageIds);
 
@@ -644,9 +646,8 @@ router.get(
       throw new ApiError(400, 'Search query exceeds maximum length of 200 characters');
     }
 
-    // Verify user has access to this chat room
-    const { rooms } = await chatService.getChatRooms(userId, { limit: 1 });
-    const hasAccess = rooms.some(r => r._id.toString() === id);
+    // Verify user has access to this chat room — direct indexed participant check
+    const hasAccess = await chatService.isUserParticipant(id, userId);
 
     if (!hasAccess) {
       throw new ApiError(403, 'Access denied to this chat room');

@@ -18,6 +18,7 @@ import {
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
+import ProviderHubNav from '../../components/provider/ProviderHubNav';
 import { useAuthStore } from '../../stores/authStore';
 import {
   providerAnalyticsApi,
@@ -843,12 +844,26 @@ const ProviderAnalyticsPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <ProviderHubNav />
+
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isLoading ? 'Loading analytics data' : error ? `Error: ${error}` : ''}
+      </div>
 
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="mb-8">
             <button
@@ -861,8 +876,8 @@ const ProviderAnalyticsPage: React.FC = () => {
             </button>
 
             <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">Analytics</h1>
+              <div className="min-w-0">
+                <h1 className="text-2xl sm:text-3xl font-serif text-nilin-charcoal mb-2">Analytics</h1>
                 <p className="text-base text-nilin-warmGray font-sans">
                   Track your performance and insights
                 </p>
@@ -885,7 +900,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                     <select
                       value={cityFilter}
                       onChange={(e) => handleCityFilterChange(e.target.value)}
-                      className="px-3 py-2 rounded-nilin text-sm border border-nilin-border bg-white text-nilin-charcoal"
+                      className="min-h-11 px-3 py-2 rounded-nilin text-sm border border-nilin-border bg-white text-nilin-charcoal w-full sm:w-auto"
                       aria-label="Filter by emirate"
                     >
                       {UAE_EMIRATES.map((emirate) => (
@@ -901,7 +916,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                           type="button"
                           onClick={() => handleRevenueModeChange(mode)}
                           className={cn(
-                            'px-3 py-1.5 rounded-nilin text-sm font-medium transition-colors capitalize',
+                            'min-h-11 px-3 py-1.5 rounded-nilin text-sm font-medium transition-colors capitalize',
                             revenueMode === mode
                               ? 'bg-nilin-coral text-white'
                               : 'text-nilin-warmGray hover:text-nilin-charcoal',
@@ -926,7 +941,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                       type="button"
                       onClick={() => setComparePeriod((prev) => !prev)}
                       className={cn(
-                        'px-3 py-2 rounded-nilin text-sm font-medium border transition-colors',
+                        'min-h-11 px-3 py-2 rounded-nilin text-sm font-medium border transition-colors',
                         comparePeriod
                           ? 'bg-nilin-coral text-white border-nilin-coral'
                           : 'bg-white text-nilin-charcoal border-nilin-border hover:bg-nilin-muted',
@@ -945,7 +960,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                     onClick={() => handleTimeRangeChange(range)}
                     disabled={isLoading && activeTab === 'summary'}
                     className={cn(
-                      'px-4 py-2 rounded-nilin text-sm font-medium transition-colors',
+                      'min-h-11 px-4 py-2 rounded-nilin text-sm font-medium transition-colors',
                       timeRange === range
                         ? 'bg-nilin-coral text-white'
                         : 'text-nilin-warmGray hover:text-nilin-charcoal',
@@ -964,7 +979,7 @@ const ProviderAnalyticsPage: React.FC = () => {
           </div>
 
           <div className="bg-white rounded-nilin-lg shadow-nilin border border-nilin-blush/50 mb-6 overflow-hidden">
-            <div className="flex gap-0 overflow-x-auto">
+            <div role="tablist" aria-label="Analytics sections" className="flex gap-0 overflow-x-auto">
               {visibleTabs.map((tab) => {
                 const TabIcon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -972,9 +987,13 @@ const ProviderAnalyticsPage: React.FC = () => {
                   <button
                     key={tab.id}
                     type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    aria-controls={`${tab.id}-panel`}
+                    tabIndex={isActive ? 0 : -1}
                     onClick={() => handleTabChange(tab.id)}
                     className={cn(
-                      'flex items-center gap-2 px-4 py-3.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors min-h-[48px]',
+                      'flex items-center gap-2 px-4 py-3.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors min-h-[48px] focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2',
                       isActive
                         ? 'border-nilin-coral text-nilin-coral bg-nilin-cream/50'
                         : 'border-transparent text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-cream/30',
@@ -1002,16 +1021,22 @@ const ProviderAnalyticsPage: React.FC = () => {
             </div>
           )}
 
-          {isLoading && activeTab === 'summary' ? (
-            <div className="flex flex-col items-center justify-center py-24 gap-3">
-              <Loader2 className="h-10 w-10 animate-spin text-nilin-coral" />
-              <p className="text-nilin-warmGray font-sans">Loading analytics…</p>
-            </div>
-          ) : (
-            renderActiveTab()
-          )}
+          <div
+            role="tabpanel"
+            id={`${activeTab}-panel`}
+            aria-labelledby={`${activeTab}-tab`}
+          >
+            {isLoading && activeTab === 'summary' ? (
+              <div className="flex flex-col items-center justify-center py-24 gap-3" role="status" aria-label="Loading analytics data">
+                <Loader2 className="h-10 w-10 animate-spin text-nilin-coral" aria-hidden="true" />
+                <p className="text-nilin-warmGray font-sans">Loading analytics…</p>
+              </div>
+            ) : (
+              renderActiveTab()
+            )}
+          </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
     </div>

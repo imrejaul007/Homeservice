@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   Search,
   Package,
@@ -24,6 +24,7 @@ import {
   ArrowRight,
   Wifi,
   WifiOff,
+  Navigation,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import NavigationHeader from '../../components/layout/NavigationHeader';
@@ -32,6 +33,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import ExperienceSubmissionForm from '../../components/experience/ExperienceSubmissionForm';
 import CancellationModal from '../../components/booking/CancellationModal';
 import RescheduleModal from '../../components/booking/RescheduleModal';
+import TrackingMap from '../../components/tracking/TrackingMap';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 import { experienceApi } from '../../services/experienceApi';
@@ -63,6 +65,7 @@ interface LocationInfo {
 
 interface TrackingData {
   bookingNumber: string;
+  emailVerificationRequired?: boolean;
   status: string;
   statusHistory: Array<{
     status: string;
@@ -93,6 +96,20 @@ interface TrackingData {
   createdAt: string;
   _id?: string;
   guestEmail?: string;
+  // Real-time tracking data
+  providerLocation?: {
+    lat: number;
+    lng: number;
+    heading?: number;
+    speed?: number;
+    timestamp?: string;
+  };
+  destinationLocation?: {
+    lat: number;
+    lng: number;
+  };
+  etaMinutes?: number;
+  distanceRemaining?: number;
 }
 
 const statusLabels: Record<string, string> = {
@@ -122,12 +139,18 @@ const progressSteps = ['pending', 'confirmed', 'in_progress', 'completed'];
 const TrackBookingPage: React.FC = () => {
   const { bookingNumber: urlBookingNumber } = useParams<{ bookingNumber: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user, isAuthenticated } = useAuthStore();
 
   const [bookingNumber, setBookingNumber] = useState(urlBookingNumber || '');
   const [tracking, setTracking] = useState<TrackingData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [needsEmailVerification, setNeedsEmailVerification] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [emailInputError, setEmailInputError] = useState<string | null>(null);
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [showExperienceForm, setShowExperienceForm] = useState(false);
   const [hasExperience, setHasExperience] = useState(false);
   const [checkingExperience, setCheckingExperience] = useState(false);
@@ -149,11 +172,37 @@ const TrackBookingPage: React.FC = () => {
   // Ref to track booking ID for socket cleanup
   const bookingIdRef = useRef<string | undefined>();
 
+  const bookingInternalId = isAuthenticated ? tracking?._id : undefined;
+
+  const sanitizeTrackingForViewer = (data: TrackingData): TrackingData => {
+    if (isAuthenticated) return data;
+    const { _id, customerId, providerId, ...publicData } = data;
+    return publicData;
+  };
+
+  const resolveVerificationEmail = (explicitEmail?: string): string | undefined => {
+    const candidate =
+      explicitEmail?.trim().toLowerCase() ||
+      verificationEmail.trim().toLowerCase() ||
+      user?.email?.trim().toLowerCase() ||
+      searchParams.get('email')?.trim().toLowerCase() ||
+      '';
+    return candidate || undefined;
+  };
+
+  useEffect(() => {
+    const urlEmail = searchParams.get('email');
+    if (urlEmail) {
+      setEmailInput(urlEmail);
+      setVerificationEmail(urlEmail.trim().toLowerCase());
+    }
+  }, [searchParams]);
+
   useEffect(() => {
     if (urlBookingNumber) {
       fetchTracking(urlBookingNumber);
     }
-  }, [urlBookingNumber]);
+  }, [urlBookingNumber, isAuthenticated, user?.email]);
 
   // Countdown timer for upcoming bookings
   useEffect(() => {
@@ -188,12 +237,14 @@ const TrackBookingPage: React.FC = () => {
 
   // Setup Socket.IO connection for real-time updates
   useEffect(() => {
-    if (!tracking?._id || !isAuthenticated) return;
+    if (!bookingInternalId || !isAuthenticated) return;
 
     let unsubscribeConfirmed: (() => void) | undefined;
     let unsubscribeCancelled: (() => void) | undefined;
     let unsubscribeRescheduled: (() => void) | undefined;
     let unsubscribeCompleted: (() => void) | undefined;
+    let unsubscribeStatusChanged: (() => void) | undefined;
+    let unsubscribeLocation: (() => void) | undefined;
 
     const setupSocketListeners = async () => {
       try {
@@ -204,26 +255,32 @@ const TrackBookingPage: React.FC = () => {
         setIsConnected(true);
 
         // Join the booking room to receive updates
-        socketService.joinBookingRoom(tracking._id!);
-        bookingIdRef.current = tracking._id;
+        socketService.joinBookingRoom(bookingInternalId);
+        bookingIdRef.current = bookingInternalId;
+
+        unsubscribeStatusChanged = socketService.on('booking:status_changed', (event: BookingEvent) => {
+          if (event.bookingId === bookingInternalId) {
+            handleStatusUpdate(event);
+          }
+        });
 
         // Listen for specific status events
         unsubscribeConfirmed = socketService.on('booking:confirmed', (event: BookingEvent) => {
-          if (event.bookingId === tracking._id) {
+          if (event.bookingId === bookingInternalId) {
             handleStatusUpdate(event);
             toast.success('Your booking has been confirmed!');
           }
         });
 
         unsubscribeCancelled = socketService.on('booking:cancelled', (event: BookingEvent) => {
-          if (event.bookingId === tracking._id) {
+          if (event.bookingId === bookingInternalId) {
             handleStatusUpdate(event);
             toast.error('Your booking has been cancelled.');
           }
         });
 
         unsubscribeRescheduled = socketService.on('booking:rescheduled', (event: BookingEvent) => {
-          if (event.bookingId === tracking._id) {
+          if (event.bookingId === bookingInternalId) {
             handleStatusUpdate(event);
             toast.success('Your booking has been rescheduled.');
             // Refresh tracking data
@@ -232,9 +289,30 @@ const TrackBookingPage: React.FC = () => {
         });
 
         unsubscribeCompleted = socketService.on('booking:completed', (event: BookingEvent) => {
-          if (event.bookingId === tracking._id) {
+          if (event.bookingId === bookingInternalId) {
             handleStatusUpdate(event);
             toast.success('Your booking has been completed!');
+          }
+        });
+
+        // Listen for provider location updates during in_progress
+        unsubscribeLocation = socketService.on('booking:provider_location', (event: {
+          bookingId: string;
+          latitude: number;
+          longitude: number;
+          etaMinutes?: number;
+          distanceRemaining?: number;
+        }) => {
+          if (event.bookingId === bookingInternalId) {
+            setTracking((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                providerLocation: { lat: event.latitude, lng: event.longitude },
+                etaMinutes: event.etaMinutes,
+                distanceRemaining: event.distanceRemaining,
+              };
+            });
           }
         });
       } catch (error) {
@@ -250,12 +328,14 @@ const TrackBookingPage: React.FC = () => {
       if (bookingIdRef.current) {
         socketService.leaveBookingRoom(bookingIdRef.current);
       }
+      unsubscribeStatusChanged?.();
       unsubscribeConfirmed?.();
       unsubscribeCancelled?.();
       unsubscribeRescheduled?.();
       unsubscribeCompleted?.();
+      unsubscribeLocation?.();
     };
-  }, [tracking?._id, isAuthenticated]);
+  }, [bookingInternalId, isAuthenticated, tracking?.bookingNumber]);
 
   // Handle real-time status updates
   const handleStatusUpdate = (event: BookingEvent) => {
@@ -281,16 +361,16 @@ const TrackBookingPage: React.FC = () => {
 
   // Check if user has submitted experience for completed booking
   useEffect(() => {
-    if (tracking?.status === 'completed' && tracking?._id && isAuthenticated) {
+    if (tracking?.status === 'completed' && bookingInternalId && isAuthenticated) {
       checkExperienceSubmission();
     }
-  }, [tracking?.status, tracking?._id, isAuthenticated]);
+  }, [tracking?.status, bookingInternalId, isAuthenticated]);
 
   const checkExperienceSubmission = async () => {
-    if (!tracking?._id) return;
+    if (!bookingInternalId) return;
     setCheckingExperience(true);
     try {
-      const response = await experienceApi.checkExperienceExists(tracking._id);
+      const response = await experienceApi.checkExperienceExists(bookingInternalId);
       setHasExperience(response.data?.exists || false);
     } catch {
       setHasExperience(false);
@@ -299,15 +379,29 @@ const TrackBookingPage: React.FC = () => {
     }
   };
 
-  const fetchTracking = async (number: string) => {
+  const fetchTracking = async (number: string, emailOverride?: string) => {
     try {
       setLoading(true);
       setError(null);
-      setTracking(null);
+      if (!emailOverride) {
+        setTracking(null);
+      }
 
-      const response = await api.get(`/bookings/track/${number}`);
+      const emailParam = resolveVerificationEmail(emailOverride);
+      const response = await api.get(`/bookings/track/${encodeURIComponent(number)}`, {
+        params: emailParam ? { email: emailParam } : undefined,
+      });
+
       if (response.data.success) {
-        setTracking(response.data.data);
+        const data = sanitizeTrackingForViewer(response.data.data as TrackingData);
+        const requiresEmail = Boolean(data.emailVerificationRequired);
+
+        setNeedsEmailVerification(requiresEmail);
+        setTracking(data);
+
+        if (emailParam && !requiresEmail) {
+          setVerificationEmail(emailParam);
+        }
       } else {
         setError(response.data.message || 'Booking not found');
       }
@@ -316,7 +410,7 @@ const TrackBookingPage: React.FC = () => {
       if (error.response?.status === 404) {
         setError('Booking not found. Please verify your booking number.');
       } else if (error.response?.status === 403) {
-        setError('You do not have permission to view this booking.');
+        setError(error.response?.data?.message || 'Email does not match this booking. Please try again.');
       } else if (!error.response) {
         setError('Network error. Please check your connection and try again.');
       } else {
@@ -324,16 +418,37 @@ const TrackBookingPage: React.FC = () => {
       }
     } finally {
       setLoading(false);
+      setVerifyingEmail(false);
     }
+  };
+
+  const handleEmailVerificationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = emailInput.trim().toLowerCase();
+
+    if (!trimmed) {
+      setEmailInputError('Please enter the email used for this booking');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setEmailInputError('Please enter a valid email address');
+      return;
+    }
+
+    setEmailInputError(null);
+    setVerifyingEmail(true);
+    setVerificationEmail(trimmed);
+    await fetchTracking(bookingNumber || urlBookingNumber || '', trimmed);
   };
 
   // Handle cancellation
   const handleCancelBooking = async (reason: string) => {
-    if (!tracking?._id) return;
+    if (!bookingInternalId) return;
 
     setCancelling(true);
     try {
-      const response = await api.patch(`/bookings/${tracking._id}/cancel`, { reason });
+      const response = await api.patch(`/bookings/${bookingInternalId}/cancel`, { reason });
 
       if (response.data.success) {
         toast.success('Booking cancelled successfully');
@@ -353,11 +468,11 @@ const TrackBookingPage: React.FC = () => {
 
   // Handle reschedule
   const handleRescheduleBooking = async (newDate: string, newTime: string, reason: string) => {
-    if (!tracking?._id) return;
+    if (!bookingInternalId) return;
 
     setRescheduling(true);
     try {
-      const response = await api.patch(`/bookings/${tracking._id}/reschedule`, {
+      const response = await api.patch(`/bookings/${bookingInternalId}/reschedule`, {
         scheduledDate: newDate,
         scheduledTime: newTime,
         reason,
@@ -666,6 +781,52 @@ const TrackBookingPage: React.FC = () => {
           {/* Tracking Results */}
           {tracking && !loading && (
             <div className="bg-white/80 backdrop-blur-md rounded-nilin-lg shadow-nilin-lg border border-nilin-border/50 overflow-hidden animate-nilin-in">
+              {needsEmailVerification && (
+                <div className="p-6 border-b border-nilin-border bg-nilin-cream/60">
+                  <h2 className="text-lg font-semibold text-nilin-charcoal mb-2">Verify your email</h2>
+                  <p className="text-sm text-nilin-warmGray mb-4">
+                    Enter the email address used when booking <span className="font-mono font-medium">{tracking.bookingNumber}</span> to view full tracking details.
+                  </p>
+                  <form onSubmit={handleEmailVerificationSubmit} className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1">
+                      <label htmlFor="track-verify-email" className="sr-only">Booking email</label>
+                      <input
+                        id="track-verify-email"
+                        type="email"
+                        value={emailInput}
+                        onChange={(e) => {
+                          setEmailInput(e.target.value);
+                          setEmailInputError(null);
+                        }}
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                        aria-invalid={!!emailInputError}
+                        aria-describedby={emailInputError ? 'track-email-error' : undefined}
+                        className={`w-full px-4 py-3 bg-white border rounded-nilin text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/50 focus:border-nilin-coral ${
+                          emailInputError ? 'border-red-400' : 'border-nilin-border'
+                        }`}
+                      />
+                      {emailInputError && (
+                        <p id="track-email-error" className="mt-1 text-sm text-red-500" role="alert">{emailInputError}</p>
+                      )}
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={verifyingEmail || !emailInput.trim()}
+                      className="px-6 py-3 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose transition-colors disabled:opacity-50"
+                    >
+                      {verifyingEmail ? (
+                        <Loader2 className="w-5 h-5 animate-spin mx-auto" aria-hidden="true" />
+                      ) : (
+                        'Verify email'
+                      )}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {!needsEmailVerification && (
+              <>
               {/* Status Banner */}
               <div className="bg-gradient-to-r from-nilin-cream to-nilin-blush/30 px-6 py-5 border-b border-nilin-border/50">
                 <div className="flex items-center justify-between flex-wrap gap-4">
@@ -832,6 +993,25 @@ const TrackBookingPage: React.FC = () => {
                       </a>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Tracking Map - Show during in_progress status */}
+              {tracking.status === 'in_progress' && (
+                <div className="p-6 border-b border-nilin-border">
+                  <h2 className="text-xs font-semibold text-nilin-warmGray uppercase tracking-wide mb-4 flex items-center gap-2">
+                    <Navigation className="w-4 h-4 text-nilin-coral" aria-hidden="true" />
+                    Live Tracking
+                  </h2>
+                  <TrackingMap
+                    providerLocation={tracking.providerLocation}
+                    destinationLocation={tracking.destinationLocation}
+                    providerName={tracking.provider?.name}
+                    destinationAddress={tracking.location ? formatAddress(tracking.location) : undefined}
+                    etaMinutes={tracking.etaMinutes}
+                    distanceRemaining={tracking.distanceRemaining}
+                    height="280px"
+                  />
                 </div>
               )}
 
@@ -1047,7 +1227,7 @@ const TrackBookingPage: React.FC = () => {
 
               {/* Booking Chat */}
               {isAuthenticated &&
-                tracking._id &&
+                bookingInternalId &&
                 tracking.providerId &&
                 (user?._id || user?.id || tracking.customerId) &&
                 !['cancelled', 'rejected'].includes(tracking.status) && (
@@ -1063,7 +1243,7 @@ const TrackBookingPage: React.FC = () => {
                       onClick={() =>
                         navigate('/customer/messages', {
                           state: {
-                            bookingId: tracking._id,
+                            bookingId: bookingInternalId,
                             providerId: tracking.providerId,
                           },
                         })
@@ -1074,7 +1254,7 @@ const TrackBookingPage: React.FC = () => {
                     </button>
                   </div>
                   <BookingChat
-                    bookingId={tracking._id}
+                    bookingId={bookingInternalId}
                     customerId={(user?._id || user?.id || tracking.customerId)!}
                     customerName={
                       `${user?.firstName || tracking.customerInfo?.firstName || ''} ${user?.lastName || tracking.customerInfo?.lastName || ''}`.trim() || 'Customer'
@@ -1177,9 +1357,9 @@ const TrackBookingPage: React.FC = () => {
                 )}
 
                 {/* View Full Details for logged-in users */}
-                {isAuthenticated && tracking._id && (
+                {isAuthenticated && bookingInternalId && (
                   <Link
-                    to={`/customer/bookings/${tracking._id}`}
+                    to={`/customer/bookings/${bookingInternalId}`}
                     aria-label={`View full details for booking ${tracking.bookingNumber}`}
                     className="block w-full text-center px-6 py-3 bg-nilin-charcoal text-white rounded-nilin font-semibold hover:bg-nilin-warmGray transition-all duration-200 hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   >
@@ -1198,7 +1378,7 @@ const TrackBookingPage: React.FC = () => {
                       to="/login"
                       state={{
                         returnTo: '/customer/bookings',
-                        email: tracking.guestEmail || tracking.customerInfo?.email,
+                        email: verificationEmail || emailInput || tracking.guestEmail || tracking.customerInfo?.email,
                         message:
                           'Use the email from your booking confirmation to link this booking to your account.',
                       }}
@@ -1209,6 +1389,14 @@ const TrackBookingPage: React.FC = () => {
                   </div>
                 )}
               </div>
+              </>
+              )}
+
+              {needsEmailVerification && (
+                <div className="p-6 text-center text-nilin-warmGray text-sm">
+                  Status: <span className="font-medium text-nilin-charcoal">{statusLabels[tracking.status] || tracking.status}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1228,11 +1416,11 @@ const TrackBookingPage: React.FC = () => {
       <Footer />
 
       {/* Experience Submission Modal */}
-      {showExperienceForm && tracking?._id && (
+      {showExperienceForm && bookingInternalId && (
         <ExperienceSubmissionForm
           isOpen={showExperienceForm}
           onClose={() => setShowExperienceForm(false)}
-          bookingId={tracking._id}
+          bookingId={bookingInternalId}
           onSuccess={() => {
             setShowExperienceForm(false);
             setHasExperience(true);

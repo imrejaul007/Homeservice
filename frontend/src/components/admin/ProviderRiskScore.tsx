@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle,
@@ -41,6 +42,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface ProviderRiskData {
   id: string;
@@ -135,139 +139,11 @@ export const ProviderRiskScore: React.FC<ProviderRiskScoreProps> = ({
         setProviders(response.data.data.providers || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setProviders([
-          {
-            id: 'risk-001',
-            providerId: 'prov-001',
-            providerName: 'Ahmed Hassan',
-            email: 'ahmed@email.com',
-            riskScore: 85,
-            riskLevel: 'critical',
-            status: 'under_review',
-            factors: { compliance: 45, financial: 92, behavioral: 78, quality: 65, historical: 88 },
-            flags: [
-              { type: 'payout_discrepancy', description: 'Multiple payout amount mismatches detected', severity: 'high', detectedAt: new Date().toISOString() },
-              { type: 'review_pattern', description: 'Suspicious review timing patterns', severity: 'medium', detectedAt: new Date(Date.now() - 86400000).toISOString() }
-            ],
-            trend: [
-              { date: '2024-01', score: 45 },
-              { date: '2024-02', score: 52 },
-              { date: '2024-03', score: 68 },
-              { date: '2024-04', score: 85 }
-            ],
-            totalBookings: 234,
-            totalRevenue: 45600,
-            avgRating: 3.2,
-            avgResponseTime: 45,
-            completionRate: 72,
-            disputeRate: 8.5,
-            lastActive: new Date().toISOString(),
-            joinedAt: '2022-06-15'
-          },
-          {
-            id: 'risk-002',
-            providerId: 'prov-002',
-            providerName: 'Sarah Khan',
-            email: 'sarah@email.com',
-            riskScore: 25,
-            riskLevel: 'low',
-            status: 'active',
-            factors: { compliance: 92, financial: 85, behavioral: 88, quality: 95, historical: 90 },
-            flags: [],
-            trend: [
-              { date: '2024-01', score: 28 },
-              { date: '2024-02', score: 25 },
-              { date: '2024-03', score: 24 },
-              { date: '2024-04', score: 25 }
-            ],
-            totalBookings: 567,
-            totalRevenue: 123500,
-            avgRating: 4.8,
-            avgResponseTime: 12,
-            completionRate: 98,
-            disputeRate: 0.5,
-            lastActive: new Date().toISOString(),
-            joinedAt: '2021-03-20'
-          },
-          {
-            id: 'risk-003',
-            providerId: 'prov-003',
-            providerName: 'Mohammed Ali',
-            email: 'mohammed@email.com',
-            riskScore: 62,
-            riskLevel: 'high',
-            status: 'active',
-            factors: { compliance: 70, financial: 55, behavioral: 68, quality: 75, historical: 60 },
-            flags: [
-              { type: 'late_payouts', description: 'Multiple late payout submissions', severity: 'medium', detectedAt: new Date(Date.now() - 172800000).toISOString() }
-            ],
-            trend: [
-              { date: '2024-01', score: 45 },
-              { date: '2024-02', score: 52 },
-              { date: '2024-03', score: 58 },
-              { date: '2024-04', score: 62 }
-            ],
-            totalBookings: 189,
-            totalRevenue: 34500,
-            avgRating: 4.2,
-            avgResponseTime: 28,
-            completionRate: 85,
-            disputeRate: 3.2,
-            lastActive: new Date(Date.now() - 3600000).toISOString(),
-            joinedAt: '2022-11-08'
-          },
-          {
-            id: 'risk-004',
-            providerId: 'prov-004',
-            providerName: 'Fatima Omar',
-            email: 'fatima@email.com',
-            riskScore: 42,
-            riskLevel: 'medium',
-            status: 'active',
-            factors: { compliance: 80, financial: 75, behavioral: 65, quality: 70, historical: 72 },
-            flags: [],
-            trend: [
-              { date: '2024-01', score: 48 },
-              { date: '2024-02', score: 45 },
-              { date: '2024-03', score: 44 },
-              { date: '2024-04', score: 42 }
-            ],
-            totalBookings: 312,
-            totalRevenue: 67800,
-            avgRating: 4.5,
-            avgResponseTime: 18,
-            completionRate: 92,
-            disputeRate: 1.2,
-            lastActive: new Date(Date.now() - 7200000).toISOString(),
-            joinedAt: '2021-09-12'
-          }
-        ]);
-        setStats({
-          totalProviders: 1247,
-          highRisk: 45,
-          criticalRisk: 12,
-          underReview: 23,
-          avgRiskScore: 32,
-          riskDistribution: [
-            { level: 'Low', count: 890, color: '#10B981' },
-            { level: 'Medium', count: 245, color: '#F59E0B' },
-            { level: 'High', count: 85, color: '#F97316' },
-            { level: 'Critical', count: 27, color: '#EF4444' }
-          ],
-          topRiskFactors: [
-            { factor: 'Payout Discrepancies', count: 34, trend: 12 },
-            { factor: 'Review Manipulation', count: 28, trend: 5 },
-            { factor: 'Quality Issues', count: 45, trend: -3 },
-            { factor: 'Compliance Violations', count: 23, trend: 8 },
-            { factor: 'Service Disputes', count: 56, trend: -5 }
-          ],
-          recentEscalations: 8
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching risk data:', err);
-      setError('Failed to load risk data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -284,9 +160,12 @@ export const ProviderRiskScore: React.FC<ProviderRiskScoreProps> = ({
   };
 
   const handleSuspend = async (providerId: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(providerId);
     try {
-      await api.patch(`/admin/providers/${providerId}/status`, { status: 'suspended' });
+      await api.post(`/admin/providers/${providerId}/suspend`, {
+        reason: 'Suspended from provider risk score dashboard',
+      });
       setProviders(prev => prev.map(p =>
         p.providerId === providerId ? { ...p, status: 'suspended' as const } : p
       ));
@@ -585,8 +464,9 @@ export const ProviderRiskScore: React.FC<ProviderRiskScoreProps> = ({
                     {(provider.status === 'active' && provider.riskLevel !== 'low') && (
                       <button
                         onClick={() => handleSuspend(provider.providerId)}
-                        disabled={actionLoading === provider.providerId}
-                        className="px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors text-sm font-medium"
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === provider.providerId}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Suspend provider'}
+                        className="px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Ban className="w-4 h-4" />
                       </button>

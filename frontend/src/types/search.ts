@@ -15,6 +15,9 @@ export interface SearchFilters {
   page?: number;
   limit?: number;
   providerId?: string;
+  tier?: 'elite' | 'premium' | 'standard';
+  verified?: boolean;
+  isActive?: boolean;
 }
 
 export interface Service {
@@ -99,14 +102,20 @@ export interface SearchResponse {
       limit: number;
       total: number;
       pages: number;
+      hasNext?: boolean;
+      hasPrev?: boolean;
+      nextPage?: number | null;
+      prevPage?: number | null;
     };
     filters?: {
-      categories: Array<{ name: string; count: number }>;
-      priceRange: { min: number; max: number };
+      categories: Array<{ name: string; count: number; avgPrice?: number; avgRating?: number }>;
+      priceRange: { min: number; max: number; average?: number };
       averageRating: number;
       locationInfo?: {
         city: string;
         radius: number;
+        lat?: number;
+        lng?: number;
       };
     };
     searchMetadata?: {
@@ -114,6 +123,9 @@ export interface SearchResponse {
       resultCount: number;
       searchTime: number;
       suggestions?: string[];
+      didYouMean?: string[];
+      correctionApplied?: boolean;
+      expandedQueries?: string[];
     };
   };
   message?: string;
@@ -128,6 +140,7 @@ export interface SuggestionsResponse {
   success: boolean;
   data: {
     suggestions: Suggestion[];
+    source?: 'meilisearch' | 'mongodb';
   };
 }
 
@@ -142,7 +155,8 @@ export interface TrendingSearchesResponse {
   success: boolean;
   data: {
     trendingSearches: TrendingSearch[];
-    timeframe: string;
+    services?: Service[]; // Backend also returns services array
+    timeframe?: string;
   };
 }
 

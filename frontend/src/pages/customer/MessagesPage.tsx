@@ -1,12 +1,12 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, MessageCircle } from 'lucide-react';
+import { showDeduplicatedError } from '../../utils/toastUtils';
+import { ArrowLeft, MessageCircle, PlusCircle } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import { ChatWindow } from '../../components/chat';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi, ChatRoom } from '../../services/chatApi';
-import { toast } from 'react-hot-toast';
 
 // =============================================================================
 // Messages Page (customer + provider)
@@ -28,6 +28,7 @@ export default function MessagesPage() {
   const [isMinimized, setIsMinimized] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState<ChatRoom | null>(null);
   const [isOpeningChat, setIsOpeningChat] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const userId = user?._id || user?.id || '';
   const isProvider = user?.role === 'provider';
@@ -79,8 +80,7 @@ export default function MessagesPage() {
           setIsMinimized(false);
         }
       } catch (error) {
-        console.error('Failed to open chat from deep link:', error);
-        toast.error('Could not open conversation. Try again from Messages.');
+        showDeduplicatedError('Could not open conversation', 'Try again from Messages.');
       } finally {
         setIsOpeningChat(false);
         navigate(location.pathname, { replace: true, state: null });
@@ -132,18 +132,42 @@ export default function MessagesPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
+      {/* Skip to main content link */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-[#E8B4A8] focus:text-white focus:rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+      >
+        Skip to main content
+      </a>
+
       <NavigationHeader />
 
-      <main className="flex-1 container mx-auto px-4 py-6 max-w-4xl flex flex-col min-h-0">
+      <main id="main-content" className="flex-1 container mx-auto px-4 py-6 max-w-4xl flex flex-col min-h-0" role="main">
+        {/* Status announcer for screen readers */}
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {statusMessage}
+        </div>
+
         <div className="flex items-center gap-4 mb-6 shrink-0">
           <button
             onClick={() => navigate(dashboardPath)}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            className="w-11 h-11 flex items-center justify-center hover:bg-gray-100 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E8B4A8] focus-visible:ring-offset-2"
             aria-label="Back to dashboard"
           >
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </button>
-          <h1 className="text-2xl font-bold text-gray-900">Messages</h1>
+          <h1 className="text-2xl font-bold text-gray-900 flex-1">Messages</h1>
+          {/* New Conversation button — customers use the dedicated new-message page */}
+          {!isProvider && (
+            <button
+              onClick={() => navigate('/customer/messages/new')}
+              className="flex items-center gap-2 px-4 py-2 bg-[#E8B4A8] text-white rounded-xl text-sm font-medium hover:bg-[#D4948A] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E8B4A8] focus-visible:ring-offset-2"
+              aria-label="Start a new conversation"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span className="hidden sm:inline">New Chat</span>
+            </button>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden relative flex flex-col">

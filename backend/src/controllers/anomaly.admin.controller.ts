@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { anomalyDetectionService, AnomalyType, AnomalySeverity, AnomalyStatus, EntityType } from '../services/anomalyDetection.service';
+import SupportTicket, { ISupportTicket, TicketPriority, TicketCategory } from '../models/supportTicket.model';
 
 /**
  * Get All Anomalies (Paginated with Filters)
@@ -485,13 +487,38 @@ export const generateReport = asyncHandler(async (req: Request, res: Response) =
  * Get Related Tickets for Anomaly
  * GET /api/admin/anomalies/:id/tickets
  */
-export const getRelatedTickets = asyncHandler(async (_req: Request, res: Response) => {
-  // Placeholder - support ticket integration would go here
-  // For now, return empty array
+export const getRelatedTickets = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!id) {
+    throw new ApiError(400, 'Anomaly ID is required');
+  }
+
+  // Query tickets that were created for this anomaly
+  const tickets = await SupportTicket.find({
+    'metadata.anomalyId': id
+  })
+    .select('ticketNumber subject priority status category createdAt resolvedAt assignedTo assignedToName')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const transformedTickets = tickets.map(ticket => ({
+    _id: ticket._id,
+    ticketNumber: ticket.ticketNumber,
+    subject: ticket.subject,
+    priority: ticket.priority,
+    status: ticket.status,
+    category: ticket.category,
+    createdAt: ticket.createdAt,
+    resolvedAt: ticket.resolvedAt,
+    assignedTo: ticket.assignedTo,
+    assignedToName: ticket.assignedToName
+  }));
+
   return res.json({
     success: true,
-    data: [],
-    message: 'Support ticket integration not yet implemented',
+    data: transformedTickets,
+    count: transformedTickets.length
   });
 });
 
@@ -507,21 +534,111 @@ export const createTicket = asyncHandler(async (req: Request, res: Response) => 
     throw new ApiError(400, 'Anomaly ID is required');
   }
 
-  if (!message) {
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
     throw new ApiError(400, 'Message is required');
   }
 
-  // Placeholder - support ticket integration would go here
-  // For now, return a placeholder ticket
-  const ticketId = `ANOMALY-${id.substring(0, 8)}-${Date.now()}`;
+  // Fetch the anomaly to get details for the ticket
+  const anomaly = await anomalyDetectionService.getAnomalyById(id);
+
+  if (!anomaly) {
+    throw new ApiError(404, 'Anomaly not found');
+  }
+
+  // Get admin ID from request (set by auth middleware)
+  const adminId = (req as any).user?.id;
+  const adminName = (req as any).user?.name || 'Admin';
+
+  // Map anomaly severity to ticket priority
+  const severityToPriority: Record<string, TicketPriority> = {
+    critical: 'urgent',
+    high: 'high',
+    medium: 'medium',
+    low: 'low'
+  };
+
+  // Map anomaly type to ticket category
+  const typeToCategory: Record<string, TicketCategory> = {
+    fraud: 'billing',
+    booking: 'service',
+    payment: 'billing',
+    behavior: 'other'
+  };
+
+  const priority = severityToPriority[anomaly.severity] || 'medium';
+  const category = typeToCategory[anomaly.type] || 'other';
+
+  // Build ticket subject and description
+  const subject = `[${anomaly.severity.toUpperCase()}] Anomaly Detected: ${anomaly.type} - ${anomaly.entityType}`;
+
+  const description = `
+## Anomaly Investigation Request
+
+**Anomaly ID:** ${id}
+**Type:** ${anomaly.type}
+**Severity:** ${anomaly.severity}
+**Entity Type:** ${anomaly.entityType}
+**Entity ID:** ${anomaly.entityId}
+**Detected At:** ${new Date(anomaly.detectedAt).toISOString()}
+**Confidence:** ${(anomaly.confidence * 100).toFixed(1)}%
+
+### Description
+${anomaly.description}
+
+### Admin Note
+${message.trim()}
+
+---
+This ticket was automatically created from the anomaly detection system.
+`.trim();
+
+  // Create the support ticket
+  // For system-created tickets, use a placeholder user ID
+  const systemUserId = new mongoose.Types.ObjectId();
+
+  const ticket = new SupportTicket({
+    userId: systemUserId,
+    userType: 'admin',
+    userName: adminName || 'Anomaly System',
+    userEmail: undefined,
+    category,
+    priority,
+    status: 'open',
+    subject,
+    description,
+    metadata: {
+      anomalyId: id,
+      anomalyType: anomaly.type,
+      anomalySeverity: anomaly.severity,
+      entityType: anomaly.entityType,
+      entityId: anomaly.entityId,
+      confidence: anomaly.confidence,
+      createdBy: adminId || 'system'
+    },
+    messages: [{
+      sender: systemUserId,
+      senderType: 'admin',
+      senderName: adminName || 'Anomaly System',
+      message: message.trim(),
+      createdAt: new Date()
+    }]
+  });
+
+  await ticket.save();
+
+  // Update the anomaly to track the created ticket
+  await anomalyDetectionService.updateAnomalyStatus(id, 'investigating', adminId, `Ticket created: ${ticket.ticketNumber}`);
 
   return res.status(201).json({
     success: true,
     data: {
-      ticketId,
+      ticketId: ticket._id.toString(),
+      ticketNumber: ticket.ticketNumber,
       anomalyId: id,
-      message: 'Support ticket integration not yet fully implemented',
+      priority,
+      category,
+      status: ticket.status
     },
-    message: 'Ticket creation placeholder - integration pending',
+    message: `Support ticket ${ticket.ticketNumber} created successfully`,
   });
 });

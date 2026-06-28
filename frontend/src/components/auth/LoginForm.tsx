@@ -6,6 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { Requires2FAError } from '../../services/AuthService';
 import { Eye, EyeOff, Mail, Lock, AlertCircle, CheckCircle, ArrowRight, Shield, Star } from 'lucide-react';
 import NavigationHeader from '../layout/NavigationHeader';
 import Footer from '../layout/Footer';
@@ -67,18 +68,26 @@ const LoginFormComponent: React.FC = () => {
   // Track if we've already synced autofill (prevent infinite loops)
   const autofillSynced = useRef(false);
 
-  const { login, isLoading, errors, clearErrors, user } = useAuthStore();
+  const { login, verifyLogin2FA, isLoading, errors, clearErrors, user } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const locationState = location.state as LocationState | null;
   const stateMessage = locationState?.message;
   const prefilledEmail = locationState?.email || searchParams.get('email') || '';
-  const returnTo =
+  const rawReturnTo =
     searchParams.get('returnTo') ||
     locationState?.returnTo ||
     locationState?.from ||
     '/customer/bookings';
+  const returnTo =
+    rawReturnTo?.startsWith('/') && !rawReturnTo.startsWith('//')
+      ? rawReturnTo
+      : '/customer/bookings';
+
+  const [twoFactorStep, setTwoFactorStep] = useState(false);
+  const [preAuthToken, setPreAuthToken] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState('');
 
   const {
     register,
@@ -177,7 +186,6 @@ const LoginFormComponent: React.FC = () => {
   }, [user, isSubmitted, isLoading, returnTo, navigate]);
 
   const onSubmit = async (data: LoginForm) => {
-    // Prevent double submission
     if (isSubmitting || isLoading) return;
 
     try {
@@ -186,6 +194,11 @@ const LoginFormComponent: React.FC = () => {
       await login({ email: data.email, password: data.password, rememberMe: data.rememberMe });
       setIsSubmitted(true);
     } catch (err) {
+      if (err instanceof Requires2FAError) {
+        setPreAuthToken(err.preAuthToken);
+        setTwoFactorStep(true);
+        return;
+      }
       // Check for network errors first
       if (isNetworkError(err)) {
         setError('root', {
@@ -209,6 +222,24 @@ const LoginFormComponent: React.FC = () => {
         }
       }
       setError('root', { type: 'server', message: errorMessage });
+    }
+  };
+
+  const handleVerify2FA = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!preAuthToken || totpCode.length !== 6 || isLoading) return;
+
+    try {
+      clearErrors();
+      setIsSubmitted(false);
+      await verifyLogin2FA(preAuthToken, totpCode);
+      setIsSubmitted(true);
+      setTwoFactorStep(false);
+    } catch (err) {
+      setError('root', {
+        type: 'server',
+        message: err instanceof Error ? err.message : 'Invalid verification code',
+      });
     }
   };
 
@@ -259,9 +290,23 @@ const LoginFormComponent: React.FC = () => {
       {/* Aceternity Sparkles - Light Theme */}
       <Sparkles className="absolute inset-0" />
 
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isSubmitting ? 'Logging in...' : ''}
+        {errors?.length ? `Error: ${errors.map(e => e.message).join('. ')}` : ''}
+      </div>
+
       <NavigationHeader showSearch={false} showCategoryTabs={false} />
 
-      <div className="flex-1 flex items-center justify-center px-4 py-12 relative z-10">
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#login-form"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to login form
+      </a>
+
+      <div id="login-form" className="flex-1 flex items-center justify-center px-4 py-12 relative z-10">
         {/* Wider Card Container */}
         <div className="w-full max-w-2xl">
           {/* Header */}
@@ -316,7 +361,7 @@ const LoginFormComponent: React.FC = () => {
               {/* Top Gradient Line */}
               <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-nilin-coral via-nilin-rose to-nilin-blush" />
 
-              <div className="p-10 space-y-8">
+              <div className="p-6 sm:p-10 space-y-8">
                 {/* Card Header */}
                 <motion.div
                   initial={{ opacity: 0 }}
@@ -346,6 +391,53 @@ const LoginFormComponent: React.FC = () => {
                   )}
                 </AnimatePresence>
 
+                {twoFactorStep ? (
+                  <form onSubmit={handleVerify2FA} className="space-y-6">
+                    <div className="text-center">
+                      <Shield className="w-10 h-10 text-nilin-coral mx-auto mb-3" />
+                      <h3 className="text-xl font-medium text-nilin-charcoal">Two-factor authentication</h3>
+                      <p className="text-sm text-nilin-warmGray mt-2">
+                        Enter the 6-digit code from your authenticator app.
+                      </p>
+                    </div>
+                    <div>
+                      <label htmlFor="totp-code" className="block text-base font-medium text-nilin-charcoal mb-3">
+                        Verification code
+                      </label>
+                      <input
+                        id="totp-code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        className="w-full px-5 py-4 rounded-xl bg-nilin-cream/80 border-2 border-nilin-border text-center tracking-[0.5em] text-lg"
+                        placeholder="000000"
+                      />
+                    </div>
+                    {formErrors.root && (
+                      <p className="text-sm text-red-500" role="alert">{formErrors.root.message}</p>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={isLoading || totpCode.length !== 6}
+                      className="w-full py-4 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium disabled:opacity-50"
+                    >
+                      {isLoading ? 'Verifying...' : 'Verify and sign in'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTwoFactorStep(false);
+                        setPreAuthToken(null);
+                        setTotpCode('');
+                      }}
+                      className="w-full text-sm text-nilin-warmGray hover:text-nilin-charcoal"
+                    >
+                      Back to sign in
+                    </button>
+                  </form>
+                ) : (
                 <motion.form
                   onSubmit={handleSubmit(onSubmit)}
                   animate={controls}
@@ -411,7 +503,7 @@ const LoginFormComponent: React.FC = () => {
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
                         aria-label={showPassword ? 'Hide password' : 'Show password'}
-                        className="absolute inset-y-0 right-0 pr-5 flex items-center text-nilin-charcoal/60 hover:text-nilin-charcoal transition-colors"
+                        className="absolute inset-y-0 right-0 w-11 h-full flex items-center justify-center text-nilin-charcoal/60 hover:text-nilin-charcoal transition-colors"
                       >
                         {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                       </button>
@@ -520,6 +612,7 @@ const LoginFormComponent: React.FC = () => {
                     </motion.div>
                   )}
                 </motion.form>
+                )}
 
                 {/* Divider */}
                 <motion.div
@@ -541,18 +634,18 @@ const LoginFormComponent: React.FC = () => {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.9 }}
-                  className="grid grid-cols-2 gap-4"
+                  className="grid grid-cols-1 sm:grid-cols-2 gap-4"
                 >
                   <Link
                     to="/register/customer"
                     state={{ email: prefilledEmail || watchedEmail || undefined, returnTo }}
-                    className="py-4 rounded-xl border-2 border-nilin-border text-center text-base font-medium text-nilin-charcoal hover:text-nilin-coral hover:border-nilin-coral/50 hover:bg-nilin-blush/50 transition-all"
+                    className="min-h-11 flex items-center justify-center py-4 rounded-xl border-2 border-nilin-border text-center text-base font-medium text-nilin-charcoal hover:text-nilin-coral hover:border-nilin-coral/50 hover:bg-nilin-blush/50 transition-all"
                   >
                     Join as Customer
                   </Link>
                   <Link
                     to="/register/provider"
-                    className="py-4 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-center text-base font-medium text-white shadow-md hover:shadow-lg transition-all"
+                    className="min-h-11 flex items-center justify-center py-4 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-center text-base font-medium text-white shadow-md hover:shadow-lg transition-all"
                   >
                     Become a Pro
                   </Link>

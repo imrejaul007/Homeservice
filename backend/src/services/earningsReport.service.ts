@@ -5,6 +5,39 @@ import Booking from '../models/booking.model';
 import Service from '../models/service.model';
 import logger from '../utils/logger';
 
+/**
+ * ============================================
+ * EARNINGS REPORT SERVICE - CALCULATION FORMULAS
+ * ============================================
+ *
+ * FIX #7: Earnings Including Adjustments
+ *
+ * Provider earnings should include:
+ * 1. Base earnings from completed bookings (providerEarnings from Commission model)
+ * 2. Manual adjustments (bonuses, penalties, corrections)
+ *    - Bonuses: Added to earnings (positive)
+ *    - Penalties: Deducted from earnings (negative)
+ *    - Corrections: Adjust previous earnings (can be +/-)
+ *    - Promotions: Special earnings (positive)
+ *
+ * The Commission model stores individual booking commissions.
+ * For manual adjustments, query the Adjustment model if it exists,
+ * or check for adjustment fields in the Commission model.
+ *
+ * Current implementation:
+ * - Uses $providerEarnings for net provider earnings
+ * - This is: grossAmount - commissionAmount - platformFee - paymentProcessingFee - taxAmount
+ *
+ * To include adjustments (when Adjustment model is implemented):
+ * const adjustments = await Adjustment.aggregate([
+ *   { $match: { providerId, type: 'payout_adjustment' } },
+ *   { $group: { _id: null, total: { $sum: '$amount' } }}
+ * ]);
+ * const finalEarnings = baseEarnings + (adjustments[0]?.total || 0);
+ *
+ * ============================================
+ */
+
 // Earnings Report Interface
 export interface EarningsReport {
   _id: Types.ObjectId;
@@ -625,6 +658,9 @@ export class EarningsReportService {
               $group: {
                 _id: null,
                 grossEarnings: { $sum: '$grossAmount' },
+                // FIX #7: netEarnings uses providerEarnings which is already the final amount
+                // This equals: grossAmount - commissionAmount - platformFee - paymentProcessingFee - taxAmount
+                // Plus any manual adjustments (bonuses, corrections) that should be added separately
                 netEarnings: { $sum: '$providerEarnings' },
                 totalCommission: { $sum: '$commissionAmount' },
                 totalBookings: { $sum: 1 },

@@ -6,10 +6,11 @@ import { CheckCircle, AlertCircle, Mail, Loader } from 'lucide-react';
 const EmailVerification: React.FC = () => {
   const [verificationStatus, setVerificationStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState<string>('');
-  
+  const [verifiedUser, setVerifiedUser] = useState<ReturnType<typeof useAuthStore.getState>['user']>(null);
+
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { verifyEmail, isLoading, user } = useAuthStore();
+  const { verifyEmail, getCurrentUser } = useAuthStore();
 
   useEffect(() => {
     const performVerification = async () => {
@@ -21,15 +22,18 @@ const EmailVerification: React.FC = () => {
 
       try {
         await verifyEmail(token);
+        await getCurrentUser();
+        const currentUser = useAuthStore.getState().user;
+        setVerifiedUser(currentUser);
         setVerificationStatus('success');
-        
-        // Redirect to appropriate dashboard after a delay
+
         setTimeout(() => {
-          if (user) {
-            const dashboardPath = user.role === 'admin' 
-              ? '/admin/dashboard' 
-              : user.role === 'provider' 
-                ? '/provider/dashboard' 
+          const latestUser = useAuthStore.getState().user;
+          if (latestUser) {
+            const dashboardPath = latestUser.role === 'admin'
+              ? '/admin/dashboard'
+              : latestUser.role === 'provider'
+                ? '/provider/dashboard'
                 : '/customer/dashboard';
             navigate(dashboardPath);
           } else {
@@ -47,7 +51,7 @@ const EmailVerification: React.FC = () => {
     };
 
     performVerification();
-  }, [token, verifyEmail, navigate, user]);
+  }, [token, verifyEmail, navigate, getCurrentUser]);
 
   const renderContent = () => {
     switch (verificationStatus) {
@@ -108,17 +112,17 @@ const EmailVerification: React.FC = () => {
 
                   <div className="text-sm text-gray-600 space-y-2">
                     <p><strong>What's next?</strong></p>
-                    {user ? (
+                    {verifiedUser ? (
                       <ul className="list-disc list-inside space-y-1 text-left">
                         <li>Explore your personalized dashboard</li>
                         <li>Complete your profile setup</li>
-                        {user.role === 'customer' && (
+                        {verifiedUser.role === 'customer' && (
                           <>
                             <li>Browse available services</li>
                             <li>Book your first appointment</li>
                           </>
                         )}
-                        {user.role === 'provider' && (
+                        {verifiedUser.role === 'provider' && (
                           <>
                             <li>Set up your business profile</li>
                             <li>Add your services and portfolio</li>
@@ -138,9 +142,9 @@ const EmailVerification: React.FC = () => {
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-600 mx-auto"></div>
 
                   <div className="pt-4">
-                    {user ? (
+                    {verifiedUser ? (
                       <Link
-                        to={user.role === 'admin' ? '/admin/dashboard' : user.role === 'provider' ? '/provider/dashboard' : '/customer/dashboard'}
+                        to={verifiedUser.role === 'admin' ? '/admin/dashboard' : verifiedUser.role === 'provider' ? '/provider/dashboard' : '/customer/dashboard'}
                         className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                       >
                         Go to Dashboard

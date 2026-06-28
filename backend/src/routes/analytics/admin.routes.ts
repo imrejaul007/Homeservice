@@ -5,6 +5,7 @@ import { ApiError } from '../../utils/ApiError';
 import Booking from '../../models/booking.model';
 import { cache } from '../../config/redis';
 import logger from '../../utils/logger';
+import { adminAnalyticsService } from '../../services/adminAnalytics.service';
 
 const router = Router();
 
@@ -334,6 +335,61 @@ router.get('/platform-health', authenticate, requireRole('admin'), asyncHandler(
     success: true,
     data,
   });
+}));
+
+/**
+ * @route   GET /api/analytics/admin/platform-cac
+ * @desc    Get platform customer acquisition cost analytics
+ * @access  Admin
+ */
+router.get('/platform-cac', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = '90d' } = req.query;
+  const data = await adminAnalyticsService.getPlatformCAC(period as string);
+  res.json({ success: true, data });
+}));
+
+/**
+ * @route   GET /api/analytics/admin/ltv-by-segment
+ * @desc    Get LTV breakdown by customer segment
+ * @access  Admin
+ */
+router.get('/ltv-by-segment', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = '90d' } = req.query;
+  const data = await adminAnalyticsService.getLTVBySegment(period as string);
+  res.json({ success: true, data });
+}));
+
+/**
+ * @route   GET /api/analytics/admin/viral-coefficient
+ * @desc    Get viral coefficient (K-factor) analytics
+ * @access  Admin
+ */
+router.get('/viral-coefficient', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = '30d' } = req.query;
+  const data = await adminAnalyticsService.getViralCoefficient(period as string);
+  res.json({ success: true, data });
+}));
+
+/**
+ * @route   GET /api/analytics/admin/take-rate
+ * @desc    Get real-time platform take rate analytics
+ * @access  Admin
+ */
+router.get('/take-rate', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = '30d' } = req.query;
+  const data = await adminAnalyticsService.getTakeRate(period as string);
+  res.json({ success: true, data });
+}));
+
+/**
+ * @route   GET /api/analytics/admin/marketplace-velocity
+ * @desc    Get marketplace velocity metrics
+ * @access  Admin
+ */
+router.get('/marketplace-velocity', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = '24h' } = req.query;
+  const data = await adminAnalyticsService.getMarketplaceVelocity(period as string);
+  res.json({ success: true, data });
 }));
 
 /**

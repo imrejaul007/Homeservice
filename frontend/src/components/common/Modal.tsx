@@ -87,6 +87,7 @@ const ModalContent = React.forwardRef<HTMLDivElement, ModalContentProps>(
     <DialogPrimitive.Content
       ref={forwardedRef}
       aria-modal="true"
+      aria-labelledby="modal-title"
       className={cn(
         // Positioning
         'fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%]',

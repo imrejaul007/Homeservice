@@ -734,46 +734,24 @@ export class ServicePackagesService {
       cancelAtPeriodEnd: false,
     });
 
+    // Separate subscriptions into those to renew, those to expire, and those with errors
+    const toRenew: string[] = [];
+    const toExpire: string[] = [];
+    const failedIds: string[] = [];
+
+    // Check each subscription
     for (const subscription of dueSubscriptions) {
       try {
         const pkg = await ServicePackageModel.findById(subscription.packageId);
         if (!pkg) {
-          subscription.status = 'expired';
-          await subscription.save();
-          result.expired++;
+          toExpire.push(subscription._id.toString());
           continue;
         }
 
-        // Renew if auto-renewal is enabled
         if (subscription.autoRenewal) {
-          subscription.currentPeriodStart = now;
-          subscription.currentPeriodEnd = this.calculatePeriodEnd(now, subscription.billingCycle, 0);
-          subscription.status = 'active';
-          subscription.usage = {
-            servicesUsed: 0,
-            bookingsUsed: 0,
-            photosUsed: 0,
-          };
-
-          subscription.history.push({
-            packageId: subscription.packageId,
-            status: 'active',
-            price: this.calculatePriceWithDiscount(pkg, subscription.billingCycle),
-            changedAt: now,
-            reason: 'Subscription renewed',
-          });
-
-          await subscription.save();
-          result.renewed++;
-
-          eventBus.publish(EVENT_TYPES.SUBSCRIPTION_RENEWED, {
-            subscriptionId: subscription._id,
-            providerId: subscription.providerId,
-          });
+          toRenew.push(subscription._id.toString());
         } else {
-          subscription.status = 'expired';
-          await subscription.save();
-          result.expired++;
+          toExpire.push(subscription._id.toString());
         }
       } catch (error) {
         logger.error('Failed to process renewal', {
@@ -782,9 +760,73 @@ export class ServicePackagesService {
           subscriptionId: subscription._id.toString(),
           error: error instanceof Error ? error.message : String(error),
         });
-        result.failed++;
+        failedIds.push(subscription._id.toString());
       }
     }
+
+    // Bulk expire subscriptions that couldn't find their package or don't auto-renew
+    if (toExpire.length > 0) {
+      await ProviderSubscriptionModel.updateMany(
+        { _id: { $in: toExpire } },
+        { $set: { status: 'expired' } }
+      );
+      result.expired += toExpire.length;
+    }
+
+    // Bulk renew subscriptions
+    if (toRenew.length > 0) {
+      const newPeriodEnd = this.calculatePeriodEnd(now, 'monthly', 0);
+
+      await ProviderSubscriptionModel.updateMany(
+        { _id: { $in: toRenew } },
+        {
+          $set: {
+            currentPeriodStart: now,
+            currentPeriodEnd: newPeriodEnd,
+            status: 'active',
+            usage: {
+              servicesUsed: 0,
+              bookingsUsed: 0,
+              photosUsed: 0,
+            }
+          }
+        }
+      );
+
+      // Get renewed subscriptions for history and events
+      const renewedSubscriptions = await ProviderSubscriptionModel.find({
+        _id: { $in: toRenew }
+      }).populate('packageId');
+
+      for (const subscription of renewedSubscriptions) {
+        const pkg = subscription.packageId as any;
+        if (pkg) {
+          await ProviderSubscriptionModel.updateOne(
+            { _id: subscription._id },
+            {
+              $push: {
+                history: {
+                  packageId: subscription.packageId,
+                  status: 'active',
+                  price: this.calculatePriceWithDiscount(pkg, subscription.billingCycle),
+                  changedAt: now,
+                  reason: 'Subscription renewed',
+                }
+              }
+            }
+          );
+        }
+
+        eventBus.publish(EVENT_TYPES.SUBSCRIPTION_RENEWED, {
+          subscriptionId: subscription._id,
+          providerId: subscription.providerId,
+        });
+      }
+
+      result.renewed += toRenew.length;
+    }
+
+    result.failed += failedIds.length;
 
     // Process cancelled subscriptions at period end
     const cancelledDue = await ProviderSubscriptionModel.find({
@@ -792,11 +834,16 @@ export class ServicePackagesService {
       currentPeriodEnd: { $lte: now },
     });
 
-    for (const subscription of cancelledDue) {
-      subscription.status = 'cancelled';
-      subscription.cancelledAt = now;
-      await subscription.save();
-      result.expired++;
+    if (cancelledDue.length > 0) {
+      const cancelledIds = cancelledDue.map(s => s._id);
+
+      // Bulk update cancelled subscriptions
+      await ProviderSubscriptionModel.updateMany(
+        { _id: { $in: cancelledIds } },
+        { $set: { status: 'cancelled', cancelledAt: now } }
+      );
+
+      result.expired += cancelledDue.length;
     }
 
     return result;

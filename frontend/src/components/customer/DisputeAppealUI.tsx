@@ -17,7 +17,17 @@ import { cn } from '../../lib/utils';
 // Type Definitions
 // ============================================
 
-export type DisputeType = 'billing' | 'quality' | 'cancellation' | 'no_show' | 'other';
+// Category enum mirrors backend CreateDisputeDTO.category
+// (see backend/src/services/dispute.service.ts)
+export type DisputeType =
+  | 'service_quality'
+  | 'no_show'
+  | 'damage'
+  | 'billing'
+  | 'cancellation'
+  | 'communication'
+  | 'other';
+
 export type AppealStatus = 'pending' | 'under_review' | 'approved' | 'rejected' | 'escalated';
 
 export interface DisputeEvidence {
@@ -53,10 +63,12 @@ export interface DisputeAppealResponse {
 // ============================================
 
 const DISPUTE_TYPES: { value: DisputeType; label: string; description: string }[] = [
-  { value: 'billing', label: 'Billing Issue', description: 'Incorrect charges or unexpected fees' },
-  { value: 'quality', label: 'Service Quality', description: 'Service did not meet expectations' },
-  { value: 'cancellation', label: 'Cancellation Problem', description: 'Issues with booking cancellation' },
+  { value: 'service_quality', label: 'Service Quality', description: 'Service did not meet expectations' },
   { value: 'no_show', label: 'Provider No-Show', description: 'Provider did not arrive' },
+  { value: 'damage', label: 'Property Damage', description: 'Damage to property or belongings' },
+  { value: 'billing', label: 'Billing Issue', description: 'Incorrect charges or unexpected fees' },
+  { value: 'cancellation', label: 'Cancellation Problem', description: 'Issues with booking cancellation' },
+  { value: 'communication', label: 'Communication Issue', description: 'Poor communication or responsiveness' },
   { value: 'other', label: 'Other', description: 'Other dispute not listed' },
 ];
 

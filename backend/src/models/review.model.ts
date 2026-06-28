@@ -40,12 +40,22 @@ export interface IReview extends Document {
   moderatedAt?: Date;
   moderatedBy?: mongoose.Types.ObjectId;
 
+  // Content moderation
+  autoFlagged: boolean;
+  moderationScore?: number;
+  moderationIssues?: string[];
+
   // Response from reviewee
   response?: {
     content: string;
     createdAt: Date;
     updatedAt?: Date;
   };
+
+  // Soft delete fields (audit trail)
+  isDeleted: boolean;
+  deletedAt?: Date;
+  deletedBy?: mongoose.Types.ObjectId;
 
   // Timestamps
   createdAt: Date;
@@ -168,6 +178,22 @@ const reviewSchema = new Schema<IReview>(
       ref: 'User',
     },
 
+    autoFlagged: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    moderationScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+    },
+
+    moderationIssues: [{
+      type: String,
+    }],
+
     response: {
       content: {
         type: String,
@@ -180,6 +206,18 @@ const reviewSchema = new Schema<IReview>(
         type: Date,
       },
     },
+
+    // FIX 1: Add soft delete field to review schema for audit trail
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    deletedAt: Date,
+    deletedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    }
   },
   {
     timestamps: true,
@@ -200,6 +238,11 @@ reviewSchema.index(
     name: 'unique_booking_reviewer'
   }
 );
+
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+reviewSchema.index({ isDeleted: 1, moderationStatus: 1 }); // Soft deleted reviews by status
+reviewSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted reviews sorted by date
+reviewSchema.index({ isDeleted: 1, revieweeId: 1 }); // Soft deleted reviews by reviewee
 
 // Compound indexes for common query patterns
 // PERFORMANCE FIX: Add index for service rating recalculation (N+1 query fix)
@@ -257,6 +300,23 @@ reviewSchema.index(
   {
     partialFilterExpression: { reportCount: { $gt: 0 } },
     name: 'flagged_reviews'
+  }
+);
+
+// Index for auto-flagged reviews (from content moderation)
+reviewSchema.index(
+  { autoFlagged: 1, createdAt: -1 },
+  {
+    partialFilterExpression: { autoFlagged: true },
+    name: 'auto_flagged_reviews'
+  }
+);
+
+// Compound index for moderation queue with auto-flagged priority
+reviewSchema.index(
+  { autoFlagged: 1, moderationStatus: 1, createdAt: -1 },
+  {
+    name: 'moderation_queue_auto_flagged'
   }
 );
 
@@ -319,10 +379,12 @@ reviewSchema.statics.findByProvider = function(
     .sort({ createdAt: -1 })
     .skip((page - 1) * limit)
     .limit(limit)
-    .populate('reviewerId', 'firstName lastName avatar');
+    .populate('reviewerId', 'firstName lastName avatar')
+    .lean();
 };
 
 // Get review statistics for a provider
+// FIX P0: Add isDeleted: false filter to exclude soft-deleted reviews from stats
 reviewSchema.statics.getProviderStats = async function(providerId: string) {
   const stats = await this.aggregate([
     {
@@ -330,6 +392,7 @@ reviewSchema.statics.getProviderStats = async function(providerId: string) {
         revieweeId: new mongoose.Types.ObjectId(providerId),
         reviewerType: 'customer',
         isHidden: false,
+        isDeleted: false, // Exclude soft-deleted reviews from stats
         $or: [
           { moderationStatus: 'approved' },
           { moderationStatus: { $exists: false } },
@@ -400,20 +463,28 @@ const Review = mongoose.model<IReview, ReviewModel>('Review', reviewSchema);
 // POST-SAVE HOOKS FOR DENORMALIZED ANALYTICS
 // ===================================
 // FIX: Trigger ProviderProfile review stats recalculation when reviews change
+// FIX P1: Wrap review save and stats recalculation in proper transaction handling
 
-reviewSchema.post('save', async function(doc) {
+reviewSchema.post('save', { document: true, query: false }, async function(doc: IReview) {
   // Recalculate provider's review stats when a review is created or updated
   if (doc.revieweeType === 'provider' && doc.reviewerType === 'customer') {
+    const session = await mongoose.startSession();
     try {
+      session.startTransaction();
+
       const ProviderProfile = mongoose.model('ProviderProfile') as any;
       // FIX: Pass tenantId for multi-tenant isolation to prevent cross-tenant data leakage
-      await ProviderProfile.recalculateReviewsData(doc.revieweeId, doc.tenantId);
+      await ProviderProfile.recalculateReviewsData(doc.revieweeId, doc.tenantId, session);
 
       // Also update booking reference to review
       const Booking = mongoose.model('Booking');
-      await Booking.findByIdAndUpdate(doc.bookingId, {
-        $set: { customerReview: doc._id }
-      });
+      await Booking.findByIdAndUpdate(
+        doc.bookingId,
+        { $set: { customerReview: doc._id } },
+        { session }
+      );
+
+      await session.commitTransaction();
 
       logger.debug('Provider review stats recalculated after review change', {
         context: 'ReviewModel',
@@ -422,19 +493,30 @@ reviewSchema.post('save', async function(doc) {
         providerId: doc.revieweeId.toString(),
         tenantId: doc.tenantId?.toString(),
       });
-    } catch (error) {
-      logger.warn('Failed to recalculate provider review stats', {
+    } catch (error: unknown) {
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
+      // Log the error but don't fail the review save operation
+      // The stats will be eventually consistent via a scheduled job
+      logger.error('Failed to recalculate provider review stats - will retry via background job', {
         context: 'ReviewModel',
         action: 'RECALCULATE_REVIEW_STATS_ERROR',
         reviewId: doc._id.toString(),
-        error: (error as Error).message,
+        providerId: doc.revieweeId.toString(),
+        tenantId: doc.tenantId?.toString(),
+        error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      if (!session.hasEnded) {
+        await session.endSession();
+      }
     }
   }
 });
 
 // Recalculate on review deletion
-reviewSchema.post('findOneAndDelete', async function(doc) {
+reviewSchema.post('findOneAndDelete', async function(doc: IReview | null) {
   if (doc && doc.revieweeType === 'provider' && doc.reviewerType === 'customer') {
     try {
       const ProviderProfile = mongoose.model('ProviderProfile') as any;
@@ -454,19 +536,19 @@ reviewSchema.post('findOneAndDelete', async function(doc) {
         providerId: doc.revieweeId.toString(),
         tenantId: doc.tenantId?.toString(),
       });
-    } catch (error) {
+    } catch (error: unknown) {
       logger.warn('Failed to recalculate provider review stats on delete', {
         context: 'ReviewModel',
         action: 'RECALCULATE_REVIEW_STATS_DELETE_ERROR',
         reviewId: doc._id.toString(),
-        error: (error as Error).message,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 });
 
 // FIX: Pre-delete hook to clean up related data when review is deleted
-reviewSchema.pre('deleteOne', { document: true, query: false }, async function() {
+reviewSchema.pre('deleteOne', { document: true, query: false }, async function(this: IReview) {
   // This runs before the document is deleted
   // The post-delete hook will handle recalculating review stats
   logger.debug('Review deletion initiated', {

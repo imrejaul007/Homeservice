@@ -88,14 +88,17 @@ const variantIcons: Record<ToastVariant, React.ReactNode> = {
 interface ToastProps {
   toast: ToastData;
   onClose: () => void;
+  isPaused?: boolean;
 }
 
-const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
+const Toast: React.FC<ToastProps> = ({ toast, onClose, isPaused = false }) => {
   const { title, description, variant = 'default', duration = 5000, action } = toast;
   const [progress, setProgress] = useState(100);
+  const [localPaused, setLocalPaused] = useState(false);
+  const isActive = isPaused || localPaused;
 
   React.useEffect(() => {
-    if (duration === 0) return;
+    if (duration === 0 || isActive) return;
 
     const startTime = Date.now();
     const interval = setInterval(() => {
@@ -115,7 +118,7 @@ const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
       clearTimeout(timer);
       clearInterval(interval);
     };
-  }, [duration, onClose]);
+  }, [duration, onClose, isActive]);
 
   const styles = variantStyles[variant];
 
@@ -159,15 +162,22 @@ const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
 interface ToastProviderProps {
   children: React.ReactNode;
   defaultDuration?: number;
+  /** Maximum number of toasts to display */
+  maxToasts?: number;
 }
 
-export const ToastProvider: React.FC<ToastProviderProps> = ({ children, defaultDuration = 5000 }) => {
+export const ToastProvider: React.FC<ToastProviderProps> = ({ children, defaultDuration = 5000, maxToasts = 5 }) => {
   const [toasts, setToasts] = useState<ToastData[]>([]);
+  const [isPaused, setIsPaused] = useState(false);
 
   const addToast = useCallback((toast: Omit<ToastData, 'id'>) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    setToasts((prev) => [...prev, { ...toast, id, duration: toast.duration ?? defaultDuration }]);
-  }, [defaultDuration]);
+    setToasts((prev) => {
+      const newToasts = [...prev, { ...toast, id, duration: toast.duration ?? defaultDuration }];
+      // Limit to maxToasts
+      return newToasts.slice(-maxToasts);
+    });
+  }, [defaultDuration, maxToasts]);
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -177,9 +187,18 @@ export const ToastProvider: React.FC<ToastProviderProps> = ({ children, defaultD
     <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
       <ToastPrimitive.Provider swipeDirection="right" duration={defaultDuration}>
         {children}
-        <ToastPrimitive.Viewport className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-[380px] max-w-[calc(100vw-32px)] outline-none" />
+        <ToastPrimitive.Viewport
+          className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 w-[380px] max-w-[calc(100vw-32px)] outline-none"
+          onMouseEnter={() => setIsPaused(true)}
+          onMouseLeave={() => setIsPaused(false)}
+        />
         {toasts.map((toast) => (
-          <Toast key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
+          <Toast
+            key={toast.id}
+            toast={toast}
+            onClose={() => removeToast(toast.id)}
+            isPaused={isPaused}
+          />
         ))}
       </ToastPrimitive.Provider>
     </ToastContext.Provider>

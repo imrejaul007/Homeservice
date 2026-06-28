@@ -1,6 +1,10 @@
+// Shared notification preference keys — keep in sync between NotificationSettings and ProfileNotifications.
 /**
  * Notification Settings Page
  * Full notification preferences page with channel toggles and quiet hours
+ *
+ * Shares notification preference state with ProfileSettings.tsx via
+ * useNotificationPreferencesStore — invalidate/fetch on save to keep both in sync.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -181,7 +185,7 @@ const NotificationSettingsPage: React.FC = () => {
       setSettings(newSettings);
       setOriginalSettings(newSettings);
       setHasLoaded(true);
-    } catch (err: any) {
+    } catch (err) {
       setHasLoaded(false);
       setError(err.response?.data?.message || 'Failed to load notification settings');
     } finally {
@@ -237,7 +241,7 @@ const NotificationSettingsPage: React.FC = () => {
         } else {
           await notificationApi.disableWhatsApp();
         }
-      } catch (err: any) {
+      } catch (err) {
         setError(err.response?.data?.message || 'Failed to update WhatsApp status');
         return;
       }
@@ -253,7 +257,7 @@ const NotificationSettingsPage: React.FC = () => {
     try {
       const response = await notificationApi.getTelegramLink();
       window.open(response.data.link, '_blank');
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to get Telegram link');
     }
   };
@@ -265,7 +269,7 @@ const NotificationSettingsPage: React.FC = () => {
         ...prev,
         telegram: { enabled: false, linked: false },
       }));
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to unlink Telegram');
     }
   };
@@ -313,7 +317,7 @@ const NotificationSettingsPage: React.FC = () => {
 
       // Auto-hide success message
       setTimeout(() => setSuccess(false), 3000);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to save settings');
     } finally {
       setIsSaving(false);
@@ -416,7 +420,7 @@ const NotificationSettingsPage: React.FC = () => {
 
           {/* Error/Success Messages */}
           {error && (
-            <div className="mb-6 p-4 rounded-nilin bg-red-50 border border-red-200 flex items-center gap-3">
+            <div role="alert" className="mb-6 p-4 rounded-nilin bg-red-50 border border-red-200 flex items-center gap-3">
               <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
               <span className="text-red-800">{error}</span>
               <button onClick={() => setError(null)} className="ml-auto text-red-500 hover:text-red-700">

@@ -1,3 +1,7 @@
+/**
+ * @deprecated Legacy admin dashboard — use `pages/admin/AdminDashboard.tsx` instead.
+ * Kept for backward compatibility with older imports; do not extend this component.
+ */
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
@@ -464,7 +468,7 @@ const AdminDashboard: React.FC = () => {
         fetchDashboardStats(),
         fetchProviders()
       ]);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error fetching dashboard data:', error);
       setError('Failed to load dashboard data');
     } finally {
@@ -755,18 +759,28 @@ const AdminDashboard: React.FC = () => {
         </div>
       }
     >
-      {/* Error Alert */}
-      {error && (
-        <div className="rounded-xl p-4 mb-6 bg-red-50 border border-red-200">
-          <div className="flex">
-            <AlertTriangle className="h-5 w-5 text-red-400" />
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-red-800 font-sans">Error</h3>
-              <p className="text-sm mt-1 text-red-700 font-sans">{error}</p>
+      {/* Skip Link for Accessibility (WCAG 2.4.1) */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+      >
+        Skip to main content
+      </a>
+
+      {/* Main Content */}
+      <main id="main-content">
+        {/* Error Alert */}
+        {error && (
+          <div className="rounded-xl p-4 mb-6 bg-red-50 border border-red-200">
+            <div className="flex">
+              <AlertTriangle className="h-5 w-5 text-red-400" />
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800 font-sans">Error</h3>
+                <p className="text-sm mt-1 text-red-700 font-sans">{error}</p>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -835,25 +849,148 @@ const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* AI Insights Section - Coming Soon */}
+      {/* AI Insights Section */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Brain className="h-6 w-6 text-nilin-coral" />
             <h2 className="text-xl font-serif text-nilin-charcoal">AI Insights</h2>
           </div>
-          <span className="px-3 py-1 bg-nilin-coral/10 text-nilin-coral text-xs font-medium rounded-full">
-            Coming Soon
+          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">
+            Live
           </span>
         </div>
-        <div className="glass rounded-2xl border border-nilin-border/50 p-6 text-center">
-          <div className="flex items-center justify-center mb-3">
-            <Sparkles className="h-10 w-10 text-nilin-warmGray/50" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Platform Health Insight */}
+          <div className="glass rounded-2xl border border-nilin-border/50 p-5 hover:border-nilin-coral/30 transition-all">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+                <Activity className="h-5 w-5 text-nilin-coral" />
+              </div>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                stats.pendingVerifications < 10 ? 'bg-green-100 text-green-700' :
+                stats.pendingVerifications < 25 ? 'bg-amber-100 text-amber-700' :
+                'bg-red-100 text-red-700'
+              }`}>
+                {stats.pendingVerifications < 10 ? 'Healthy' :
+                 stats.pendingVerifications < 25 ? 'Attention' : 'Critical'}
+              </span>
+            </div>
+            <h3 className="text-sm font-medium text-nilin-charcoal mb-1">Verification Backlog</h3>
+            <p className="text-2xl font-serif text-nilin-charcoal mb-1">{stats.pendingVerifications}</p>
+            <p className="text-xs text-nilin-warmGray">
+              {stats.pendingVerifications === 0 ? 'All caught up! No pending verifications.' :
+               stats.pendingVerifications < 10 ? 'Verification queue is well managed.' :
+               stats.pendingVerifications < 25 ? 'Consider allocating more review time.' :
+               'High volume - prioritize verification reviews.'}
+            </p>
           </div>
-          <p className="text-nilin-charcoal font-medium mb-1">AI-Powered Insights</p>
-          <p className="text-sm text-nilin-warmGray">
-            Advanced analytics and recommendations powered by artificial intelligence are coming soon.
-          </p>
+
+          {/* Growth Insights */}
+          <div className="glass rounded-2xl border border-nilin-border/50 p-5 hover:border-nilin-coral/30 transition-all">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center">
+                {stats.monthlyGrowth >= 0 ? (
+                  <TrendingUp className="h-5 w-5 text-green-600" />
+                ) : (
+                  <TrendingDown className="h-5 w-5 text-red-600" />
+                )}
+              </div>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                stats.monthlyGrowth >= 5 ? 'bg-green-100 text-green-700' :
+                stats.monthlyGrowth >= 0 ? 'bg-amber-100 text-amber-700' :
+                'bg-red-100 text-red-700'
+              }`}>
+                {stats.monthlyGrowth >= 5 ? 'Strong' :
+                 stats.monthlyGrowth >= 0 ? 'Stable' : 'Declining'}
+              </span>
+            </div>
+            <h3 className="text-sm font-medium text-nilin-charcoal mb-1">Monthly Growth</h3>
+            <p className="text-2xl font-serif text-nilin-charcoal mb-1">
+              {stats.monthlyGrowth >= 0 ? '+' : ''}{stats.monthlyGrowth}%
+            </p>
+            <p className="text-xs text-nilin-warmGray">
+              {stats.monthlyGrowth >= 10 ? 'Excellent growth trajectory!' :
+               stats.monthlyGrowth >= 5 ? 'Healthy growth trend.' :
+               stats.monthlyGrowth >= 0 ? 'Growth is slow but stable.' :
+               'Revenue declining - review pricing strategy.'}
+            </p>
+          </div>
+
+          {/* Platform Efficiency */}
+          <div className="glass rounded-2xl border border-nilin-border/50 p-5 hover:border-nilin-coral/30 transition-all">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
+                <DollarSign className="h-5 w-5 text-blue-600" />
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                Revenue
+              </span>
+            </div>
+            <h3 className="text-sm font-medium text-nilin-charcoal mb-1">Avg Revenue/Provider</h3>
+            <p className="text-2xl font-serif text-nilin-charcoal mb-1">
+              {stats.totalProviders > 0 ?
+                `AED ${(stats.totalRevenue / stats.totalProviders).toLocaleString(undefined, { maximumFractionDigits: 0 })}` :
+                'N/A'}
+            </p>
+            <p className="text-xs text-nilin-warmGray">
+              {stats.totalProviders === 0 ? 'No active providers yet.' :
+               stats.totalRevenue / stats.totalProviders > 10000 ? 'High-value provider network.' :
+               stats.totalRevenue / stats.totalProviders > 5000 ? 'Solid average revenue per provider.' :
+               'Consider provider incentive programs.'}
+            </p>
+          </div>
+
+          {/* Recommendation Card */}
+          {stats.pendingVerifications > 15 && (
+            <div className="glass rounded-2xl border border-amber-200/50 bg-amber-50/30 p-5 md:col-span-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="h-5 w-5 text-amber-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-medium text-nilin-charcoal mb-1">Recommended Action</h3>
+                  <p className="text-sm text-nilin-warmGray mb-2">
+                    You have {stats.pendingVerifications} pending verifications. Consider:
+                  </p>
+                  <ul className="text-xs text-nilin-warmGray space-y-1 ml-4">
+                    <li className="flex items-center gap-2">
+                      <CheckCircle className="h-3 w-3 text-green-500" />
+                      Batch reviewing providers to clear backlog faster
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <CheckCircle className="h-3 w-3 text-green-500" />
+                      Reaching out to providers with incomplete documents
+                    </li>
+                  </ul>
+                  <button
+                    onClick={() => setShowVerifications(true)}
+                    className="mt-3 px-4 py-2 bg-nilin-coral text-white text-xs font-medium rounded-lg hover:bg-nilin-rose/90 transition-colors"
+                  >
+                    Review Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Success Milestone Card */}
+          {stats.pendingVerifications === 0 && stats.monthlyGrowth > 0 && (
+            <div className="glass rounded-2xl border border-green-200/50 bg-green-50/30 p-5 md:col-span-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center flex-shrink-0">
+                  <Sparkles className="h-5 w-5 text-green-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-medium text-nilin-charcoal mb-1">Platform Looking Great!</h3>
+                  <p className="text-sm text-nilin-warmGray">
+                    Zero pending verifications and {stats.monthlyGrowth > 0 ? `${stats.monthlyGrowth}% monthly growth` : 'positive momentum'}.
+                    {stats.monthlyGrowth >= 10 ? ' Consider scaling your provider network.' : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1092,6 +1229,7 @@ const AdminDashboard: React.FC = () => {
                 </button>
                 <button
                   onClick={() => fetchProvidersWithServices()}
+                  aria-label="Refresh dashboard"
                   className="px-3 py-1.5 bg-nilin-coral text-white rounded-xl text-sm font-medium font-sans hover:bg-nilin-rose transition-colors"
                 >
                   <RefreshCw className="h-4 w-4" />
@@ -1338,6 +1476,7 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
+      </main>
     </PageLayout>
   );
 };

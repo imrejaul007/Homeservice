@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MapPin, ChevronDown, Navigation, Check } from 'lucide-react';
-import { useLocationStore, SUPPORTED_CITIES } from '@/stores/locationStore';
+import { useLocationStore, useSupportedCities } from '@/stores/locationStore';
 import type { SupportedCity } from '@/types/location.types';
 
 interface LocationDropdownProps {
@@ -22,8 +22,9 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
     setSelectedCity,
     getCurrentLocation,
   } = useLocationStore();
+  const supportedCities = useSupportedCities();
 
-  const currentCity = selectedCity || SUPPORTED_CITIES[0];
+  const currentCity = selectedCity || supportedCities[0];
   const displayLocation = selectedCity?.name || currentLocation?.address.city || currentCity.name;
 
   useEffect(() => {
@@ -97,7 +98,7 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
                 Select a city
               </p>
               <div className="space-y-1">
-                {SUPPORTED_CITIES.map((city) => (
+                {supportedCities.map((city) => (
                   <button
                     key={city.id}
                     onClick={() => handleCitySelect(city)}

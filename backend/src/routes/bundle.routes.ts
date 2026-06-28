@@ -795,4 +795,98 @@ router.get(
   })
 );
 
+/**
+ * GET /api/bundles/:id/analytics
+ * Get analytics for a specific bundle (provider or admin only)
+ */
+router.get(
+  '/:id/analytics',
+  authenticate,
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const { startDate, endDate } = req.query as Record<string, string>;
+      const userId = req.user!._id.toString();
+      const isAdmin = req.user!.role === 'admin';
+
+      const bundle = await Bundle.findById(id);
+
+      if (!bundle) {
+        res.status(404).json({
+          success: false,
+          message: 'Bundle not found',
+        });
+        return;
+      }
+
+      // Access control: provider can only see their own bundles, admin can see all
+      if (!isAdmin && bundle.providerId?.toString() !== userId) {
+        res.status(403).json({
+          success: false,
+          message: 'You do not have permission to view analytics for this bundle',
+        });
+        return;
+      }
+
+      // Get bundle-specific analytics
+      const matchQuery: any = {
+        'metadata.bundleId': bundle._id,
+      };
+
+      if (startDate || endDate) {
+        matchQuery.createdAt = {};
+        if (startDate) matchQuery.createdAt.$gte = new Date(startDate);
+        if (endDate) matchQuery.createdAt.$lte = new Date(endDate);
+      }
+
+      const Booking = mongoose.model('Booking');
+      const bookings = await Booking.find(matchQuery);
+
+      // Calculate analytics for this specific bundle
+      let totalBookings = 0;
+      let totalRevenue = 0;
+      let totalSavings = 0;
+      let completedBookings = 0;
+      let cancelledBookings = 0;
+
+      for (const booking of bookings) {
+        totalBookings++;
+        totalRevenue += (booking.pricing as any)?.totalAmount || 0;
+        const bundleDiscount = (booking.pricing as any)?.couponDiscount || 0;
+        totalSavings += bundleDiscount;
+
+        if (booking.status === 'completed') {
+          completedBookings++;
+        } else if (booking.status === 'cancelled') {
+          cancelledBookings++;
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          bundleId: bundle._id.toString(),
+          bundleName: bundle.name,
+          summary: {
+            totalBookings,
+            completedBookings,
+            cancelledBookings,
+            totalRevenue,
+            totalSavings,
+            averageOrderValue: totalBookings > 0 ? totalRevenue / totalBookings : 0,
+            redemptionsUsed: bundle.redemptionsUsed || 0,
+            maxRedemptions: bundle.maxRedemptions || 0,
+          },
+          period: {
+            startDate: startDate || null,
+            endDate: endDate || null,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
+
 export default router;

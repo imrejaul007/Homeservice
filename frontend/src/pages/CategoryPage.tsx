@@ -9,6 +9,8 @@ import { CATEGORY_IMAGES } from '../constants/images';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 import { resolveCategorySlug } from '../utils/categorySlugResolver';
 import TrustBadges from '../components/category/TrustBadges';
+import { categoryApi } from '../services/categoryApi';
+import { showDeduplicatedError } from '../utils/toastUtils';
 
 // Popular subcategories by category slug (for highlighting)
 const POPULAR_SUBCATEGORIES: Record<string, string[]> = {
@@ -20,15 +22,8 @@ const POPULAR_SUBCATEGORIES: Record<string, string[]> = {
   'teeth-whitening': ['in-office-whitening', 'at-home-whitening'],
 };
 
-// Category stats by slug
-const CATEGORY_STATS: Record<string, { services: number; providers: number; bookings: string }> = {
-  hair: { services: 150, providers: 45, bookings: '2.5k+' },
-  'skin-aesthetics': { services: 120, providers: 38, bookings: '1.8k+' },
-  nails: { services: 80, providers: 28, bookings: '1.2k+' },
-  makeup: { services: 95, providers: 32, bookings: '1.5k+' },
-  massage: { services: 110, providers: 42, bookings: '2.1k+' },
-  'teeth-whitening': { services: 45, providers: 18, bookings: '800+' },
-};
+// Category stats fallback when API unavailable
+const DEFAULT_CATEGORY_STATS = { services: 0, providers: 0, bookings: '0' };
 
 // Loading skeleton
 const CategoryPageSkeleton: React.FC = () => (
@@ -101,19 +96,19 @@ const Breadcrumb: React.FC<{ items: { label: string; href?: string }[] }> = ({ i
 
 // Category Stats Bar
 const CategoryStats: React.FC<{ stats: { services: number; providers: number; bookings: string } }> = ({ stats }) => (
-  <div className="flex items-center gap-6 md:gap-10">
-    <div className="text-center">
-      <div className="text-lg md:text-xl font-bold text-nilin-charcoal">{stats.services}+</div>
+  <div className="flex items-center justify-between sm:justify-start gap-3 sm:gap-6 md:gap-10 w-full overflow-x-auto">
+    <div className="text-center flex-1 min-w-[72px]">
+      <div className="text-base sm:text-lg md:text-xl font-bold text-nilin-charcoal">{stats.services}+</div>
       <div className="text-xs text-nilin-warmGray">Services</div>
     </div>
-    <div className="w-px h-8 bg-nilin-blush/40" />
-    <div className="text-center">
-      <div className="text-lg md:text-xl font-bold text-nilin-charcoal">{stats.providers}+</div>
+    <div className="w-px h-8 bg-nilin-blush/40 flex-shrink-0" />
+    <div className="text-center flex-1 min-w-[72px]">
+      <div className="text-base sm:text-lg md:text-xl font-bold text-nilin-charcoal">{stats.providers}+</div>
       <div className="text-xs text-nilin-warmGray">Providers</div>
     </div>
-    <div className="w-px h-8 bg-nilin-blush/40" />
-    <div className="text-center">
-      <div className="text-lg md:text-xl font-bold text-nilin-charcoal">{stats.bookings}</div>
+    <div className="w-px h-8 bg-nilin-blush/40 flex-shrink-0" />
+    <div className="text-center flex-1 min-w-[72px]">
+      <div className="text-base sm:text-lg md:text-xl font-bold text-nilin-charcoal">{stats.bookings}</div>
       <div className="text-xs text-nilin-warmGray">Bookings</div>
     </div>
   </div>
@@ -128,7 +123,7 @@ const FilterChip: React.FC<{
 }> = ({ label, icon, active, onClick }) => (
   <button
     onClick={onClick}
-    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+    className={`flex items-center gap-1.5 min-h-11 px-3 py-2 rounded-full text-sm font-medium transition-all ${
       active
         ? 'bg-nilin-coral text-white shadow-md'
         : 'bg-white text-nilin-charcoal hover:bg-nilin-blush/30 border border-nilin-blush/30'
@@ -144,9 +139,31 @@ const CategoryPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [showPopularOnly, setShowPopularOnly] = useState(false);
+  const [pageStats, setPageStats] = useState(DEFAULT_CATEGORY_STATS);
 
   const slug = resolveCategorySlug(rawSlug ?? '') ?? rawSlug ?? '';
   const { category, isLoading, error } = useCategory(slug);
+
+  useEffect(() => {
+    if (!slug) return;
+    const abortController = new AbortController();
+    categoryApi
+      .getCategoryPageStats(slug, abortController.signal)
+      .then((res) => {
+        if (res.success) {
+          setPageStats({
+            services: res.data.services,
+            providers: res.data.providers,
+            bookings: res.data.bookings,
+          });
+        }
+      })
+      .catch(() => {
+        setPageStats(DEFAULT_CATEGORY_STATS);
+        showDeduplicatedError('Failed to load category stats');
+      });
+    return () => abortController.abort();
+  }, [slug]);
 
   // Redirect legacy category URLs (e.g. /category/skincare → /category/skin-aesthetics)
   useEffect(() => {
@@ -199,7 +216,7 @@ const CategoryPage: React.FC = () => {
   const displayConfig = (category.metadata as any)?.displayConfig || {};
   const tagline = displayConfig.tagline || 'Premium services, handpicked by NILIN';
   const heroImage = CATEGORY_IMAGES[slug]?.hero || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1400&q=80&fit=crop';
-  const stats = CATEGORY_STATS[slug] || { services: 100, providers: 30, bookings: '1k+' };
+  const stats = pageStats;
   const popularSlugs = POPULAR_SUBCATEGORIES[slug] || [];
 
   return (

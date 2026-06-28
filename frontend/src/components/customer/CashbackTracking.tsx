@@ -209,6 +209,42 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
   };
 
   if (compact) {
+    if (loading) {
+      return (
+        <div className="bg-white rounded-2xl p-4 shadow-nilin-sm flex items-center justify-center min-h-[80px]" role="status" aria-live="polite">
+          <Loader2 className="w-5 h-5 text-nilin-coral animate-spin" />
+          <span className="sr-only">Loading cashback</span>
+        </div>
+      );
+    }
+
+    if (error) {
+      return (
+        <div className="bg-white rounded-2xl p-4 shadow-nilin-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-nilin-warning/20 flex items-center justify-center">
+                <Gift className="w-4 h-4 text-nilin-warning" />
+              </div>
+              <span className="font-medium text-nilin-charcoal">Cashback</span>
+            </div>
+            <button
+              onClick={() => fetchData(true)}
+              className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
+              disabled={refreshing}
+              aria-label="Refresh cashback"
+            >
+              <RefreshCw className={cn('w-4 h-4 text-nilin-warmGray', refreshing && 'animate-spin')} />
+            </button>
+          </div>
+          <div className="flex items-center gap-2 text-nilin-error">
+            <AlertTriangle className="w-4 h-4" />
+            <span className="text-sm">Unable to load</span>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="bg-white rounded-2xl p-4 shadow-nilin-sm">
         <div className="flex items-center justify-between mb-3">

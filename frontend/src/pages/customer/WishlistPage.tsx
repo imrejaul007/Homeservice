@@ -51,7 +51,7 @@ const WishlistPage: React.FC = () => {
         hasMore: response.data.pagination.hasMore,
         total: response.data.pagination.total,
       });
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to load wishlist');
     } finally {
       setIsLoading(false);
@@ -63,7 +63,7 @@ const WishlistPage: React.FC = () => {
       await wishlistApi.removeFromWishlist(packageId);
       setWishlist(prev => prev.filter(w => w.packageId !== packageId));
       toast.success('Package removed from wishlist');
-    } catch (err: any) {
+    } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to remove from wishlist');
     }
   };

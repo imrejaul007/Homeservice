@@ -1,19 +1,20 @@
 import React from 'react';
-import { CreditCard, Check, Banknote } from 'lucide-react';
+import { CreditCard, Check, Banknote, Wallet } from 'lucide-react';
 import { cn } from '../../../lib/utils';
-
-type PaymentMethod = 'apple_pay' | 'credit_card' | 'cash';
+import type { PaymentMethodType } from '../../../services/PaymentService';
 
 interface PaymentMethodSelectorProps {
-  selected: PaymentMethod;
-  onChange: (method: PaymentMethod) => void;
+  selected: PaymentMethodType;
+  onChange: (method: PaymentMethodType) => void;
+  walletBalance?: number | null;
+  showWallet?: boolean;
 }
 
 // Apple Pay SVG logo component
 const ApplePayLogo: React.FC<{ className?: string }> = ({ className }) => (
   <svg
     viewBox="0 0 50 20"
-    className={cn("w-12 h-8", className)}
+    className={cn('w-12 h-8', className)}
     aria-label="Apple Pay"
     role="img"
   >
@@ -26,29 +27,49 @@ const ApplePayLogo: React.FC<{ className?: string }> = ({ className }) => (
 
 const PaymentMethodSelector: React.FC<PaymentMethodSelectorProps> = ({
   selected,
-  onChange
+  onChange,
+  walletBalance = null,
+  showWallet = false,
 }) => {
-  const options: { value: PaymentMethod; label: string; icon: React.ReactNode; description?: string }[] = [
+  const options: {
+    value: PaymentMethodType;
+    label: string;
+    icon: React.ReactNode;
+    description?: string;
+    disabled?: boolean;
+  }[] = [
     {
       value: 'apple_pay',
       label: 'Apple Pay',
-      icon: (
-        <ApplePayLogo className="text-black" />
-      ),
-      description: 'Fast and secure'
+      icon: <ApplePayLogo className="text-black" />,
+      description: 'Fast and secure',
     },
     {
       value: 'credit_card',
       label: 'Credit / Debit Card',
       icon: <CreditCard className="w-6 h-6 text-gray-600" />,
-      description: 'Visa, Mastercard, etc.'
+      description: 'Visa, Mastercard, etc.',
     },
+    ...(showWallet
+      ? [
+          {
+            value: 'wallet' as const,
+            label: 'NILIN Wallet',
+            icon: <Wallet className="w-6 h-6 text-gray-600" />,
+            description:
+              walletBalance != null
+                ? `Balance: AED ${walletBalance.toFixed(2)}`
+                : 'Pay from your wallet balance',
+            disabled: walletBalance != null && walletBalance <= 0,
+          },
+        ]
+      : []),
     {
       value: 'cash',
       label: 'Cash on Delivery',
       icon: <Banknote className="w-6 h-6 text-gray-600" />,
-      description: 'Pay when service is completed'
-    }
+      description: 'Pay when service is completed',
+    },
   ];
 
   return (
@@ -59,25 +80,29 @@ const PaymentMethodSelector: React.FC<PaymentMethodSelectorProps> = ({
         return (
           <button
             key={option.value}
-            onClick={() => onChange(option.value)}
+            type="button"
+            onClick={() => !option.disabled && onChange(option.value)}
+            disabled={option.disabled}
             role="radio"
             aria-checked={isSelected}
             aria-label={`Select ${option.label} payment method`}
             className={cn(
-              "w-full flex items-center justify-between p-4 rounded-xl transition-all card-3d",
+              'w-full flex items-center justify-between p-4 rounded-xl transition-all card-3d',
+              option.disabled && 'opacity-50 cursor-not-allowed',
               isSelected
                 ? 'bg-gradient-to-br from-nilin-rose/10 to-nilin-coral/10 border-2 border-nilin-rose shadow-nilin-warm'
                 : 'glass border-2 border-nilin-border/30 hover:border-nilin-rose/50 hover:bg-nilin-blush/30'
-            )
-            }
+            )}
           >
             <div className="flex items-center gap-4">
               {option.icon}
               <div className="text-left">
-                <span className={cn(
-                  "font-medium",
-                  isSelected ? 'text-nilin-rose' : 'text-nilin-charcoal'
-                )}>
+                <span
+                  className={cn(
+                    'font-medium',
+                    isSelected ? 'text-nilin-rose' : 'text-nilin-charcoal'
+                  )}
+                >
                   {option.label}
                 </span>
                 {option.description && (

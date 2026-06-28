@@ -86,7 +86,7 @@ export const DEFAULT_PLATFORM_POLICY: PlatformPolicySnapshot = {
   instantBooking: false,
   maxBookingAdvanceDays: 30,
   minBookingAdvanceHours: 2,
-  maxDailyBookings: 5,
+  maxDailyBookings: 100, // Effectively unlimited for demo/development
   emailNotificationsEnabled: true,
   smsNotificationsEnabled: true,
   pushNotificationsEnabled: true,
@@ -145,7 +145,7 @@ export function mapSettingsToPolicy(settings: Partial<IPlatformSettings>): Platf
     instantBooking: Boolean(settings.instantBooking),
     maxBookingAdvanceDays: settings.maxBookingAdvanceDays ?? 30,
     minBookingAdvanceHours: settings.minBookingAdvanceHours ?? 2,
-    maxDailyBookings: settings.maxDailyBookings ?? 5,
+    maxDailyBookings: settings.maxDailyBookings ?? 100,
     emailNotificationsEnabled: settings.emailNotificationsEnabled !== false,
     smsNotificationsEnabled: settings.smsNotificationsEnabled !== false,
     pushNotificationsEnabled: settings.pushNotificationsEnabled !== false,

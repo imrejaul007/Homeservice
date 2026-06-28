@@ -8,6 +8,7 @@ const queryString = (value: unknown, fallback = ''): string =>
 import { ApiError } from '../../utils/ApiError';
 import { customerAnalyticsService, CustomerBookingFrequency, CustomerAOVTrend, CategoryDistribution, SeasonalPattern, CESData } from '../../services/customerAnalytics.service';
 import CESSubmission from '../../models/cesSubmission.model';
+import NPSSubmission from '../../models/npsSubmission.model';
 
 const router = Router();
 
@@ -73,7 +74,7 @@ router.get('/aov-trend', authenticate, asyncHandler(async (req: Request, res: Re
   const periodValue = validPeriods.includes(period) ? period : '90d';
 
   const data: CustomerAOVTrend = await customerAnalyticsService.getAOVTrend(
-    customerId,
+    customerId as string,
     periodValue
   );
 
@@ -290,6 +291,105 @@ router.get('/ces-history', authenticate, asyncHandler(async (req: Request, res: 
   res.json({
     success: true,
     data,
+  });
+}));
+
+/**
+ * @route   GET /api/analytics/customer/referral-attribution
+ * @desc    Get referral attribution analytics for the authenticated customer
+ * @access  Customer (own) or Admin
+ */
+router.get('/referral-attribution', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  if (user.role !== 'admin' && user.role !== 'customer') {
+    throw new ApiError(403, 'Not authorized to access this data');
+  }
+
+  const customerId = user.role === 'admin' ? req.query.customerId : user._id.toString();
+
+  if (!customerId) {
+    throw new ApiError(400, 'Customer ID is required');
+  }
+
+  const data = await customerAnalyticsService.getReferralAttribution(customerId as string);
+
+  res.json({
+    success: true,
+    data,
+  });
+}));
+
+/**
+ * @route   GET /api/analytics/customer/nps
+ * @desc    Get platform NPS statistics
+ * @access  Customer or Admin
+ */
+router.get('/nps', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  if (user.role !== 'admin' && user.role !== 'customer') {
+    throw new ApiError(403, 'Not authorized to access this data');
+  }
+
+  const stats = await NPSSubmission.getPlatformStats();
+
+  res.json({
+    success: true,
+    data: stats,
+  });
+}));
+
+/**
+ * @route   POST /api/analytics/customer/nps
+ * @desc    Submit an NPS survey response
+ * @access  Customer
+ */
+router.post('/nps', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { score, bookingId, feedback } = req.body;
+
+  if (user.role !== 'customer' && user.role !== 'admin') {
+    throw new ApiError(403, 'Only customers can submit NPS scores');
+  }
+
+  if (typeof score !== 'number' || score < 0 || score > 10) {
+    throw new ApiError(400, 'Score must be between 0 and 10');
+  }
+
+  if (feedback && feedback.length > 2000) {
+    throw new ApiError(400, 'Feedback cannot exceed 2000 characters');
+  }
+
+  if (bookingId) {
+    const existing = await NPSSubmission.findOne({
+      userId: user._id,
+      bookingId,
+    });
+    if (existing) {
+      throw new ApiError(409, 'NPS score already submitted for this booking');
+    }
+  }
+
+  const submission = await NPSSubmission.create({
+    userId: user._id,
+    bookingId: bookingId || undefined,
+    score,
+    feedback: feedback || undefined,
+    submittedAt: new Date(),
+  });
+
+  const stats = await NPSSubmission.getPlatformStats();
+
+  res.status(201).json({
+    success: true,
+    message: 'NPS score submitted successfully',
+    data: {
+      id: submission._id.toString(),
+      score: submission.score,
+      submittedAt: submission.submittedAt.toISOString(),
+      stats,
+    },
   });
 }));
 

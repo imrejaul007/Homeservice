@@ -24,20 +24,22 @@ export function usePageLoading() {
       clearTimeout(loadingTimeoutRef.current);
     }
 
-    // Show loading overlay immediately
     startLoading();
 
-    // Hide loading overlay after a minimum display time
-    // This ensures the animation is visible and page content has time to render
-    loadingTimeoutRef.current = setTimeout(() => {
-      stopLoading();
-    }, 400);
+    // Hide quickly after paint — cap at 150ms so overlay never blocks interaction
+    const rafId = requestAnimationFrame(() => {
+      loadingTimeoutRef.current = setTimeout(() => {
+        stopLoading();
+      }, 150);
+    });
 
     return () => {
+      cancelAnimationFrame(rafId);
       if (loadingTimeoutRef.current) {
         clearTimeout(loadingTimeoutRef.current);
       }
     };
+
   }, [location.pathname, startLoading, stopLoading]);
 }
 

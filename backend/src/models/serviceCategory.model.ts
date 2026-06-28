@@ -6,7 +6,9 @@ export interface IServiceCategory extends Document {
   description: string;
   icon: string;
   color?: string;
+  image?: string;
   imageUrl?: string;
+  thumbnail?: string;
   
   subcategories: Array<{
     _id?: mongoose.Types.ObjectId;
@@ -81,6 +83,7 @@ const serviceCategorySchema = new Schema<IServiceCategory>(
       type: String,
       match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Color must be a valid hex color']
     },
+    image: String,
     imageUrl: {
       type: String,
       validate: {
@@ -88,6 +91,7 @@ const serviceCategorySchema = new Schema<IServiceCategory>(
         message: 'Image URL must be a valid URL'
       }
     },
+    thumbnail: String,
     
     subcategories: [{
       name: {

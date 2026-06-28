@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
+import ProviderHubNav from '../../components/provider/ProviderHubNav';
 import { AvailabilityManager } from '../../components/booking';
 
 const ProviderAvailabilityPage: React.FC = () => {
@@ -12,12 +13,20 @@ const ProviderAvailabilityPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <ProviderHubNav />
+
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
 
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main-content" className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <button
             type="button"
@@ -34,7 +43,7 @@ const ProviderAvailabilityPage: React.FC = () => {
         </div>
 
         <AvailabilityManager />
-      </div>
+      </main>
 
       <Footer />
     </div>

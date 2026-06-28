@@ -5,8 +5,16 @@ import { SmsDLQ } from '../models/smsDlq.model';
 import { withRetry, retryConfigs, addToDeadLetterQueue } from '../utils/retry.util';
 import logger from '../utils/logger';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
-import { getTwilioTransportConfig } from './platformSmsTransport.service';
+import { getSmsTransportConfig, sendSmsViaMsg91, Msg91TransportConfig, TwilioTransportConfig, sendSms as sendSmsViaPlatform } from './platformSmsTransport.service';
 import { getPlatformPolicySync, isChannelEnabledByPlatform } from './platformSettingsPolicy.service';
+import { withCircuitBreaker, CIRCUIT_NAMES } from './circuitBreaker.service';
+
+type SmsCircuitResult = {
+  success: boolean;
+  messageSid?: string;
+  queued?: boolean;
+  error?: string;
+};
 
 // ============================================
 // Twilio Configuration
@@ -132,6 +140,7 @@ export class SmsService {
 
   /**
    * Send an SMS message with retry logic
+   * Supports both Twilio and MSG91 providers
    */
   async send(phoneNumber: string, message: string, metadata?: Record<string, any>): Promise<{ success: boolean; messageSid?: string; error?: string }> {
     if (!isChannelEnabledByPlatform('sms', getPlatformPolicySync())) {
@@ -142,14 +151,15 @@ export class SmsService {
       return { success: false, error: 'SMS notifications disabled' };
     }
 
-    const twilioRuntime = (await getTwilioTransportConfig()) ?? twilioConfig;
-    if (!twilioRuntime) {
-      logger.debug('Twilio not configured - skipping SMS', {
+    // Get the active SMS transport (Twilio or MSG91)
+    const transport = await getSmsTransportConfig();
+    if (!transport) {
+      logger.debug('SMS provider not configured - skipping SMS', {
         context: 'SmsService',
-        action: 'TWILIO_NOT_CONFIGURED',
+        action: 'SMS_NOT_CONFIGURED',
         phoneNumber: maskPhoneNumber(phoneNumber),
       });
-      return { success: false, error: 'Twilio not configured' };
+      return { success: false, error: 'SMS provider not configured' };
     }
 
     // Validate phone number format
@@ -174,49 +184,282 @@ export class SmsService {
       return { success: false, error: 'User has opted out of SMS' };
     }
 
-    const result = await withRetry(
+    // Route to the appropriate provider
+    if (transport.type === 'msg91') {
+      return this.sendViaMsg91(cleanedPhone, message, transport, metadata);
+    }
+
+    if (transport.type === 'vonage') {
+      return this.sendViaVonage(cleanedPhone, message, transport, metadata);
+    }
+
+    // Default: Twilio
+    return this.sendViaTwilio(cleanedPhone, message, transport, metadata);
+  }
+
+  /**
+   * Send SMS via Vonage with circuit breaker protection
+   */
+  private async sendViaVonage(
+    phoneNumber: string,
+    message: string,
+    transport: { type: 'vonage'; client: any; from: string },
+    metadata?: Record<string, any>
+  ): Promise<{ success: boolean; messageSid?: string; error?: string }> {
+    // Wrap with circuit breaker for resilience
+    const result = await withCircuitBreaker<SmsCircuitResult>(
+      CIRCUIT_NAMES.SMS,
       async () => {
-        const twilioMessage = await twilioRuntime.client.messages.create({
-          body: message,
-          from: twilioRuntime.phoneNumber,
-          to: cleanedPhone,
-          // Enable delivery status callbacks
-          statusCallback: `${process.env.API_BASE_URL || process.env.BASE_URL}/api/v1/webhooks/twilio/status`,
-        });
-        return twilioMessage.sid;
+        const sendResult = await withRetry(
+          async () => {
+            // The new Vonage SDK returns a Promise
+            const response = await transport.client.sms.send({
+              from: transport.from,
+              to: phoneNumber,
+              text: message,
+            });
+
+            const messages = Array.isArray(response) ? response : [response];
+            for (const msg of messages) {
+              if (msg.success) {
+                return { success: true, messageId: msg.messageId };
+              }
+            }
+            const lastMsg = messages[messages.length - 1];
+            throw new Error(lastMsg.error || 'Unknown error');
+          },
+          { ...retryConfigs.standard, maxAttempts: 3 }
+        );
+
+        if (sendResult.success) {
+          return {
+            success: true,
+            messageSid: sendResult.result?.messageId,
+          };
+        }
+
+        throw sendResult.error || new Error('Vonage SMS send failed');
       },
-      { ...retryConfigs.standard, maxAttempts: 3 }
+      // Fallback: queue to DLQ for later retry
+      async () => {
+        logger.warn('Vonage circuit open - queueing SMS to DLQ', {
+          phoneNumber: maskPhoneNumber(phoneNumber),
+          action: 'VONAGE_CIRCUIT_FALLBACK',
+        });
+
+        await addSmsToDeadLetterQueue(
+          phoneNumber,
+          message,
+          'Circuit breaker fallback - Vonage unavailable',
+          0,
+          { ...metadata, fallback: true }
+        );
+
+        return { success: true, queued: true };
+      }
     );
 
+    // Handle circuit breaker fallback response
+    if (result.queued) {
+      return { success: true, messageSid: undefined };
+    }
+
     if (!result.success) {
-      logger.error('Failed to send SMS after retries', {
+      const errorMsg = result.error || 'Unknown error';
+      logger.error('Failed to send SMS via Vonage after retries', {
         context: 'SmsService',
-        action: 'SMS_SEND_FAILED',
+        action: 'VONAGE_SMS_SEND_FAILED',
         phoneNumber: maskPhoneNumber(phoneNumber),
-        attempts: result.attempts,
-        error: result.error instanceof Error ? result.error.message : String(result.error),
+        error: errorMsg,
       });
 
-      // Add to MongoDB-backed DLQ for persistence
       await addSmsToDeadLetterQueue(
         phoneNumber,
         message,
-        result.error instanceof Error ? result.error.message : String(result.error),
-        result.attempts,
+        errorMsg,
+        3,
         metadata
       );
 
-      return { success: false, error: result.error instanceof Error ? result.error.message : 'SMS send failed' };
+      return { success: false, error: errorMsg };
     }
 
-    logger.debug('SMS sent successfully', {
+    logger.debug('SMS sent via Vonage', {
       context: 'SmsService',
-      action: 'SMS_SUCCESS',
+      action: 'VONAGE_SMS_SUCCESS',
       phoneNumber: maskPhoneNumber(phoneNumber),
-      messageSid: result.result,
+      messageSid: result.messageSid,
     });
 
-    return { success: true, messageSid: result.result };
+    return { success: true, messageSid: result.messageSid };
+  }
+
+  /**
+   * Send SMS via Twilio with circuit breaker protection
+   */
+  private async sendViaTwilio(
+    phoneNumber: string,
+    message: string,
+    transport: TwilioTransportConfig,
+    metadata?: Record<string, any>
+  ): Promise<{ success: boolean; messageSid?: string; error?: string }> {
+    // Wrap with circuit breaker for resilience
+    const result = await withCircuitBreaker<SmsCircuitResult>(
+      CIRCUIT_NAMES.TWILIO,
+      async () => {
+        const sendResult = await withRetry(
+          async () => {
+            const twilioMessage = await transport.client.messages.create({
+              body: message,
+              from: transport.phoneNumber,
+              to: phoneNumber,
+              // Enable delivery status callbacks
+              statusCallback: `${process.env.API_BASE_URL || process.env.BASE_URL}/api/v1/webhooks/twilio/status`,
+            });
+            return twilioMessage.sid;
+          },
+          { ...retryConfigs.standard, maxAttempts: 3 }
+        );
+
+        if (sendResult.success) {
+          return { success: true, messageSid: sendResult.result };
+        }
+
+        throw sendResult.error || new Error('Twilio SMS send failed');
+      },
+      // Fallback: queue to DLQ for later retry
+      async () => {
+        logger.warn('Twilio circuit open - queueing SMS to DLQ', {
+          phoneNumber: maskPhoneNumber(phoneNumber),
+          action: 'TWILIO_CIRCUIT_FALLBACK',
+        });
+
+        await addSmsToDeadLetterQueue(
+          phoneNumber,
+          message,
+          'Circuit breaker fallback - Twilio unavailable',
+          0,
+          { ...metadata, fallback: true }
+        );
+
+        return { success: true, queued: true };
+      }
+    );
+
+    // Handle circuit breaker fallback response
+    if (result.queued) {
+      return { success: true, messageSid: undefined };
+    }
+
+    if (!result.success) {
+      const errorMsg = result.error || 'Unknown error';
+      logger.error('Failed to send SMS via Twilio after retries', {
+        context: 'SmsService',
+        action: 'TWILIO_SMS_SEND_FAILED',
+        phoneNumber: maskPhoneNumber(phoneNumber),
+        error: errorMsg,
+      });
+
+      await addSmsToDeadLetterQueue(
+        phoneNumber,
+        message,
+        errorMsg,
+        3,
+        metadata
+      );
+
+      return { success: false, error: errorMsg };
+    }
+
+    logger.debug('SMS sent via Twilio', {
+      context: 'SmsService',
+      action: 'TWILIO_SMS_SUCCESS',
+      phoneNumber: maskPhoneNumber(phoneNumber),
+      messageSid: result.messageSid,
+    });
+
+    return { success: true, messageSid: result.messageSid };
+  }
+
+  /**
+   * Send SMS via MSG91 with circuit breaker protection
+   */
+  private async sendViaMsg91(
+    phoneNumber: string,
+    message: string,
+    transport: Msg91TransportConfig,
+    metadata?: Record<string, any>
+  ): Promise<{ success: boolean; messageSid?: string; error?: string }> {
+    // Wrap with circuit breaker for resilience
+    const result = await withCircuitBreaker<SmsCircuitResult>(
+      CIRCUIT_NAMES.MSG91,
+      async () => {
+        const sendResult = await withRetry(
+          async () => sendSmsViaMsg91(phoneNumber, message, transport),
+          { ...retryConfigs.standard, maxAttempts: 3 }
+        );
+
+        if (sendResult.success) {
+          return {
+            success: true,
+            messageSid: sendResult.result?.messageId,
+          };
+        }
+
+        throw sendResult.error || new Error('MSG91 SMS send failed');
+      },
+      // Fallback: queue to DLQ for later retry
+      async () => {
+        logger.warn('MSG91 circuit open - queueing SMS to DLQ', {
+          phoneNumber: maskPhoneNumber(phoneNumber),
+          action: 'MSG91_CIRCUIT_FALLBACK',
+        });
+
+        await addSmsToDeadLetterQueue(
+          phoneNumber,
+          message,
+          'Circuit breaker fallback - MSG91 unavailable',
+          0,
+          { ...metadata, fallback: true }
+        );
+
+        return { success: true, queued: true };
+      }
+    );
+
+    // Handle circuit breaker fallback response
+    if (result.queued) {
+      return { success: true, messageSid: undefined };
+    }
+
+    if (!result.success) {
+      const errorMsg = result.error || 'Unknown error';
+      logger.error('Failed to send SMS via MSG91 after retries', {
+        context: 'SmsService',
+        action: 'MSG91_SMS_SEND_FAILED',
+        phoneNumber: maskPhoneNumber(phoneNumber),
+        error: errorMsg,
+      });
+
+      await addSmsToDeadLetterQueue(
+        phoneNumber,
+        message,
+        errorMsg,
+        3,
+        metadata
+      );
+
+      return { success: false, error: errorMsg };
+    }
+
+    logger.debug('SMS sent via MSG91', {
+      context: 'SmsService',
+      action: 'MSG91_SMS_SUCCESS',
+      phoneNumber: maskPhoneNumber(phoneNumber),
+      messageId: result.messageSid,
+    });
+
+    return { success: true, messageSid: result.messageSid };
   }
 
   /**

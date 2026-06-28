@@ -423,6 +423,42 @@ function trackProcessedJobId(loyaltySystem: { processedJobIds?: string[] }, jobI
   }
 }
 
+const MAX_POINTS_HISTORY = 100;
+
+function pushLoyaltyHistoryEntry(
+  loyaltySystem: {
+    pointsHistory?: Array<{
+      amount: number;
+      type: string;
+      description: string;
+      date: Date;
+      expiresAt?: Date;
+      relatedBooking?: unknown;
+    }>;
+  },
+  amount: number,
+  type: 'earned' | 'bonus' | 'referral',
+  description: string,
+  bookingId?: string
+): void {
+  if (!loyaltySystem.pointsHistory) {
+    loyaltySystem.pointsHistory = [];
+  }
+  const expiresAt = new Date();
+  expiresAt.setMonth(expiresAt.getMonth() + 24);
+  loyaltySystem.pointsHistory.push({
+    amount,
+    type,
+    description,
+    date: new Date(),
+    expiresAt,
+    ...(bookingId ? { relatedBooking: bookingId } : {}),
+  });
+  if (loyaltySystem.pointsHistory.length > MAX_POINTS_HISTORY) {
+    loyaltySystem.pointsHistory = loyaltySystem.pointsHistory.slice(-MAX_POINTS_HISTORY);
+  }
+}
+
 /**
  * Process a loyalty action (helper function to avoid code duplication in transaction)
  */
@@ -440,6 +476,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       };
       user.loyaltySystem.coins += SIGNUP_BONUS;
       user.loyaltySystem.totalEarned += SIGNUP_BONUS;
+      pushLoyaltyHistoryEntry(user.loyaltySystem, SIGNUP_BONUS, 'bonus', 'Welcome signup bonus');
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
       trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
@@ -474,6 +511,13 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       };
       user.loyaltySystem.coins += points;
       user.loyaltySystem.totalEarned += points;
+      pushLoyaltyHistoryEntry(
+        user.loyaltySystem,
+        points,
+        'earned',
+        `Booking reward (${currentTier} tier ${tierMultiplier}x)`,
+        metadata?.bookingId as string | undefined
+      );
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
       trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
@@ -493,6 +537,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       };
       user.loyaltySystem.coins += REVIEW_BONUS;
       user.loyaltySystem.totalEarned += REVIEW_BONUS;
+      pushLoyaltyHistoryEntry(user.loyaltySystem, REVIEW_BONUS, 'bonus', 'Review submission bonus');
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
       trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
@@ -528,6 +573,14 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
         if (reward.status === 'pending') {
           user.loyaltySystem.coins += reward.amount;
           user.loyaltySystem.totalEarned += reward.amount;
+          const historyType = reward.type === 'referral_bonus' ? 'referral' : 'bonus';
+          const historyDescription =
+            reward.type === 'referral_bonus'
+              ? 'Referral welcome bonus'
+              : reward.type === 'welcome_bonus'
+                ? 'Welcome bonus'
+                : `${reward.type.replace(/_/g, ' ')} bonus`;
+          pushLoyaltyHistoryEntry(user.loyaltySystem, reward.amount, historyType, historyDescription);
           reward.status = 'awarded';
           reward.awardedAt = new Date();
           totalPendingAwarded += reward.amount;
@@ -548,6 +601,12 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
               };
               referrer.loyaltySystem.coins += REFERRER_BONUS;
               referrer.loyaltySystem.totalEarned += REFERRER_BONUS;
+              pushLoyaltyHistoryEntry(
+                referrer.loyaltySystem,
+                REFERRER_BONUS,
+                'referral',
+                'Referral bonus — friend completed first booking'
+              );
               referrer.loyaltySystem.tier = calculateTier(referrer.loyaltySystem.totalEarned);
               await referrer.save();
 
@@ -565,6 +624,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       if (!user.loyaltySystem.firstBookingAwarded) {
         user.loyaltySystem.coins += FIRST_BOOKING_BONUS;
         user.loyaltySystem.totalEarned += FIRST_BOOKING_BONUS;
+        pushLoyaltyHistoryEntry(user.loyaltySystem, FIRST_BOOKING_BONUS, 'bonus', 'First booking bonus');
         user.loyaltySystem.firstBookingAwarded = true;
         totalPendingAwarded += FIRST_BOOKING_BONUS;
         awardedRewards.push(`first_booking_bonus: ${FIRST_BOOKING_BONUS}`);

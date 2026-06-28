@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -15,15 +15,20 @@ import {
   MessageCircle,
   DollarSign,
   Home,
-  Briefcase
+  Briefcase,
+  CreditCard,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
+import { Skeleton } from '../../components/common/SkeletonLoader';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useToastActions } from '../../components/common/Toast';
 import { BookingChat } from '../../components/chat';
+import { showErrorToast, showSuccessToast, showWarningToast } from '../../lib/errorHandler';
 
 interface BookingDetailPageProps {
   isProvider?: boolean;
@@ -39,26 +44,55 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
     getBooking,
     acceptBooking,
     rejectBooking,
+    markBookingPaymentCompleted,
     completeBooking,
     startBooking,
     cancelBooking,
-    isLoading
+    isLoading,
+    errors
   } = useBookingStore();
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [cancelReason, setCancelReason] = useState('');
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const previousBookingRef = useRef<typeof currentBooking>(null);
 
-  useEffect(() => {
-    if (bookingId) {
-      getBooking(bookingId);
+  const fetchBooking = useCallback(async () => {
+    if (!bookingId) return;
+    setFetchError(null);
+    try {
+      await getBooking(bookingId);
+    } catch (err) {
+      const error = err as { message?: string; response?: { status?: number } };
+      const isNetworkError = !navigator.onLine || error.response?.status === 0;
+      if (isNetworkError) {
+        setFetchError('Connection error. Please check your internet connection.');
+      } else if (error.response?.status === 404) {
+        setFetchError('Booking not found. It may have been deleted.');
+      } else {
+        setFetchError(error.message || 'Failed to load booking details.');
+      }
     }
   }, [bookingId, getBooking]);
+
+  useEffect(() => {
+    fetchBooking();
+  }, [fetchBooking]);
 
   if (!user) {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
+        {/* Skip to main content link for accessibility */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+        >
+          Skip to main content
+        </a>
         <div className="flex-1 flex items-center justify-center">
           <p className="text-nilin-warmGray">Please log in to view booking details.</p>
         </div>
@@ -72,10 +106,10 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
     setActionLoading('accept');
     try {
       await acceptBooking(currentBooking._id);
-      toast.success('Booking accepted', 'The customer has been notified');
+      showSuccessToast('Booking accepted', 'The customer has been notified');
       await getBooking(currentBooking._id);
     } catch (error) {
-      toast.error('Failed to accept booking');
+      showErrorToast(error, 'Failed to accept booking');
     } finally {
       setActionLoading(null);
     }
@@ -83,19 +117,22 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
 
   const handleRejectBooking = async () => {
     if (!currentBooking) return;
+    setRejectReason('');
     setShowRejectModal(true);
   };
 
   const handleConfirmReject = async () => {
     if (!currentBooking) return;
+    const reason = rejectReason.trim() || 'Provider unavailable';
     setShowRejectModal(false);
     setActionLoading('reject');
+    setRejectReason('');
     try {
-      await rejectBooking(currentBooking._id, { reason: 'Provider unavailable' });
-      toast.warning('Booking rejected', 'The customer has been notified');
+      await rejectBooking(currentBooking._id, { reason });
+      showWarningToast('Booking rejected', 'The customer has been notified');
       await getBooking(currentBooking._id);
     } catch (error) {
-      toast.error('Failed to reject booking');
+      showErrorToast(error, 'Failed to reject booking');
     } finally {
       setActionLoading(null);
     }
@@ -106,10 +143,13 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
     setActionLoading('start');
     try {
       await startBooking(currentBooking._id);
-      toast.info('Service started', 'The service is now in progress');
+      toast('Service started', {
+        icon: 'ℹ️',
+        description: 'The service is now in progress',
+      });
       await getBooking(currentBooking._id);
     } catch (error) {
-      toast.error('Failed to start service');
+      showErrorToast(error, 'Failed to start service');
     } finally {
       setActionLoading(null);
     }
@@ -120,10 +160,26 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
     setActionLoading('complete');
     try {
       await completeBooking(currentBooking._id);
-      toast.success('Service completed', 'Thank you for your service');
+      showSuccessToast('Service completed', 'Thank you for your service');
       await getBooking(currentBooking._id);
     } catch (error) {
-      toast.error('Failed to complete booking');
+      showErrorToast(error, 'Failed to complete booking');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleMarkPaymentCompleted = async () => {
+    if (!currentBooking) return;
+    setActionLoading('payment');
+    try {
+      await markBookingPaymentCompleted(currentBooking._id, {
+        notes: 'Payment received by provider',
+      });
+      showSuccessToast('Payment marked as completed', 'You can now complete this booking');
+      await getBooking(currentBooking._id);
+    } catch (error) {
+      showErrorToast(error, 'Failed to mark payment as completed');
     } finally {
       setActionLoading(null);
     }
@@ -131,19 +187,22 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
 
   const handleCancelBooking = async () => {
     if (!currentBooking) return;
+    setCancelReason('');
     setShowCancelModal(true);
   };
 
   const handleConfirmCancel = async () => {
     if (!currentBooking) return;
+    const reason = cancelReason.trim() || 'Provider cancelled';
     setShowCancelModal(false);
     setActionLoading('cancel');
+    setCancelReason('');
     try {
-      await cancelBooking(currentBooking._id, { reason: 'Provider cancelled' });
-      toast.warning('Booking cancelled');
+      await cancelBooking(currentBooking._id, { reason });
+      showWarningToast('Booking cancelled');
       await getBooking(currentBooking._id);
     } catch (error) {
-      toast.error('Failed to cancel booking');
+      showErrorToast(error, 'Failed to cancel booking');
     } finally {
       setActionLoading(null);
     }
@@ -216,15 +275,140 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral"></div>
+        <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+        </div>
+        <div className="flex-1">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {/* Header skeleton */}
+            <div className="glass-nilin rounded-nilin-lg p-6 mb-6">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-4">
+                  <Skeleton className="w-16 h-16 rounded-full" />
+                  <div className="space-y-2">
+                    <Skeleton className="h-6 w-48" />
+                    <Skeleton className="h-4 w-32" />
+                  </div>
+                </div>
+                <Skeleton className="h-8 w-24 rounded-full" />
+              </div>
+            </div>
+
+            {/* Details skeleton */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <div className="glass-nilin rounded-nilin-lg p-6">
+                <Skeleton className="h-5 w-32 mb-4" />
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="w-4 h-4" />
+                    <Skeleton className="h-4 w-40" />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="w-4 h-4" />
+                    <Skeleton className="h-4 w-36" />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="w-4 h-4" />
+                    <Skeleton className="h-4 w-44" />
+                  </div>
+                </div>
+              </div>
+              <div className="glass-nilin rounded-nilin-lg p-6">
+                <Skeleton className="h-5 w-32 mb-4" />
+                <Skeleton className="h-20 w-full" />
+              </div>
+            </div>
+
+            {/* Actions skeleton */}
+            <div className="glass-nilin rounded-nilin-lg p-6">
+              <Skeleton className="h-5 w-40 mb-4" />
+              <div className="flex gap-3">
+                <Skeleton className="h-11 w-32 rounded-nilin" />
+                <Skeleton className="h-11 w-28 rounded-nilin" />
+              </div>
+            </div>
+          </div>
         </div>
         <Footer />
       </div>
     );
   }
 
-  if (!currentBooking) {
+  if (fetchError) {
+    return (
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
+        <NavigationHeader />
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="text-center max-w-md">
+            <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-nilin-charcoal mb-2">Unable to Load Booking</h2>
+            <p className="text-nilin-warmGray mb-6">{fetchError}</p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={fetchBooking}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-nilin-coral text-white font-semibold rounded-xl hover:bg-nilin-rose transition-colors shadow-nilin"
+              >
+                <RefreshCw className="h-5 w-5" />
+                Try Again
+              </button>
+              <button
+                onClick={() => navigate('/provider/bookings')}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-nilin-muted text-nilin-charcoal font-semibold rounded-xl hover:bg-nilin-blush transition-colors"
+              >
+                <ArrowLeft className="h-5 w-5" />
+                View All Bookings
+              </button>
+            </div>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Fallback: if store has errors but local fetchError was not set (e.g., upstream
+  // caller invoked getBooking without awaiting, or error was swallowed), surface the
+  // error UI so the page never appears to hang.
+  const storeErrorMessage =
+    !fetchError && !isLoading && !currentBooking && errors && errors.length > 0
+      ? errors[0]?.message || 'Failed to load booking details.'
+      : null;
+  if (storeErrorMessage) {
+    return (
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
+        <NavigationHeader />
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="text-center max-w-md">
+            <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-nilin-charcoal mb-2">Unable to Load Booking</h2>
+            <p className="text-nilin-warmGray mb-6">{storeErrorMessage}</p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={fetchBooking}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-nilin-coral text-white font-semibold rounded-xl hover:bg-nilin-rose transition-colors shadow-nilin"
+              >
+                <RefreshCw className="h-5 w-5" />
+                Try Again
+              </button>
+              <button
+                onClick={() => navigate('/provider/bookings')}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-nilin-muted text-nilin-charcoal font-semibold rounded-xl hover:bg-nilin-blush transition-colors"
+              >
+                <ArrowLeft className="h-5 w-5" />
+                View All Bookings
+              </button>
+            </div>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
+
+  if (!currentBooking && !fetchError) {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
@@ -299,6 +483,20 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {actionLoading ? 'Processing request...' : ''}
+        Booking status: {statusConfig[status].label}
+      </div>
+
       {/* Breadcrumb Navigation */}
       <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb
@@ -310,7 +508,7 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
         />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
           {/* Header */}
@@ -546,14 +744,27 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
               )}
 
               {currentBooking.status === 'in_progress' && (
-                <button
-                  onClick={handleCompleteBooking}
-                  disabled={actionLoading === 'complete'}
-                  className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-nilin font-semibold transition-colors shadow-nilin disabled:opacity-50"
-                >
-                  <CheckCircle className="h-5 w-5" />
-                  {actionLoading === 'complete' ? 'Completing...' : 'Complete Service'}
-                </button>
+                <>
+                  {currentBooking.paymentStatus !== 'completed' ? (
+                    <button
+                      onClick={handleMarkPaymentCompleted}
+                      disabled={actionLoading === 'payment'}
+                      className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-nilin font-semibold transition-colors shadow-nilin disabled:opacity-50"
+                    >
+                      <CreditCard className="h-5 w-5" />
+                      {actionLoading === 'payment' ? 'Updating Payment...' : 'Mark Payment Received'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleCompleteBooking}
+                      disabled={actionLoading === 'complete'}
+                      className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-nilin font-semibold transition-colors shadow-nilin disabled:opacity-50"
+                    >
+                      <CheckCircle className="h-5 w-5" />
+                      {actionLoading === 'complete' ? 'Completing...' : 'Complete Service'}
+                    </button>
+                  )}
+                </>
               )}
 
               {currentBooking.status === 'completed' && (
@@ -584,7 +795,7 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
             </div>
           </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
 
@@ -593,7 +804,20 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Reject Booking</h3>
-            <p className="text-nilin-warmGray mb-6">Are you sure you want to reject this booking? The customer will be notified.</p>
+            <p className="text-nilin-warmGray mb-4">Are you sure you want to reject this booking? The customer will be notified.</p>
+            <div className="mb-6">
+              <label htmlFor="reject-reason" className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Reason for rejection (optional)
+              </label>
+              <textarea
+                id="reject-reason"
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g., Provider unavailable, Scheduling conflict..."
+                rows={3}
+                className="w-full px-3 py-2 border border-nilin-border rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent resize-none text-nilin-charcoal placeholder:text-nilin-warmGray"
+              />
+            </div>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowRejectModal(false)}
@@ -617,7 +841,20 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Cancel Booking</h3>
-            <p className="text-nilin-warmGray mb-6">Are you sure you want to cancel this booking? The customer will be notified.</p>
+            <p className="text-nilin-warmGray mb-4">Are you sure you want to cancel this booking? The customer will be notified.</p>
+            <div className="mb-6">
+              <label htmlFor="cancel-reason" className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Reason for cancellation (optional)
+              </label>
+              <textarea
+                id="cancel-reason"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="e.g., Provider cancelled, Customer requested..."
+                rows={3}
+                className="w-full px-3 py-2 border border-nilin-border rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent resize-none text-nilin-charcoal placeholder:text-nilin-warmGray"
+              />
+            </div>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowCancelModal(false)}

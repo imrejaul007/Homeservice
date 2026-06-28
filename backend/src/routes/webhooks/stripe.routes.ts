@@ -4643,8 +4643,11 @@ const STRIPE_WEBHOOK_IPS = new Set([
   '2803:f800::'
 ]);
 
-// Allowlist mode flag (can be disabled for testing)
-const ENABLE_IP_ALLOWLIST = process.env.ENABLE_STRIPE_IP_ALLOWLIST !== 'false';
+// Allowlist mode flag - SECURITY FIX: Require explicit 'true' for production safety
+// In production, always enable unless explicitly disabled
+const ENABLE_IP_ALLOWLIST = process.env.NODE_ENV === 'production'
+  ? process.env.ENABLE_STRIPE_IP_ALLOWLIST !== 'false'
+  : process.env.ENABLE_STRIPE_IP_ALLOWLIST === 'true';
 
 /**
  * Middleware to check if request IP is in Stripe webhook allowlist

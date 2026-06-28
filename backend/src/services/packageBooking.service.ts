@@ -215,7 +215,10 @@ class PackageBookingService {
             }
           } catch (couponError) {
             // Log but don't fail the booking if coupon validation fails
-            console.error('Coupon validation error:', couponError);
+            logger.error('Coupon validation error', {
+              context: 'PackageBooking',
+              error: couponError instanceof Error ? couponError.message : String(couponError),
+            });
           }
         }
 

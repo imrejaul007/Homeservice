@@ -6,6 +6,7 @@ import Footer from '../components/layout/Footer';
 import Breadcrumb from '../components/common/Breadcrumb';
 import Button from '../components/common/Button';
 import { packageApi, normalizeFeatures, type ServicePackage, type PackageFilters } from '../services/packageApi';
+import { showDeduplicatedError } from '../utils/toastUtils';
 import { useCategories } from '../hooks/useCategories';
 
 /** Normalize API package payload for UI rendering */
@@ -175,6 +176,7 @@ const PackagesPage: React.FC = () => {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load packages';
       setError(message);
+      showDeduplicatedError('Failed to load packages', message);
     } finally {
       setIsLoading(false);
     }

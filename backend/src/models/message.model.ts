@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema, Model } from 'mongoose';
+import crypto from 'crypto';
 import logger from '../utils/logger';
 
 // =============================================================================
@@ -197,6 +198,10 @@ const messageSchema = new Schema<IMessage>(
 // Indexes for Performance
 // =============================================================================
 
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+messageSchema.index({ isDeleted: 1, status: 1 }); // Soft deleted messages by status
+messageSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted sorted by date
+
 // Primary query patterns
 messageSchema.index({ chatRoomId: 1, createdAt: -1 });
 messageSchema.index({ chatRoomId: 1, status: 1 });
@@ -205,9 +210,8 @@ messageSchema.index({ receiverId: 1, createdAt: -1 });
 
 // Compound indexes for common queries
 messageSchema.index({ chatRoomId: 1, senderId: 1, createdAt: -1 });
-messageSchema.index({ receiverId: 1, status: 1, isDeleted: 1 });
 
-// Unread count query optimization
+// Unread count query optimization - COMPOUND version (more comprehensive)
 messageSchema.index({ chatRoomId: 1, receiverId: 1, status: 1, isDeleted: 1 });
 
 // Soft delete cleanup
@@ -427,6 +431,84 @@ messageSchema.statics.getLastMessages = async function(
 };
 
 // =============================================================================
+// Message Encryption (At Rest)
+// FIX P1: Encrypt message content for sensitive data protection
+// =============================================================================
+
+// Encryption key from environment (32 bytes for AES-256-GCM)
+const getEncryptionKey = (): Buffer => {
+  const keyHex = process.env.MESSAGE_ENCRYPTION_KEY;
+  if (!keyHex) {
+    // Fallback to a derived key from JWT_SECRET for development
+    const secret = process.env.JWT_SECRET || process.env.CSRF_SECRET || 'default-dev-key';
+    return crypto.createHash('sha256').update(secret).digest();
+  }
+  return Buffer.from(keyHex, 'hex');
+};
+
+// Encrypt content using AES-256-GCM
+const encryptContent = (content: string): string => {
+  if (!content) return content;
+  try {
+    const key = getEncryptionKey();
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let encrypted = cipher.update(content, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag();
+    // Format: iv:authTag:encrypted
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  } catch (error) {
+    logger.error('Message encryption failed', {
+      context: 'MessageModel',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    return content; // Fallback to storing unencrypted
+  }
+};
+
+// Decrypt content using AES-256-GCM
+const decryptContent = (encryptedContent: string): string => {
+  if (!encryptedContent) return encryptedContent;
+  try {
+    const parts = encryptedContent.split(':');
+    if (parts.length !== 3) {
+      // Not encrypted format, return as-is for backward compatibility
+      return encryptedContent;
+    }
+    const [ivHex, authTagHex, encrypted] = parts;
+    const key = getEncryptionKey();
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (error) {
+    logger.error('Message decryption failed', {
+      context: 'MessageModel',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    return '[Message could not be decrypted]';
+  }
+};
+
+/**
+ * Basic content sanitization
+ */
+messageSchema.statics.sanitizeContent = function(content: string): string {
+  if (!content) return content;
+
+  return content
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '')
+    .trim();
+};
+
+// =============================================================================
 // Pre-save Middleware
 // =============================================================================
 
@@ -444,27 +526,22 @@ messageSchema.pre('save', function(next) {
     }
   }
 
-  // Sanitize content for XSS prevention
+  // FIX P1: Encrypt content before saving (only for text messages)
   if (this.isModified('content') && this.type === 'text') {
-    this.content = (this.constructor as unknown as { sanitizeContent(c: string): string }).sanitizeContent(this.content);
+    const sanitized = (this.constructor as unknown as { sanitizeContent(c: string): string }).sanitizeContent(this.content);
+    this.content = encryptContent(sanitized);
   }
 
   next();
 });
 
-/**
- * Basic content sanitization
- */
-messageSchema.statics.sanitizeContent = function(content: string): string {
-  if (!content) return content;
-
-  return content
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<[^>]*>/g, '')
-    .replace(/javascript:/gi, '')
-    .replace(/on\w+\s*=/gi, '')
-    .trim();
+// FIX P1: Add decryption on document hydration
+messageSchema.methods.getDecryptedContent = function(): string {
+  return decryptContent(this.content);
 };
+
+// Static method to decrypt content (for lean queries)
+messageSchema.statics.decryptContent = decryptContent;
 
 // =============================================================================
 // Post-save Hooks
@@ -491,8 +568,39 @@ messageSchema.post('save', async function(doc) {
 });
 
 // =============================================================================
-// Model Export
+// Pre-save Middleware
 // =============================================================================
+
+messageSchema.pre('save', function(next) {
+  // Set timestamps for status changes
+  if (this.isModified('status')) {
+    if (this.status === 'delivered' && !this.deliveredAt) {
+      this.deliveredAt = new Date();
+    }
+    if (this.status === 'read' && !this.readAt) {
+      this.readAt = new Date();
+      if (!this.deliveredAt) {
+        this.deliveredAt = new Date();
+      }
+    }
+  }
+
+  // FIX P1: Encrypt content before saving (only for text messages)
+  if (this.isModified('content') && this.type === 'text') {
+    const sanitized = (this.constructor as unknown as { sanitizeContent(c: string): string }).sanitizeContent(this.content);
+    this.content = encryptContent(sanitized);
+  }
+
+  next();
+});
+
+// FIX P1: Add decryption on document hydration
+messageSchema.methods.getDecryptedContent = function(): string {
+  return decryptContent(this.content);
+};
+
+// Static method to decrypt content (for lean queries)
+messageSchema.statics.decryptContent = decryptContent;
 
 const Message: Model<IMessage> = mongoose.model<IMessage>('Message', messageSchema);
 

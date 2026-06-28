@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   TrendingUp,
@@ -105,57 +106,11 @@ export const SupplyDemandRatio: React.FC<SupplyDemandRatioProps> = ({
       if (response.data?.success) {
         setData(response.data.data);
       } else {
-        // Mock data
-        setData({
-          overallRatio: 1.15,
-          balanceStatus: 'balanced',
-          totalProviders: 1247,
-          totalDemand: 1432,
-          categories: [
-            { categoryId: 'cat-1', categoryName: 'Cleaning', activeProviders: 342, activeCustomers: 456, ratio: 0.75, demandTrend: 12, supplyTrend: 5, avgWaitTime: 45, fulfillmentRate: 89 },
-            { categoryId: 'cat-2', categoryName: 'Plumbing', activeProviders: 189, activeCustomers: 234, ratio: 0.81, demandTrend: 8, supplyTrend: 3, avgWaitTime: 52, fulfillmentRate: 85 },
-            { categoryId: 'cat-3', categoryName: 'Electrical', activeProviders: 156, activeCustomers: 189, ratio: 0.83, demandTrend: 15, supplyTrend: 7, avgWaitTime: 38, fulfillmentRate: 92 },
-            { categoryId: 'cat-4', categoryName: 'Painting', activeProviders: 98, activeCustomers: 287, ratio: 0.34, demandTrend: 22, supplyTrend: 2, avgWaitTime: 120, fulfillmentRate: 62 },
-            { categoryId: 'cat-5', categoryName: 'Gardening', activeProviders: 145, activeCustomers: 134, ratio: 1.08, demandTrend: -3, supplyTrend: 8, avgWaitTime: 25, fulfillmentRate: 98 },
-            { categoryId: 'cat-6', categoryName: 'Moving', activeProviders: 78, activeCustomers: 132, ratio: 0.59, demandTrend: 18, supplyTrend: 4, avgWaitTime: 95, fulfillmentRate: 74 }
-          ],
-          timeSeries: [
-            { hour: '00:00', supply: 120, demand: 85, ratio: 1.41 },
-            { hour: '04:00', supply: 98, demand: 72, ratio: 1.36 },
-            { hour: '08:00', supply: 456, demand: 890, ratio: 0.51 },
-            { hour: '10:00', supply: 678, demand: 1120, ratio: 0.61 },
-            { hour: '12:00', supply: 789, demand: 1345, ratio: 0.59 },
-            { hour: '14:00', supply: 845, demand: 1234, ratio: 0.68 },
-            { hour: '16:00', supply: 812, demand: 1567, ratio: 0.52 },
-            { hour: '18:00', supply: 567, demand: 1876, ratio: 0.30 },
-            { hour: '20:00', supply: 345, demand: 1234, ratio: 0.28 },
-            { hour: '22:00', supply: 234, demand: 567, ratio: 0.41 }
-          ],
-          hourlyPattern: [
-            { hour: 0, supply: 120, demand: 85 },
-            { hour: 4, supply: 98, demand: 72 },
-            { hour: 8, supply: 456, demand: 890 },
-            { hour: 12, supply: 789, demand: 1345 },
-            { hour: 16, supply: 812, demand: 1567 },
-            { hour: 20, supply: 345, demand: 1234 }
-          ],
-          cityBreakdown: [
-            { city: 'Dubai', ratio: 1.08, providers: 567, demand: 623 },
-            { city: 'Abu Dhabi', ratio: 1.24, providers: 312, demand: 251 },
-            { city: 'Sharjah', ratio: 0.89, providers: 189, demand: 212 },
-            { city: 'Al Ain', ratio: 0.72, providers: 98, demand: 136 },
-            { city: 'Ajman', ratio: 0.65, providers: 81, demand: 125 }
-          ],
-          recommendations: [
-            'Recruit more painting service providers - high demand with low supply',
-            'Increase provider incentives during peak hours (16:00-20:00)',
-            'Focus recruitment in Al Ain and Ajman regions'
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching supply-demand data:', err);
-      setError('Failed to load supply-demand data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

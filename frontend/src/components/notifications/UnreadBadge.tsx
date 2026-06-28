@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Bell, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { notificationApi } from '../../services/notificationApi';
+import toast from 'react-hot-toast';
 
 interface UnreadBadgeProps {
   onClick: () => void;
@@ -51,7 +52,7 @@ export const UnreadBadge: React.FC<UnreadBadgeProps> = ({
       setCount(newCount);
       previousCountRef.current = newCount;
     } catch (error) {
-      // Silently fail, keep previous count
+      toast.error('Failed to load unread count');
     } finally {
       setIsLoading(false);
     }
@@ -167,7 +168,7 @@ export const UnreadBadgeCompact: React.FC<UnreadBadgeProps> = ({
         const response = await notificationApi.getUnreadCount();
         setCount(response.data.count);
       } catch (error) {
-        // Silently fail
+        toast.error('Failed to load unread count');
       } finally {
         setIsLoading(false);
       }
@@ -212,7 +213,7 @@ export const UnreadDot: React.FC<{
         const response = await notificationApi.getUnreadCount();
         setHasUnread(response.data.count > 0);
       } catch (error) {
-        // Silently fail
+        toast.error('Failed to load unread count');
       }
     };
 

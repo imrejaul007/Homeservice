@@ -1,3 +1,4 @@
+// Shared notification preference keys — keep in sync between NotificationSettings and ProfileNotifications.
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Bell,
@@ -91,9 +92,10 @@ const ProfileNotifications: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 gap-3" aria-busy="true">
+      <div className="flex flex-col items-center justify-center py-12 gap-3" aria-busy="true" role="status" aria-live="polite">
         <div className="w-10 h-10 border-2 border-nilin-coral border-t-transparent rounded-full animate-spin" />
         <p className="text-sm text-nilin-warmGray">Loading notification preferences...</p>
+        <span className="sr-only">Loading notification preferences...</span>
       </div>
     );
   }
@@ -256,7 +258,7 @@ const ProfileNotifications: React.FC = () => {
               {message.type === 'error' && (
                 <button
                   onClick={handleManualRetry}
-                  className="ml-2 text-sm underline hover:no-underline"
+                  className="ml-2 text-sm underline hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded"
                 >
                   Try again
                 </button>
@@ -265,11 +267,11 @@ const ProfileNotifications: React.FC = () => {
             {message.type === 'error' && (
               <button
                 onClick={handleManualRetry}
-                className="p-1 hover:bg-red-100 rounded transition-colors"
-                title="Retry"
+                className="w-11 h-11 flex items-center justify-center hover:bg-red-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                title="Retry loading preferences"
                 aria-label="Retry loading preferences"
               >
-                <RefreshCw className="w-4 h-4 text-red-600" />
+                <RefreshCw className="w-5 h-5 text-red-600" />
               </button>
             )}
           </div>
@@ -279,7 +281,7 @@ const ProfileNotifications: React.FC = () => {
       <button
         onClick={handleSave}
         disabled={isSaving || !isDirty}
-        className="btn-nilin w-full py-3 flex items-center justify-center gap-2 disabled:opacity-50"
+        className="btn-nilin w-full py-3 flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
       >
         {isSaving ? (
           <>
@@ -339,7 +341,7 @@ const NotificationToggle: React.FC<NotificationToggleProps> = ({
             onChange();
           }
         }}
-        className={`relative w-12 h-6 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-nilin-coral/40 focus:ring-offset-2 ${
+        className={`relative w-12 h-6 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
           checked ? 'bg-nilin-coral' : 'bg-gray-300'
         }`}
       >

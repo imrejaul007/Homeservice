@@ -3,6 +3,7 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import mongoose from 'mongoose';
+import Stripe from 'stripe';
 import logger from '../utils/logger';
 
 // Event Types
@@ -59,6 +60,7 @@ export const EVENT_TYPES = {
   REFUND_COMPLETED: 'refund.completed',
   REFUND_FAILED: 'refund.failed',
   REFUND_CANCELLED: 'refund.cancelled',
+  REFUND_ESCALATED: 'refund.escalated',
   CHARGEBACK_CREATED: 'chargeback.created',
 
   // Anomaly Detection events
@@ -214,6 +216,21 @@ export const EVENT_TYPES = {
 
   // Verified badge events
   VERIFIED_BADGE_PURCHASED: 'verified_badge.purchased',
+
+  // Admin notification events
+  ADMIN_NOTIFICATION: 'admin.notification',
+  ADMIN_DISPUTE_CREATED: 'admin.dispute_created',
+  ADMIN_REFUND_REQUESTED: 'admin.refund_requested',
+  ADMIN_PROVIDER_SUSPENDED: 'admin.provider_suspended',
+  ADMIN_SLA_VIOLATION: 'admin.sla_violation',
+  ADMIN_NEW_PROVIDER_SUBMISSION: 'admin.new_provider_submission',
+  ADMIN_NEW_SERVICE_PENDING: 'admin.new_service_pending',
+  ADMIN_NEW_WITHDRAWAL_REQUEST: 'admin.new_withdrawal_request',
+
+  // Dispute appeal events
+  DISPUTE_APPEAL_SUBMITTED: 'dispute.appeal_submitted',
+  DISPUTE_APPEAL_APPROVED: 'dispute.appeal_approved',
+  DISPUTE_APPEAL_REJECTED: 'dispute.appeal_rejected',
 } as const;
 
 export type EventType = typeof EVENT_TYPES[keyof typeof EVENT_TYPES];
@@ -927,6 +944,33 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       });
     }
   }, 5); // Lower priority - processed after other handlers
+
+  // ============================================
+  // Analytics Cache Invalidation
+  // Clear analytics cache when booking data changes
+  // ============================================
+  const invalidateAnalyticsCache = async () => {
+    try {
+      const { analyticsService } = await import('../services/analytics.service');
+      await analyticsService.clearCache();
+      logger.info('Analytics cache invalidated due to booking data change');
+    } catch (error) {
+      logger.error('Failed to invalidate analytics cache', { error });
+    }
+  };
+
+  // Listen to booking completion/cancellation for cache invalidation
+  eventBus.subscribe('booking.completed', async () => {
+    await invalidateAnalyticsCache();
+  }, 8);
+
+  eventBus.subscribe('booking.cancelled', async () => {
+    await invalidateAnalyticsCache();
+  }, 8);
+
+  eventBus.subscribe('booking.confirmed', async () => {
+    await invalidateAnalyticsCache();
+  }, 8);
 
   // ============================================
   // Notification Subscription
@@ -2005,6 +2049,256 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
         eventId: event.eventId,
         error: error instanceof Error ? error.message : String(error),
         action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // ============================================
+  // Stripe Payout Webhook Event Handlers
+  // These handlers update withdrawal (payout) status when Stripe reports payout completion/failure
+  // ============================================
+
+  // HIGH SEVERITY FIX: Handle payout.paid webhook - update withdrawal status to completed
+  eventBus.subscribe('payout.paid', async (event) => {
+    try {
+      const stripeEvent = event.data as Stripe.Event;
+      const payoutData = stripeEvent.data.object as Stripe.Payout;
+
+      logger.info('Processing payout.paid webhook', {
+        stripePayoutId: payoutData.id,
+        amount: payoutData.amount,
+        currency: payoutData.currency,
+        action: 'PAYOUT_PAID_WEBHOOK',
+      });
+
+      // Find the payout by Stripe payout ID
+      const Payout = mongoose.model('Payout');
+      const payout = await Payout.findOne({ stripePayoutId: payoutData.id });
+
+      if (!payout) {
+        logger.warn('Payout not found by Stripe payout ID - may be a direct Stripe payout', {
+          stripePayoutId: payoutData.id,
+          action: 'PAYOUT_NOT_FOUND_WEBHOOK',
+        });
+        return;
+      }
+
+      // Update payout status to completed
+      payout.status = 'completed';
+      payout.processedDate = new Date();
+      await payout.save();
+
+      logger.info('Withdrawal status updated to completed via Stripe webhook', {
+        payoutId: payout._id.toString(),
+        payoutNumber: payout.payoutNumber,
+        stripePayoutId: payoutData.id,
+        action: 'WITHDRAWAL_COMPLETED_WEBHOOK',
+      });
+
+      // Emit socket event for real-time update
+      socketEmitter.emitWithdrawalApproved(
+        payout.providerId.toString(),
+        payout._id.toString(),
+        payout.amount,
+        payout.currency || 'AED'
+      );
+
+      // Send notification to provider
+      await addJob('notification-queue', 'send_notification', {
+        userId: payout.providerId.toString(),
+        type: 'withdrawal_approved',
+        title: 'Payout Completed',
+        message: `Your payout of ${payout.amount} ${payout.currency} has been completed via bank transfer.`,
+        data: {
+          payoutId: payout._id.toString(),
+          payoutNumber: payout.payoutNumber,
+          stripePayoutId: payoutData.id,
+        },
+      });
+
+    } catch (error) {
+      logger.error('Failed to process payout.paid webhook', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'PAYOUT_PAID_WEBHOOK_ERROR',
+      });
+    }
+  }, 15);
+
+  // HIGH SEVERITY FIX: Handle payout.failed webhook - update withdrawal status to failed
+  eventBus.subscribe('payout.failed', async (event) => {
+    try {
+      const stripeEvent = event.data as Stripe.Event;
+      const payoutData = stripeEvent.data.object as Stripe.Payout;
+
+      logger.info('Processing payout.failed webhook', {
+        stripePayoutId: payoutData.id,
+        amount: payoutData.amount,
+        currency: payoutData.currency,
+        failureMessage: payoutData.failure_message,
+        action: 'PAYOUT_FAILED_WEBHOOK',
+      });
+
+      // Find the payout by Stripe payout ID
+      const Payout = mongoose.model('Payout');
+      const payout = await Payout.findOne({ stripePayoutId: payoutData.id });
+
+      if (!payout) {
+        logger.warn('Payout not found by Stripe payout ID - may be a direct Stripe payout', {
+          stripePayoutId: payoutData.id,
+          action: 'PAYOUT_NOT_FOUND_WEBHOOK',
+        });
+        return;
+      }
+
+      // Record failure
+      payout.currentRetryCount += 1;
+      payout.failures.push({
+        reason: payoutData.failure_message || 'Stripe payout failed',
+        errorCode: payoutData.failure_code || 'STRIPE_FAILED',
+        date: new Date(),
+        retryAttempt: payout.currentRetryCount,
+      });
+
+      // Check if we should mark as permanently failed or schedule retry
+      if (payout.currentRetryCount >= payout.maxRetries) {
+        payout.status = 'failed';
+        logger.info('Payout marked as permanently failed after max retries', {
+          payoutId: payout._id.toString(),
+          payoutNumber: payout.payoutNumber,
+          retryCount: payout.currentRetryCount,
+          action: 'PAYOUT_PERMANENTLY_FAILED',
+        });
+      } else {
+        // Schedule retry with exponential backoff
+        payout.status = 'failed';
+        const baseDelayHours = 24;
+        const delayMultiplier = Math.pow(2, payout.currentRetryCount - 1);
+        const nextRetry = new Date();
+        nextRetry.setHours(nextRetry.getHours() + baseDelayHours * delayMultiplier);
+        payout.nextRetryDate = nextRetry;
+
+        logger.info('Payout retry scheduled', {
+          payoutId: payout._id.toString(),
+          payoutNumber: payout.payoutNumber,
+          retryCount: payout.currentRetryCount,
+          nextRetryDate: nextRetry,
+          action: 'PAYOUT_RETRY_SCHEDULED',
+        });
+      }
+
+      await payout.save();
+
+      // Emit socket event for real-time update
+      socketEmitter.emitWithdrawalRejected(
+        payout.providerId.toString(),
+        payout._id.toString(),
+        payout.amount,
+        payout.currency || 'AED',
+        payoutData.failure_message || 'Payout processing failed'
+      );
+
+      // Send notification to provider
+      await addJob('notification-queue', 'send_notification', {
+        userId: payout.providerId.toString(),
+        type: 'withdrawal_rejected',
+        title: 'Payout Failed',
+        message: `Your payout of ${payout.amount} ${payout.currency} could not be processed. Reason: ${payoutData.failure_message || 'Stripe payout failed'}`,
+        data: {
+          payoutId: payout._id.toString(),
+          payoutNumber: payout.payoutNumber,
+          failureReason: payoutData.failure_message,
+          retryable: payout.currentRetryCount < payout.maxRetries,
+          nextRetryDate: payout.nextRetryDate,
+        },
+      });
+
+    } catch (error) {
+      logger.error('Failed to process payout.failed webhook', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'PAYOUT_FAILED_WEBHOOK_ERROR',
+      });
+    }
+  }, 15);
+
+  // HIGH SEVERITY FIX: Handle payout.canceled webhook - update withdrawal status to cancelled
+  eventBus.subscribe('payout.canceled', async (event) => {
+    try {
+      const stripeEvent = event.data as Stripe.Event;
+      const payoutData = stripeEvent.data.object as Stripe.Payout;
+
+      logger.info('Processing payout.canceled webhook', {
+        stripePayoutId: payoutData.id,
+        amount: payoutData.amount,
+        currency: payoutData.currency,
+        action: 'PAYOUT_CANCELED_WEBHOOK',
+      });
+
+      // Find the payout by Stripe payout ID
+      const Payout = mongoose.model('Payout');
+      const payout = await Payout.findOne({ stripePayoutId: payoutData.id });
+
+      if (!payout) {
+        logger.warn('Payout not found by Stripe payout ID - may be a direct Stripe payout', {
+          stripePayoutId: payoutData.id,
+          action: 'PAYOUT_NOT_FOUND_WEBHOOK',
+        });
+        return;
+      }
+
+      // Cancel the payout
+      payout.status = 'cancelled';
+      payout.notes = `Canceled by Stripe: ${payoutData.failure_message || 'No reason provided'}`;
+      await payout.save();
+
+      // Refund the amount back to available balance
+      const Wallet = mongoose.model('Wallet');
+      await Wallet.findOneAndUpdate(
+        { userId: payout.providerId },
+        {
+          $inc: {
+            balance: payout.amount,
+            pendingBalance: payout.amount,
+          },
+        }
+      );
+
+      logger.info('Payout canceled via Stripe webhook, amount refunded to balance', {
+        payoutId: payout._id.toString(),
+        payoutNumber: payout.payoutNumber,
+        stripePayoutId: payoutData.id,
+        amountRefunded: payout.amount,
+        action: 'PAYOUT_CANCELED_REFUNDED',
+      });
+
+      // Emit socket event for real-time update
+      socketEmitter.emitWithdrawalRejected(
+        payout.providerId.toString(),
+        payout._id.toString(),
+        payout.amount,
+        payout.currency || 'AED',
+        'Payout was canceled and amount has been returned to your balance'
+      );
+
+      // Send notification to provider
+      await addJob('notification-queue', 'send_notification', {
+        userId: payout.providerId.toString(),
+        type: 'withdrawal_rejected',
+        title: 'Payout Canceled',
+        message: `Your payout of ${payout.amount} ${payout.currency} was canceled and the amount has been returned to your balance.`,
+        data: {
+          payoutId: payout._id.toString(),
+          payoutNumber: payout.payoutNumber,
+          refundedAmount: payout.amount,
+        },
+      });
+
+    } catch (error) {
+      logger.error('Failed to process payout.canceled webhook', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'PAYOUT_CANCELED_WEBHOOK_ERROR',
       });
     }
   }, 15);

@@ -24,6 +24,9 @@ export interface LoyaltyStatus {
   totalSpent: number;
   tier: 'bronze' | 'silver' | 'gold' | 'platinum';
   streakDays: number;
+  longestStreak?: number;
+  lastCheckIn?: string | null;
+  totalCheckIns?: number;
   nextTier: 'bronze' | 'silver' | 'gold' | 'platinum' | null;
   progressToNext: number;
   pointsToNextTier: number;

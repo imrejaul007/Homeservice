@@ -1,11 +1,20 @@
 import { Router } from 'express';
-import authMiddleware from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { adminLimiter } from '../middleware/rateLimiter';
+import {
+  enforceAdminIpAllowlist,
+  enforcePlatformRequire2FA,
+} from '../middleware/platformSettings.middleware';
 import earningsController from '../controllers/earnings.controller';
 
 const router = Router();
 
 // All routes require authentication and admin role
-router.use(authMiddleware.authenticate);
+router.use(authenticate);
+router.use(requireRole('admin'));
+router.use(enforceAdminIpAllowlist);
+router.use(enforcePlatformRequire2FA);
+router.use(adminLimiter);
 
 // ============================================
 // COMMISSION RULE MANAGEMENT (ADMIN)

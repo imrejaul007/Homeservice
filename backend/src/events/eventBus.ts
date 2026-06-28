@@ -192,3 +192,6 @@ export const EventTypes = {
   OFFER_REDEEMED: 'offer.redeemed',
   OFFER_EXPIRED: 'offer.expired',
 } as const;
+
+// Alias for backward compatibility
+export const EVENT_TYPES = EventTypes;

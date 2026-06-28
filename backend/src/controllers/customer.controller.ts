@@ -1,13 +1,18 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import CustomerProfile from '../models/customerProfile.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { getStripe } from '../services/payment.service';
+import { ensureStripeCustomerId } from '../utils/stripeCustomer';
+
+const isStripePaymentMethodId = (id: string): boolean => id.startsWith('pm_');
 
 // ============================================
 // Addresses (with pagination)
 // ============================================
 
-const MAX_ADDRESSES_PAGE_SIZE = 50;
+const MAX_ADDRESSES_PAGE_SIZE = 100; // Consistent with other endpoints
 const DEFAULT_ADDRESSES_PAGE_SIZE = 20;
 
 export const getAddresses = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
@@ -125,6 +130,12 @@ export const updateAddress = asyncHandler(async (req: Request, res: Response) =>
   if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
 
   const { addressId } = req.params;
+
+  // Validate addressId is a valid ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(addressId)) {
+    throw new ApiError(400, 'Invalid address ID format');
+  }
+
   const updates = req.body;
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
@@ -176,6 +187,11 @@ export const deleteAddress = asyncHandler(async (req: Request, res: Response) =>
   if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
 
   const { addressId } = req.params;
+
+  // Validate addressId is a valid ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(addressId)) {
+    throw new ApiError(400, 'Invalid address ID format');
+  }
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
@@ -276,7 +292,6 @@ export const getPaymentMethods = asyncHandler(async (req: Request, res: Response
 export const addPaymentMethod = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
 
-  // Role validation
   if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
 
   const { type, token, isDefault } = req.body;
@@ -285,77 +300,139 @@ export const addPaymentMethod = asyncHandler(async (req: Request, res: Response)
     throw new ApiError(400, 'Type and token are required');
   }
 
-  let customerProfile = await CustomerProfile.findOne({ userId: user._id });
+  if (!isStripePaymentMethodId(token)) {
+    throw new ApiError(400, 'Invalid payment method token');
+  }
 
-  if (!customerProfile) {
-    customerProfile = new CustomerProfile({
-      userId: user._id,
-      paymentMethods: [],
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new ApiError(503, 'Payment service is not configured');
+  }
+
+  const stripe = getStripe();
+  const stripeCustomerId = await ensureStripeCustomerId(user._id);
+  if (!stripeCustomerId) {
+    throw new ApiError(503, 'Unable to create Stripe customer');
+  }
+
+  try {
+    await stripe.paymentMethods.attach(token, { customer: stripeCustomerId });
+  } catch (error: any) {
+    if (error?.code !== 'resource_already_attached') {
+      throw new ApiError(400, error?.message || 'Failed to attach payment method');
+    }
+  }
+
+  const stripeMethod = await stripe.paymentMethods.retrieve(token);
+  const shouldBeDefault = Boolean(isDefault);
+
+  if (shouldBeDefault) {
+    await stripe.customers.update(stripeCustomerId, {
+      invoice_settings: { default_payment_method: token },
     });
   }
 
-  // In a real implementation, you would verify the token with the payment provider
-  // For now, we'll create a mock payment method
-  const newPaymentMethod = {
-    _id: new (require('mongoose').Types.ObjectId)(),
+  let customerProfile = await CustomerProfile.findOne({ userId: user._id });
+  if (!customerProfile) {
+    customerProfile = new CustomerProfile({
+      userId: user._id,
+      stripeCustomerId,
+      paymentMethods: [],
+    });
+  } else if (!customerProfile.stripeCustomerId) {
+    customerProfile.stripeCustomerId = stripeCustomerId;
+  }
+
+  const existingIndex = customerProfile.paymentMethods.findIndex(
+    (pm: any) => pm.stripePaymentMethodId === token || pm._id?.toString() === token
+  );
+
+  const card = stripeMethod.card;
+  const paymentMethodPayload = {
+    stripePaymentMethodId: token,
     type,
-    last4: '4242', // Mock last 4 digits
-    brand: type === 'card' ? 'Visa' : type.replace('_', ' '),
-    expiryMonth: 12,
-    expiryYear: 2027,
-    isDefault: isDefault || customerProfile.paymentMethods.length === 0,
+    last4: card?.last4 || '****',
+    brand: card?.brand || (type === 'card' ? 'card' : type.replace('_', ' ')),
+    expiryMonth: card?.exp_month,
+    expiryYear: card?.exp_year,
+    isDefault: shouldBeDefault || customerProfile.paymentMethods.length === 0,
     isActive: true,
     createdAt: new Date(),
   };
 
-  // If this is default, unset other defaults
-  if (isDefault) {
-    customerProfile.paymentMethods.forEach(pm => {
+  if (shouldBeDefault) {
+    customerProfile.paymentMethods.forEach((pm: any) => {
       pm.isDefault = false;
     });
   }
 
-  customerProfile.paymentMethods.push(newPaymentMethod);
+  if (existingIndex >= 0) {
+    Object.assign(customerProfile.paymentMethods[existingIndex], paymentMethodPayload);
+  } else {
+    customerProfile.paymentMethods.push({
+      _id: new mongoose.Types.ObjectId(),
+      ...paymentMethodPayload,
+    } as any);
+  }
+
   await customerProfile.save();
+
+  const savedMethod = existingIndex >= 0
+    ? customerProfile.paymentMethods[existingIndex]
+    : customerProfile.paymentMethods[customerProfile.paymentMethods.length - 1];
 
   res.status(201).json({
     success: true,
     message: 'Payment method added successfully',
-    data: { paymentMethod: newPaymentMethod },
+    data: { paymentMethod: savedMethod },
   });
 });
 
 export const deletePaymentMethod = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
 
-  // Role validation
   if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
 
   const { paymentMethodId } = req.params;
 
+  if (!paymentMethodId) {
+    throw new ApiError(400, 'Payment method ID is required');
+  }
+
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
-  if (!customerProfile) {
+  if (isStripePaymentMethodId(paymentMethodId) && process.env.STRIPE_SECRET_KEY) {
+    const stripe = getStripe();
+    try {
+      await stripe.paymentMethods.detach(paymentMethodId);
+    } catch (error: any) {
+      if (error?.code !== 'resource_missing') {
+        throw new ApiError(400, error?.message || 'Failed to remove payment method');
+      }
+    }
+  }
+
+  if (customerProfile) {
+    const paymentMethodIndex = customerProfile.paymentMethods.findIndex(
+      (pm: any) =>
+        pm._id?.toString() === paymentMethodId ||
+        pm.stripePaymentMethodId === paymentMethodId
+    );
+
+    if (paymentMethodIndex !== -1) {
+      const wasDefault = customerProfile.paymentMethods[paymentMethodIndex].isDefault;
+      customerProfile.paymentMethods.splice(paymentMethodIndex, 1);
+
+      if (wasDefault && customerProfile.paymentMethods.length > 0) {
+        customerProfile.paymentMethods[0].isDefault = true;
+      }
+
+      await customerProfile.save();
+    } else if (!isStripePaymentMethodId(paymentMethodId)) {
+      throw new ApiError(404, 'Payment method not found');
+    }
+  } else if (!isStripePaymentMethodId(paymentMethodId)) {
     throw new ApiError(404, 'Customer profile not found');
   }
-
-  const paymentMethodIndex = customerProfile.paymentMethods.findIndex(
-    (pm: any) => pm._id.toString() === paymentMethodId
-  );
-
-  if (paymentMethodIndex === -1) {
-    throw new ApiError(404, 'Payment method not found');
-  }
-
-  const wasDefault = customerProfile.paymentMethods[paymentMethodIndex].isDefault;
-  customerProfile.paymentMethods.splice(paymentMethodIndex, 1);
-
-  // If deleted was default, set first as default
-  if (wasDefault && customerProfile.paymentMethods.length > 0) {
-    customerProfile.paymentMethods[0].isDefault = true;
-  }
-
-  await customerProfile.save();
 
   res.json({
     success: true,
@@ -366,36 +443,61 @@ export const deletePaymentMethod = asyncHandler(async (req: Request, res: Respon
 export const updatePaymentMethod = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
 
-  // Role validation
   if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
 
   const { paymentMethodId } = req.params;
   const updates = req.body;
 
+  if (!paymentMethodId) {
+    throw new ApiError(400, 'Payment method ID is required');
+  }
+
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
+  if (updates.isDefault && isStripePaymentMethodId(paymentMethodId) && process.env.STRIPE_SECRET_KEY) {
+    const stripeCustomerId = await ensureStripeCustomerId(user._id);
+    if (stripeCustomerId) {
+      const stripe = getStripe();
+      await stripe.customers.update(stripeCustomerId, {
+        invoice_settings: { default_payment_method: paymentMethodId },
+      });
+    }
+  }
+
   if (!customerProfile) {
+    if (isStripePaymentMethodId(paymentMethodId) && updates.isDefault) {
+      return res.json({
+        success: true,
+        message: 'Payment method updated successfully',
+        data: { paymentMethod: { id: paymentMethodId, isDefault: true } },
+      });
+    }
     throw new ApiError(404, 'Customer profile not found');
   }
 
   const paymentMethodIndex = customerProfile.paymentMethods.findIndex(
-    (pm: any) => pm._id.toString() === paymentMethodId
+    (pm: any) =>
+      pm._id?.toString() === paymentMethodId ||
+      pm.stripePaymentMethodId === paymentMethodId
   );
 
   if (paymentMethodIndex === -1) {
+    if (isStripePaymentMethodId(paymentMethodId) && updates.isDefault) {
+      return res.json({
+        success: true,
+        message: 'Payment method updated successfully',
+        data: { paymentMethod: { id: paymentMethodId, isDefault: true } },
+      });
+    }
     throw new ApiError(404, 'Payment method not found');
   }
 
-  // If setting as default, unset other defaults
   if (updates.isDefault) {
     customerProfile.paymentMethods.forEach((pm: any, idx: number) => {
-      if (idx !== paymentMethodIndex) {
-        pm.isDefault = false;
-      }
+      pm.isDefault = idx === paymentMethodIndex;
     });
   }
 
-  // Update payment method fields (prevent updating sensitive fields)
   const allowedFields = ['isDefault', 'nickname'];
   Object.keys(updates).forEach(key => {
     if (allowedFields.includes(key)) {
@@ -405,7 +507,7 @@ export const updatePaymentMethod = asyncHandler(async (req: Request, res: Respon
 
   await customerProfile.save();
 
-  res.json({
+  return res.json({
     success: true,
     message: 'Payment method updated successfully',
     data: { paymentMethod: customerProfile.paymentMethods[paymentMethodIndex] },

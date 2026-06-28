@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users,
@@ -91,68 +92,11 @@ export const CohortRetention: React.FC<CohortRetentionProps> = ({
         setCohorts(response.data.data.cohorts || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        const generateCohort = (name: string, date: string, size: number, decay: number) => {
-          const retention = [];
-          let retained = size;
-          for (let i = 0; i <= 6; i++) {
-            const churned = Math.round(size * (1 - Math.pow(1 - decay, i + 1)));
-            retained = size - churned;
-            retention.push({
-              period: i + 1,
-              periodLabel: i === 0 ? 'Week 1' : `Week ${i + 1}`,
-              retained,
-              retainedPercent: Math.round((retained / size) * 100),
-              churned
-            });
-          }
-          return {
-            cohortName: name,
-            cohortDate: date,
-            cohortSize: size,
-            retention,
-            finalRetention: Math.round((retained / size) * 100),
-            avgLifetime: Math.round(size * (1 / decay)),
-            ltv: Math.round(size * (1 / decay) * 150)
-          };
-        };
-
-        setCohorts([
-          generateCohort('Jan 2024', '2024-01-01', 1250, 0.08),
-          generateCohort('Feb 2024', '2024-02-01', 1380, 0.07),
-          generateCohort('Mar 2024', '2024-03-01', 1520, 0.065),
-          generateCohort('Apr 2024', '2024-04-01', 1450, 0.072),
-          generateCohort('May 2024', '2024-05-01', 1680, 0.068),
-          generateCohort('Jun 2024', '2024-06-01', 1720, 0.055)
-        ]);
-
-        setStats({
-          totalCohorts: 6,
-          avgRetentionRate: 68.5,
-          bestPerformingCohort: 'Jun 2024',
-          worstPerformingCohort: 'Jan 2024',
-          avgLifetimeValue: 285000,
-          retentionTrend: [
-            { month: 'Jan', rate: 62 },
-            { month: 'Feb', rate: 64 },
-            { month: 'Mar', rate: 66 },
-            { month: 'Apr', rate: 65 },
-            { month: 'May', rate: 68 },
-            { month: 'Jun', rate: 72 }
-          ],
-          cohortComparison: [
-            { cohort: 'Jan', d1: 78, d7: 65, d14: 58, d30: 52, d60: 45, d90: 42 },
-            { cohort: 'Feb', d1: 80, d7: 68, d14: 62, d30: 55, d60: 48, d90: 45 },
-            { cohort: 'Mar', d1: 82, d7: 70, d14: 64, d30: 58, d60: 52, d90: 48 },
-            { cohort: 'Apr', d1: 81, d7: 69, d14: 63, d30: 56, d60: 50, d90: 46 },
-            { cohort: 'May', d1: 83, d7: 72, d14: 66, d30: 60, d60: 54, d90: 50 },
-            { cohort: 'Jun', d1: 85, d7: 75, d14: 70, d30: 65, d60: 58, d90: 55 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching cohort data:', err);
-      setError('Failed to load cohort retention data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

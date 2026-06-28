@@ -2,8 +2,6 @@ import React from 'react';
 import {
   Building,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   MapPin,
   Star,
@@ -14,6 +12,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { ProviderWithUser } from '../../services/providerOpsApi';
+import { AdminPagination } from './AdminPagination';
 
 // ——— Display helpers ———
 
@@ -392,68 +391,17 @@ export const ProviderListPanel: React.FC<ProviderListPanelProps> = ({
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-nilin-border bg-nilin-cream/30 mt-auto">
-        <p className="text-sm text-nilin-warmGray">
-          {totalCount > 0 ? (
-            <>
-              Showing <span className="font-medium text-nilin-charcoal">{rangeStart}–{rangeEnd}</span> of{' '}
-              <span className="font-medium text-nilin-charcoal">{totalCount}</span>
-            </>
-          ) : (
-            'No results'
-          )}
-        </p>
-
-        {totalPages > 1 ? (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => onPageChange(currentPage - 1)}
-              disabled={currentPage === 1}
-              className="flex items-center justify-center w-9 h-9 text-sm font-medium text-nilin-charcoal bg-white border border-nilin-border rounded-lg hover:bg-nilin-blush/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              let pageNum: number;
-              if (totalPages <= 5) pageNum = i + 1;
-              else if (currentPage <= 3) pageNum = i + 1;
-              else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
-              else pageNum = currentPage - 2 + i;
-
-              return (
-                <button
-                  key={pageNum}
-                  type="button"
-                  onClick={() => onPageChange(pageNum)}
-                  className={cn(
-                    'w-9 h-9 text-sm font-medium rounded-lg transition-colors',
-                    currentPage === pageNum
-                      ? 'bg-nilin-coral text-white'
-                      : 'text-nilin-charcoal bg-white border border-nilin-border hover:bg-nilin-blush/30'
-                  )}
-                >
-                  {pageNum}
-                </button>
-              );
-            })}
-
-            <button
-              type="button"
-              onClick={() => onPageChange(currentPage + 1)}
-              disabled={currentPage === totalPages}
-              className="flex items-center gap-1 px-3 h-9 text-sm font-medium text-nilin-charcoal bg-white border border-nilin-border rounded-lg hover:bg-nilin-blush/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Next
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        ) : (
-          <span className="text-sm text-nilin-warmGray">Page 1 of 1</span>
-        )}
-      </div>
+      <AdminPagination
+        page={currentPage}
+        totalPages={totalPages}
+        total={totalCount}
+        pageSize={pageSize}
+        onPageChange={onPageChange}
+        showPageNumbers
+        showTotal
+        className="flex-wrap gap-3 px-4 py-3 border-t border-nilin-border bg-nilin-cream/30 mt-auto"
+        ariaLabel="Provider list pagination"
+      />
     </div>
   );
 };

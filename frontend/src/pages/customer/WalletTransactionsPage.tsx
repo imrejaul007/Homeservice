@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, Filter, TrendingUp, CreditCard, Gift } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -14,12 +14,20 @@ const WalletTransactionsPage: React.FC = () => {
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [filterChanging, setFilterChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<TransactionFilter>('all');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const fetchTransactions = useCallback(async (pageNum: number, append = false) => {
+    // Cancel any pending request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     if (pageNum === 1) {
       setLoading(true);
     } else {
@@ -42,12 +50,17 @@ const WalletTransactionsPage: React.FC = () => {
         setPage(pageNum);
       }
     } catch (err: unknown) {
+      // Ignore abort errors
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to load transactions';
       setError(message);
       toast.error(message);
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      setFilterChanging(false);
     }
   }, [filter]);
 
@@ -108,13 +121,17 @@ const WalletTransactionsPage: React.FC = () => {
             {(['all', 'credit', 'debit'] as TransactionFilter[]).map((value) => (
               <button
                 key={value}
-                onClick={() => setFilter(value)}
+                onClick={() => {
+                  setFilterChanging(true);
+                  setFilter(value);
+                }}
                 className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
                   filter === value
                     ? 'bg-nilin-coral text-white'
                     : 'bg-white text-nilin-charcoal hover:bg-nilin-blush'
                 }`}
                 aria-pressed={filter === value}
+                disabled={filterChanging}
               >
                 {value === 'all' ? t('wallet.tx_filter_all') : value === 'credit' ? t('wallet.tx_filter_credits') : t('wallet.tx_filter_debits')}
               </button>
@@ -147,7 +164,11 @@ const WalletTransactionsPage: React.FC = () => {
               <>
                 <div className="divide-y divide-gray-50">
                   {transactions.map((transaction) => (
-                    <div key={transaction.id} className="flex items-center justify-between p-4 hover:bg-nilin-blush/20 transition-colors">
+                    <div
+                      key={transaction.id}
+                      className="flex items-center justify-between p-4 hover:bg-nilin-blush/20 transition-colors"
+                      aria-label={`${transaction.type === 'credit' ? 'Credit' : 'Debit'} of AED ${transaction.amount.toFixed(2)} - ${transaction.description} - ${formatTransactionTime(transaction.createdAt)}`}
+                    >
                       <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div
                           className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${

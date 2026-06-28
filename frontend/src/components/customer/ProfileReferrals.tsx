@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   Gift,
-  Share2,
   Copy,
   Check,
   Users,
   Coins,
-  TrendingUp,
-  ChevronRight,
   Twitter,
   Facebook,
+  MessageCircle,
   Link as LinkIcon,
   AlertTriangle,
   RefreshCw,
@@ -53,16 +51,16 @@ const ProfileReferrals: React.FC = () => {
         api.get('/referrals/my-code'),
         api.get('/referrals/stats'),
       ]);
+      const code = codeRes.data.data.referralCode || codeRes.data.data.code || '';
       const transformedData: ReferralData = {
-        referralCode: codeRes.data.data.code,
-        referralUrl: `${window.location.origin}/invite/${codeRes.data.data.code}`,
+        referralCode: code,
+        referralUrl: codeRes.data.data.referralUrl || `${window.location.origin}/invite/${code}`,
         referrerReward: codeRes.data.data.referrerReward || 500,
         refereeReward: codeRes.data.data.refereeReward || 250,
       };
       setReferralData(transformedData);
       setStats(statsRes.data.data);
-    } catch (error) {
-      console.error('Failed to fetch referral data:', error);
+    } catch {
       setError('Unable to load referral data. Please try again.');
     } finally {
       setIsLoading(false);
@@ -77,8 +75,10 @@ const ProfileReferrals: React.FC = () => {
     }
   };
 
-  const handleShare = (platform: 'twitter' | 'facebook' | 'copy') => {
-    const shareText = `Join NILIN and get exclusive beauty services! Use my referral code: ${referralData?.referralCode}`;
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const handleShare = (platform: 'twitter' | 'facebook' | 'whatsapp' | 'copy') => {
+    const shareText = `Join NILIN and get exclusive home services! Use my referral code ${referralData?.referralCode} and we both earn coins!`;
     const shareUrl = referralData?.referralUrl || `${window.location.origin}/invite/${referralData?.referralCode}`;
 
     switch (platform) {
@@ -94,8 +94,17 @@ const ProfileReferrals: React.FC = () => {
           '_blank'
         );
         break;
+      case 'whatsapp':
+        window.open(
+          `https://wa.me/?text=${encodeURIComponent(`${shareText}\n${shareUrl}`)}`,
+          '_blank'
+        );
+        break;
       case 'copy':
-        handleCopyCode();
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          setLinkCopied(true);
+          setTimeout(() => setLinkCopied(false), 2000);
+        });
         break;
     }
   };
@@ -159,27 +168,36 @@ const ProfileReferrals: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <button
+            onClick={() => handleShare('whatsapp')}
+            className="py-3 rounded-nilin bg-[#25D366] text-white font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+          >
+            <MessageCircle className="w-5 h-5" />
+            WhatsApp
+          </button>
+          <button
+            onClick={() => handleShare('facebook')}
+            className="py-3 rounded-nilin bg-[#4267B2] text-white font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+          >
+            <Facebook className="w-5 h-5" />
+            Facebook
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => handleShare('twitter')}
-            className="flex-1 py-3 rounded-nilin bg-[#1DA1F2] text-white font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+            className="py-3 rounded-nilin bg-[#1DA1F2] text-white font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
           >
             <Twitter className="w-5 h-5" />
             Twitter
           </button>
           <button
-            onClick={() => handleShare('facebook')}
-            className="flex-1 py-3 rounded-nilin bg-[#4267B2] text-white font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
-          >
-            <Facebook className="w-5 h-5" />
-            Facebook
-          </button>
-          <button
             onClick={() => handleShare('copy')}
-            className="flex-1 py-3 rounded-nilin border border-nilin-border bg-white text-nilin-charcoal font-medium flex items-center justify-center gap-2 hover:bg-nilin-muted transition-colors"
+            className="py-3 rounded-nilin border border-nilin-border bg-white text-nilin-charcoal font-medium flex items-center justify-center gap-2 hover:bg-nilin-muted transition-colors"
           >
-            <LinkIcon className="w-5 h-5" />
-            Copy Link
+            {linkCopied ? <Check className="w-5 h-5 text-green-500" /> : <LinkIcon className="w-5 h-5" />}
+            {linkCopied ? 'Copied!' : 'Copy Link'}
           </button>
         </div>
       </div>

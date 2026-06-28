@@ -548,6 +548,6 @@ payoutSchema.pre('save', async function(next) {
   next();
 });
 
-const Payout = mongoose.model('Payout', payoutSchema) as any;
+const Payout = mongoose.model<IPayout, PayoutModel>('Payout', payoutSchema);
 
 export default Payout;

@@ -1,4 +1,5 @@
 ﻿import mongoose, { Document, Schema, Model } from 'mongoose';
+import logger from '../utils/logger';
 
 // ===================================
 // BOOKING COUNTER â€” atomic sequence generator
@@ -79,8 +80,8 @@ export interface IBooking extends Document {
     notes?: string; // Special location instructions
   };
 
-  // Booking Status Workflow
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show' | 'refunded';
+  // Booking Status Workflow (aligned with frontend and booking-status.ts value object)
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show' | 'refunded' | 'rejected';
   statusHistory: Array<{
     status: string;
     timestamp: Date;
@@ -198,10 +199,12 @@ export interface IBooking extends Document {
   updatedAt: Date;
   completedAt?: Date;
   cancelledAt?: Date;
+  cancellationReason?: string;
 
   // Soft Delete Fields (for audit trail)
   isDeleted?: boolean;
   deletedAt?: Date;
+  deletedBy?: mongoose.Types.ObjectId;
 
   // Virtual Properties
   customer?: any; // Will be populated from User
@@ -645,7 +648,26 @@ const bookingSchema = new Schema<IBooking>(
 
     // Audit Fields
     completedAt: Date,
-    cancelledAt: Date
+    cancelledAt: Date,
+    cancellationReason: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      // Only set when status is 'cancelled'
+    },
+
+    // FIX 1: Add missing isDeleted field to schema (already in interface at line 203)
+    // Soft delete for audit trail - prevents orphaned records
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    deletedAt: Date,
+    deletedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    }
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically
@@ -657,6 +679,21 @@ const bookingSchema = new Schema<IBooking>(
 // ===================================
 // INDEXES FOR PERFORMANCE OPTIMIZATION
 // ===================================
+
+// ===================================
+// CRITICAL INDEXES (DATABASE INTEGRITY FIXES)
+// ===================================
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+bookingSchema.index({ isDeleted: 1, status: 1 }); // Soft deleted bookings by status
+bookingSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted bookings sorted by date
+
+// FIX 12: Add missing compound indexes for common query patterns
+// User's bookings with status filter and date sorting
+bookingSchema.index({ customerId: 1, status: 1, createdAt: -1 });
+// Provider's services with status filter
+bookingSchema.index({ providerId: 1, status: 1 });
+// Category browsing with active filter
+bookingSchema.index({ category: 1, isActive: 1 });
 
 // Core booking queries (simple indexes already created by field-level index: true)
 // Compound indexes for common query patterns
@@ -812,24 +849,24 @@ bookingSchema.virtual('service', {
 });
 
 // Calculate total duration including potential buffer
-bookingSchema.virtual('totalDuration').get(function() {
+bookingSchema.virtual('totalDuration').get(function(this: any) {
   // Will be enhanced with service buffer time when service is populated
   return this.duration;
 });
 
 // Check if booking is currently active
-bookingSchema.virtual('isActive').get(function() {
+bookingSchema.virtual('isActive').get(function(this: any) {
   return !['completed', 'cancelled', 'no_show'].includes(this.status);
 });
 
 // Check if booking can be cancelled
-bookingSchema.virtual('canBeCancelled').get(function() {
+bookingSchema.virtual('canBeCancelled').get(function(this: any) {
   const now = new Date();
   return this.isActive && now < this.cancellationPolicy?.allowedUntil;
 });
 
 // Calculate time until service
-bookingSchema.virtual('timeUntilService').get(function() {
+bookingSchema.virtual('timeUntilService').get(function(this: any) {
   // Normalize to UTC to avoid timezone drift
   const nowUtc = new Date(Date.UTC(
     new Date().getUTCFullYear(),
@@ -880,7 +917,10 @@ bookingSchema.methods.generateBookingNumber = async function(): Promise<string> 
       }
     }
   } catch (error) {
-    console.log('Could not fetch provider initials, using default RZ');
+    logger.warn('Could not fetch provider initials, using default RZ', {
+      context: 'Booking',
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   // Atomic increment: findOneAndUpdate with $inc is atomic in MongoDB.
@@ -1007,7 +1047,12 @@ bookingSchema.methods.sendNotification = async function(
   recipient: 'customer' | 'provider' | 'both'
 ): Promise<void> {
   // This will be implemented when we create the notification service
-  console.log(`Sending ${type} notification to ${recipient} for booking ${this.bookingNumber}`);
+  logger.debug('Sending notification (placeholder)', {
+    context: 'Booking',
+    type,
+    recipient,
+    bookingNumber: this.bookingNumber,
+  });
 };
 
 // ===================================
@@ -1015,7 +1060,7 @@ bookingSchema.methods.sendNotification = async function(
 // ===================================
 
 // Authenticated bookings must not carry guestInfo (prevents guest-only validators firing)
-bookingSchema.pre('validate', function (next) {
+bookingSchema.pre('validate', function (this: any, next) {
   if (!this.isGuestBooking) {
     this.set('guestInfo', undefined);
   }
@@ -1023,7 +1068,7 @@ bookingSchema.pre('validate', function (next) {
 });
 
 // Generate booking number before first save
-bookingSchema.pre('save', async function(next) {
+bookingSchema.pre('save', async function(this: any, next) {
   if (this.isNew && !this.bookingNumber) {
     try {
       this.bookingNumber = await this.generateBookingNumber();
@@ -1046,7 +1091,7 @@ bookingSchema.pre('save', async function(next) {
 });
 
 // Update estimated end time when duration or scheduled time changes
-bookingSchema.pre('save', function(next) {
+bookingSchema.pre('save', function(this: any, next) {
   if (this.isModified('scheduledDate') || this.isModified('scheduledTime') || this.isModified('duration')) {
     const [hours, minutes] = this.scheduledTime.split(':').map(Number);
     const serviceStart = new Date(this.scheduledDate);
@@ -1056,6 +1101,104 @@ bookingSchema.pre('save', function(next) {
   }
 
   next();
+});
+
+// ===================================
+// POST-SAVE MIDDLEWARE (FIX 8: Denormalized Data Sync)
+// ===================================
+// FIX 8: Add Mongoose post-save middleware to sync denormalized counters
+// This ensures Provider.serviceCount, Provider.totalEarnings, Service.bookingCount stay accurate
+bookingSchema.post('save', async function(doc: any) {
+  try {
+    const User = mongoose.model('User');
+    const Service = mongoose.model('Service') as any;
+    const ProviderProfile = mongoose.model('ProviderProfile');
+
+    // Only sync on terminal states or when totalAmount changes
+    if (['completed', 'cancelled', 'refunded'].includes(doc.status) || doc.isModified('pricing.totalAmount')) {
+      // Update Service.bookingCount
+      if (doc.serviceId) {
+        await Service.updateBookingCount(doc.serviceId);
+      }
+
+      // Update Provider.bookingCount and Provider.totalEarnings
+      if (doc.providerId) {
+        const providerProfile = await ProviderProfile.findOne({ userId: doc.providerId });
+        if (providerProfile) {
+          // Count completed bookings for this provider
+          const completedBookings = await Booking.countDocuments({
+            providerId: doc.providerId,
+            status: 'completed',
+            isDeleted: { $ne: true }
+          });
+
+          // Sum total earnings for completed bookings
+          const earningsResult = await Booking.aggregate([
+            {
+              $match: {
+                providerId: doc.providerId,
+                status: 'completed',
+                isDeleted: { $ne: true }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: '$pricing.totalAmount' }
+              }
+            }
+          ]);
+
+          const totalEarnings = earningsResult[0]?.total || 0;
+
+          // Update provider profile denormalized counters
+          await ProviderProfile.updateOne(
+            { userId: doc.providerId },
+            {
+              $set: {
+                'analytics.bookingStats.totalBookings': completedBookings,
+                'analytics.revenue.totalEarnings': totalEarnings
+              }
+            }
+          );
+
+          // Also update User.bookingCount if exists
+          await User.updateOne(
+            { _id: doc.providerId },
+            { $set: { 'profile.bookingCount': completedBookings } }
+          );
+        }
+      }
+
+      // Update User.bookingCount (for customers)
+      if (doc.customerId && doc.status === 'completed') {
+        const customerBookings = await Booking.countDocuments({
+          customerId: doc.customerId,
+          status: 'completed',
+          isDeleted: { $ne: true }
+        });
+        await User.updateOne(
+          { _id: doc.customerId },
+          { $set: { 'profile.bookingCount': customerBookings } }
+        );
+      }
+    }
+
+    logger.debug('Denormalized counters synced after booking save', {
+      context: 'BookingModel',
+      action: 'DENORMALIZED_SYNC',
+      bookingId: (doc._id as any).toString(),
+      status: doc.status,
+    });
+  } catch (error) {
+    // Log but don't fail - denormalized sync is eventually consistent
+    logger.warn('Failed to sync denormalized counters after booking save', {
+      context: 'BookingModel',
+      action: 'DENORMALIZED_SYNC_ERROR',
+      bookingId: (doc._id as any).toString(),
+      error: (error as Error).message,
+    });
+  }
 });
 
 // ===================================
@@ -1070,7 +1213,7 @@ bookingSchema.statics.findByDateRange = function(startDate: Date, endDate: Date,
       $lte: endDate
     },
     ...filters
-  }).populate('customer provider service');
+  }).populate('customer provider service').lean();
 };
 
 // Find upcoming bookings for a provider
@@ -1083,7 +1226,8 @@ bookingSchema.statics.findUpcomingForProvider = function(providerId: string, lim
   })
   .sort({ scheduledDate: 1 })
   .limit(limit)
-  .populate('customer service');
+  .populate('customer service')
+  .lean();
 };
 
 // Find booking history for a customer
@@ -1091,7 +1235,8 @@ bookingSchema.statics.findHistoryForCustomer = function(customerId: string, limi
   return this.find({ customerId })
     .sort({ createdAt: -1 })
     .limit(limit)
-    .populate('provider service');
+    .populate('provider service')
+    .lean();
 };
 
 // Admin analytics queries

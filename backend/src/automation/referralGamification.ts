@@ -109,6 +109,9 @@ const referralGamificationSchema = new Schema<IReferralGamification>(
   { timestamps: true }
 );
 
+// FIX: Add compound index for common query pattern (trackReferralConversion)
+referralGamificationSchema.index({ referredUserId: 1, status: 1 });
+
 const achievementBadgeSchema = new Schema<IAchievementBadge>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -389,13 +392,16 @@ export async function trackReferralConversion(
  * Award referral rewards to both parties
  */
 async function awardReferralRewards(referral: IReferralGamification): Promise<void> {
+  const session = await mongoose.startSession();
   try {
+    session.startTransaction();
+
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30);
 
     // Award to referrer (use crypto for unpredictable codes)
     const referrerCouponCode = `REFER${randomBytes(8).toString('hex').toUpperCase()}`;
-    await Coupon.create({
+    await Coupon.create([{
       code: referrerCouponCode,
       type: CONFIG.referralReward.referrer.type,
       value: CONFIG.referralReward.referrer.value,
@@ -411,11 +417,11 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
       title: 'Referral Reward',
       description: `Thank you for referring a friend! Get ${CONFIG.referralReward.referrer.value}% off your next booking.`,
       createdBy: referral.referrerId,
-    });
+    }], { session });
 
     // Award to referred user
     const referredCouponCode = `WELCOME${randomBytes(8).toString('hex').toUpperCase()}`;
-    await Coupon.create({
+    await Coupon.create([{
       code: referredCouponCode,
       type: CONFIG.referralReward.referred.type,
       value: CONFIG.referralReward.referred.value,
@@ -431,7 +437,7 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
       title: 'Welcome Reward',
       description: `Welcome! Get ${CONFIG.referralReward.referred.value}% off your first booking.`,
       createdBy: referral.referredUserId,
-    });
+    }], { session });
 
     // Update referral record
     referral.status = 'rewarded';
@@ -441,9 +447,12 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
       ...referral.metadata,
       referrerBonusAwarded: true,
     };
-    await referral.save();
+    await referral.save({ session });
 
-    // Send notifications
+    // Commit transaction before sending notifications (non-critical)
+    await session.commitTransaction();
+
+    // Send notifications (non-critical, outside transaction)
     await addJob('notification-queue', 'send_notification', {
       userId: referral.referrerId.toString(),
       type: 'referral_reward',
@@ -466,11 +475,14 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
       referredId: referral.referredUserId.toString(),
     });
   } catch (error) {
+    await session.abortTransaction();
     logger.error('Failed to award referral rewards', {
       referralId: referral._id.toString(),
       error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw error;
+  } finally {
+    session.endSession();
   }
 }
 

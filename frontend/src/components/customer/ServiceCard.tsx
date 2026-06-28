@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Star, Clock, MapPin, TrendingUp, ChevronRight, Heart, Check, Eye, Bell } from 'lucide-react';
+import { Star, Clock, MapPin, TrendingUp, ChevronRight, Heart, Check, Eye, Bell, Sparkles } from 'lucide-react';
 import type { Service } from '../../types/service';
 import { useAuthStore } from '../../stores/authStore';
 import { favoritesApi } from '../../services/favoritesApi';
@@ -8,6 +8,7 @@ import { toast } from 'react-hot-toast';
 import { usePriceConversion, formatPrice } from '../../utils/priceConverter';
 import { useComparisonStore } from '../../stores/comparisonStore';
 import { useTilt3D } from '../../hooks/useTilt3D';
+import { formatDistance as formatDistanceKm } from '../../lib/utils';
 
 export type { Service };
 
@@ -94,8 +95,10 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   // The hook returns refs + inline styles + mouse handlers we spread onto
   // the default variant's outer wrapper and glow overlay.
   // Only enable on devices that support motion (motion-safe check)
+  // Disable for users who prefer reduced motion
   const supportsMotion = typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+    window.matchMedia('(prefers-reduced-motion: no-preference)').matches &&
+    !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const {
     cardRef: tiltCardRef,
     glowRef: tiltGlowRef,
@@ -147,23 +150,34 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     setIsToggling(true);
 
     try {
-      const providerId = service.provider?._id || (service as any).providerId;
-      if (!providerId) {
-        toast.error('Unable to favorite this service');
-        return;
-      }
-      if (isFavorited) {
-        await favoritesApi.removeFavorite(providerId);
-        setIsFavorited(false);
-        onFavoriteChange?.(false);
-        toast.success('Removed from favorites');
+      // If onFavorite callback is provided (from store), use it
+      if (onFavorite) {
+        const providerId = service.provider?._id || (service as any).providerId;
+        if (!providerId) {
+          toast.error('Unable to favorite this service');
+          return;
+        }
+        await onFavorite(providerId);
       } else {
-        await favoritesApi.addFavorite(providerId);
-        setIsFavorited(true);
-        onFavoriteChange?.(true);
-        toast.success('Added to favorites');
+        // Fall back to local API calls
+        const providerId = service.provider?._id || (service as any).providerId;
+        if (!providerId) {
+          toast.error('Unable to favorite this service');
+          return;
+        }
+        if (isFavorited) {
+          await favoritesApi.removeFavorite(providerId);
+          setIsFavorited(false);
+          onFavoriteChange?.(false);
+          toast.success('Removed from favorites');
+        } else {
+          await favoritesApi.addFavorite(providerId);
+          setIsFavorited(true);
+          onFavoriteChange?.(true);
+          toast.success('Added to favorites');
+        }
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to toggle favorite:', err);
       toast.error(err.response?.data?.message || 'Failed to update favorites. Please try again.');
     } finally {
@@ -187,6 +201,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     : (service.rating?.average || 0);
 
   const ratingCount = extractRatingCount(service);
+  const distance = typeof (service as any).distance === 'number' ? (service as any).distance : null;
+  const showDistanceLabel = showDistance && distance !== null && Number.isFinite(distance);
 
   // NILIN warm gradient backgrounds based on category
   const categoryGradients: Record<string, string> = {
@@ -207,14 +223,14 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     return (
       <button
         onClick={handleClick}
-        className="w-full text-left bg-white rounded-nilin border border-nilin-border overflow-hidden group cursor-pointer
+        className="w-full min-h-[180px] flex flex-col text-left bg-white rounded-nilin border border-nilin-border overflow-hidden group cursor-pointer
           transition-all duration-300 ease-out
           hover:shadow-nilin-warm hover:-translate-y-1
           active:scale-[0.98]
           focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
       >
         {/* Image Area */}
-        <div className={`relative h-28 ${gradientClass} overflow-hidden`}>
+        <div className={`relative h-28 ${gradientClass} overflow-hidden flex-shrink-0`}>
           {heroImage ? (
             <img
               src={heroImage}
@@ -223,7 +239,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center">
-              <span className="text-4xl opacity-40">✨</span>
+              <Sparkles className="w-8 h-8 text-nilin-blush opacity-60" />
             </div>
           )}
 
@@ -264,12 +280,12 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-4">
-          <h3 className="font-medium text-nilin-charcoal text-sm mb-1 line-clamp-1
+        <div className="p-4 flex flex-col flex-grow">
+          <h3 className="font-medium text-nilin-charcoal text-sm mb-1 line-clamp-1 truncate
             group-hover:text-nilin-rose transition-colors duration-300">
             {displayTitle}
           </h3>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mt-auto">
             <span className="text-lg font-bold text-nilin-charcoal">
               {format(displayPrice, currency)}
             </span>
@@ -288,14 +304,14 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); }}}
         tabIndex={0}
         role="button"
-        className="w-full text-left bg-white rounded-2xl border border-nilin-border overflow-hidden group cursor-pointer
+        className="w-full min-h-[520px] flex flex-col text-left bg-white rounded-2xl border border-nilin-border overflow-hidden group cursor-pointer
           transition-all duration-300 ease-out
           hover:shadow-[0_12px_40px_rgba(232,180,168,0.2)]
           hover:-translate-y-2
           focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
       >
         {/* Image Area */}
-        <div className={`relative h-56 ${gradientClass} overflow-hidden`}>
+        <div className={`relative h-56 ${gradientClass} overflow-hidden flex-shrink-0`}>
           {heroImage ? (
             <img
               src={heroImage}
@@ -304,7 +320,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center">
-              <span className="text-6xl opacity-40">✨</span>
+              <Sparkles className="w-12 h-12 text-nilin-blush opacity-60" />
             </div>
           )}
 
@@ -339,15 +355,15 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6">
+        <div className="p-6 flex flex-col flex-grow">
           {/* Category Tag */}
-          <span className="inline-block px-3 py-1 bg-nilin-muted text-nilin-warmGray text-xs font-medium rounded-lg mb-3">
+          <span className="inline-block px-3 py-1 bg-nilin-muted text-nilin-warmGray text-xs font-medium rounded-lg mb-3 w-fit">
             {service.category}
           </span>
 
           {/* Title */}
-          {/* N50: Featured variant title consistency - line-clamp-2 */}
-          <h3 className="font-semibold text-nilin-charcoal text-lg mb-2 line-clamp-2
+          {/* N50: Featured variant title consistency - line-clamp-1 for single line */}
+          <h3 className="font-semibold text-nilin-charcoal text-lg mb-2 line-clamp-1 truncate
             group-hover:text-nilin-rose transition-colors duration-300">
             {displayTitle}
           </h3>
@@ -355,26 +371,34 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           {/* Description */}
           {/* N49: line-clamp-2 consistency */}
           {service.description && (
-            <p className="text-sm text-nilin-warmGray mb-4 line-clamp-2">
+            <p className="text-sm text-nilin-warmGray mb-4 line-clamp-2 min-h-[2.5rem]">
               {service.description}
             </p>
           )}
 
           {/* Meta Info */}
-          <div className="flex items-center gap-5 text-sm text-nilin-warmGray mb-4">
+          <div className="flex items-center gap-5 text-sm text-nilin-warmGray mb-4 min-h-[1.5rem]">
             {service.duration && (
               <div className="flex items-center gap-1.5">
                 <Clock className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
                 <span>{service.duration} min</span>
               </div>
             )}
-            {service.provider?.location && (
+            {showDistanceLabel ? (
+              <div className="flex items-center gap-1.5">
+                <MapPin className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
+                <span className="truncate">{formatDistanceKm(distance)}</span>
+              </div>
+            ) : service.provider?.location && (
               <div className="flex items-center gap-1.5">
                 <MapPin className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
                 <span className="truncate">{service.provider.location}</span>
               </div>
             )}
           </div>
+
+          {/* Spacer to push footer to bottom */}
+          <div className="flex-grow" />
 
           {/* Price and CTA */}
           <div className="flex items-center justify-between pt-4 border-t border-nilin-border">
@@ -421,7 +445,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
       tabIndex={0}
       role="button"
       style={tiltCardStyle}
-      className="relative w-full text-left bg-white rounded-nilin border border-nilin-border group cursor-pointer
+      className="relative w-full min-h-[420px] flex flex-col text-left bg-white rounded-nilin border border-nilin-border group cursor-pointer
         hover:-translate-y-1 hover:shadow-nilin
         focus:outline-none focus:ring-2 focus:ring-nilin-coral/30
         motion-reduce:transition-none motion-reduce:hover:transform motion-reduce:hover:-translate-y-0 motion-reduce:hover:shadow-none"
@@ -444,14 +468,14 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <span className="text-5xl opacity-40">✨</span>
+            <Sparkles className="w-10 h-10 text-nilin-blush opacity-60" />
           </div>
         )}
 
         {/* Badges */}
         <div className="absolute top-3 left-4 flex gap-2">
           {service.isNew && (
-            <span className="bg-nilin-success text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
+            <span className="bg-nilin-coral text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
               NEW
             </span>
           )}
@@ -493,7 +517,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           onClick={handleToggleCompare}
           aria-label={isInComparison ? `Remove ${displayTitle} from comparison` : `Add ${displayTitle} to comparison`}
           aria-pressed={isInComparison}
-          className={`absolute bottom-3 right-3 w-7 h-7 rounded-full border-2 shadow-sm flex items-center justify-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1 z-10 ${
+          className={`absolute bottom-3 right-3 w-7 h-7 rounded-full border-2 shadow-sm flex items-center justify-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 z-10 ${
             isInComparison
               ? 'bg-nilin-coral border-nilin-coral text-white'
               : 'bg-white/90 border-nilin-border text-nilin-warmGray/40 hover:border-nilin-coral'
@@ -515,10 +539,10 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
                 e.stopPropagation();
                 onCheck?.(service._id);
               }}
-              aria-label={`Select ${displayTitle}`}
+              aria-label={`Select ${displayTitle} for comparison`}
               className="w-6 h-6 rounded border-2 border-white bg-white/90 shadow-sm cursor-pointer
                 checked:bg-nilin-coral checked:border-nilin-coral
-                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2
                 transition-all duration-200"
             />
           </div>
@@ -541,14 +565,14 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
       </div>
 
       {/* Content */}
-      <div className="p-4">
+      <div className="p-4 flex flex-col flex-grow">
         {/* Category Tag */}
-        <span className="inline-block px-2.5 py-1 bg-nilin-muted text-nilin-warmGray text-xs font-medium rounded-lg mb-2">
+        <span className="inline-block px-2.5 py-1 bg-nilin-muted text-nilin-warmGray text-xs font-medium rounded-lg mb-2 w-fit">
           {service.category}
         </span>
 
         {/* Title */}
-        <h3 className="font-semibold text-nilin-charcoal mb-2 line-clamp-2
+        <h3 className="font-semibold text-nilin-charcoal mb-2 line-clamp-1
           group-hover:text-nilin-rose transition-colors duration-300">
           {displayTitle}
         </h3>
@@ -561,20 +585,28 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         )}
 
         {/* Meta Info */}
-        <div className="flex items-center gap-4 text-sm text-nilin-warmGray mb-3">
+        <div className="flex items-center gap-4 text-sm text-nilin-warmGray mb-3 min-h-[1.5rem]">
           {service.duration && (
             <div className="flex items-center gap-1.5">
               <Clock className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
               <span>{service.duration} min</span>
             </div>
           )}
-          {service.provider?.location && (
+          {showDistanceLabel ? (
+            <div className="flex items-center gap-1.5">
+              <MapPin className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
+              <span className="truncate">{formatDistanceKm(distance)}</span>
+            </div>
+          ) : service.provider?.location && (
             <div className="flex items-center gap-1.5">
               <MapPin className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
               <span className="truncate">{service.provider.location}</span>
             </div>
           )}
         </div>
+
+        {/* Spacer to push footer to bottom */}
+        <div className="flex-grow" />
 
         {/* Price and Provider */}
         <div className="flex items-center justify-between pt-3 border-t border-nilin-border">

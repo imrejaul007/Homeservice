@@ -91,7 +91,7 @@ export const MessageBubble = memo(function MessageBubble({
   if (isSystemMessage) {
     return (
       <div className={cn('flex justify-center my-2', className)}>
-        <div className="px-3 py-1.5 rounded-full bg-gray-100 text-gray-500 text-xs">
+        <div className="px-3 py-1.5 rounded-full bg-[#F8F6F4] text-[#9B9B9B] text-xs">
           {message.content}
         </div>
       </div>
@@ -151,15 +151,16 @@ export const MessageBubble = memo(function MessageBubble({
       {/* Message bubble */}
       <div
         className={cn(
-          'relative px-3 py-2 rounded-2xl transition-all duration-200',
+          'relative px-3 py-2 rounded-2xl transition-all duration-200 transform',
           isOwnMessage
-            ? 'bg-gradient-to-br from-[#E8B4A8] to-[#D4948A] text-white rounded-br-sm'
-            : 'bg-gray-100 text-gray-800 rounded-bl-sm',
+            ? 'bg-gradient-to-br from-[#E8B4A8] to-[#D4948A] text-white rounded-br-sm hover:shadow-md'
+            : 'bg-gray-100 text-gray-800 rounded-bl-sm hover:shadow-sm',
           isFirst && isOwnMessage && 'rounded-tr-lg',
           isFirst && !isOwnMessage && 'rounded-tl-lg',
           isLast && isOwnMessage && 'rounded-br-lg',
           isLast && !isOwnMessage && 'rounded-bl-lg',
-          !isFirst && !isLast && 'rounded-lg'
+          !isFirst && !isLast && 'rounded-lg',
+          'hover:scale-[1.01] active:scale-[0.99]'
         )}
         onContextMenu={(e) => {
           e.preventDefault();

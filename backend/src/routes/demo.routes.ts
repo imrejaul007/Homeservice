@@ -1,13 +1,29 @@
 /**
  * Demo Routes
  *
- * Endpoints for investor demo functionality
+ * Endpoints for investor demo functionality (development/staging only).
  */
 
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import * as demoController from '../controllers/demo.controller';
 
 const router = Router();
+
+const blockInProduction = (_req: Request, res: Response, next: NextFunction) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      error: 'Not found',
+      message: 'Demo endpoints are disabled in production',
+    });
+  }
+  return next();
+};
+
+router.use(blockInProduction);
+router.use(authenticate);
+router.use(requireRole('admin'));
 
 // Demo configuration
 router.get('/config', demoController.getDemoConfig);

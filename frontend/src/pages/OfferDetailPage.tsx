@@ -6,6 +6,7 @@ import Breadcrumb from '../components/common/Breadcrumb';
 import { useAuthStore } from '../stores/authStore';
 import { offerService, type ServiceSummary } from '../services/offerService';
 import { toast } from 'react-hot-toast';
+import { showDeduplicatedError } from '../utils/toastUtils';
 import {
   Sparkles,
   Ticket,
@@ -125,8 +126,7 @@ const OfferDetailPage: React.FC = () => {
         // Claim status comes from offer payload (hasActiveClaim) when authenticated
       }
     } catch (error) {
-      console.error('Failed to load offer:', error);
-      toast.error('Failed to load offer details');
+      showDeduplicatedError('Failed to load offer details');
     } finally {
       setIsLoading(false);
     }
@@ -211,10 +211,10 @@ const OfferDetailPage: React.FC = () => {
           });
         }
       } else {
-        toast.error(result.message || 'Failed to claim offer');
+        showDeduplicatedError('Failed to claim offer', result.message || undefined);
       }
-    } catch (error: any) {
-      toast.error('Failed to claim offer: ' + (error?.message || 'Unknown error'));
+    } catch (error) {
+      showDeduplicatedError('Failed to claim offer', error instanceof Error ? error.message : 'Unknown error');
     } finally {
       setIsClaiming(false);
     }

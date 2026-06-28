@@ -3,25 +3,12 @@ import { motion } from 'framer-motion';
 import { Wallet, Plus, ArrowUpRight, ArrowDownLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { useWallet, useRefreshWallet, WalletTransaction, type WalletContext } from '../../services/marketplace/RevenueService';
 import { useTranslation } from '../../hooks/useTranslation';
+import { formatCurrency } from '../../utils/formatting';
 
-// Currency code to symbol mapping
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  AED: 'د.إ',
-  USD: '$',
-  EUR: '€',
-  GBP: '£',
-  INR: '₹',
-  SAR: '﷼',
-  QAR: '﷼',
-  KWD: 'د.ك',
-  BHD: '.د.ب',
-  OMR: 'ر.ع.',
-  CHF: 'CHF',
-  SGD: 'S$',
-};
-
-function getCurrencySymbol(currencyCode: string): string {
-  return CURRENCY_SYMBOLS[currencyCode] || currencyCode;
+// Format an amount with its currency code. AED uses "AED 100.00" to avoid
+// Arabic RTL symbol rendering issues in LTR layouts.
+function fmtAmount(amount: number, currency: string): string {
+  return formatCurrency(amount, currency || 'AED');
 }
 
 interface WalletBalanceProps {
@@ -63,11 +50,11 @@ export function WalletBalance({
           <div>
             <p className="text-xs text-white/60">Wallet</p>
             {error ? (
-              <p className="text-sm text-nilin-error" onClick={(e) => { e.stopPropagation(); refresh(); }}>
+              <button className="text-sm text-nilin-error" onClick={(e) => { e.stopPropagation(); refresh(); }}>
                 Tap to retry
-              </p>
+              </button>
             ) : (
-              <p className="text-lg font-bold">{getCurrencySymbol(wallet.currency)}{wallet.balance}</p>
+              <p className="text-lg font-bold">{fmtAmount(wallet.balance, wallet.currency)}</p>
             )}
           </div>
         </div>
@@ -94,7 +81,7 @@ export function WalletBalance({
             {error ? (
               <p className="text-3xl font-bold text-nilin-error">--</p>
             ) : (
-              <p className="text-3xl font-bold">{wallet ? `${getCurrencySymbol(wallet.currency)}${wallet.balance.toLocaleString()}` : '--'}</p>
+              <p className="text-3xl font-bold">{wallet ? fmtAmount(wallet.balance, wallet.currency) : '--'}</p>
             )}
           </div>
           <div className="flex gap-2">
@@ -112,11 +99,11 @@ export function WalletBalance({
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="bg-white/10 rounded-xl p-3">
             <p className="text-white/60 text-xs">{t('wallet.monthly_earnings')}</p>
-            <p className="text-lg font-bold text-nilin-success">+{getCurrencySymbol(wallet.currency)}{(wallet.monthlyEarnings ?? 0).toLocaleString()}</p>
+            <p className="text-lg font-bold text-nilin-success">+{fmtAmount(wallet.monthlyEarnings ?? 0, wallet.currency)}</p>
           </div>
           <div className="bg-white/10 rounded-xl p-3">
             <p className="text-white/60 text-xs">{t('wallet.pending_balance')}</p>
-            <p className="text-lg font-bold text-nilin-warning">{getCurrencySymbol(wallet.currency)}{(wallet.pendingCredits ?? 0).toLocaleString()}</p>
+            <p className="text-lg font-bold text-nilin-warning">{fmtAmount(wallet.pendingCredits ?? 0, wallet.currency)}</p>
           </div>
         </div>
 
@@ -148,7 +135,7 @@ export function WalletBalance({
                 </div>
               </div>
               <span className={`font-medium tabular-nums ${transaction.type === 'credit' ? 'text-nilin-success' : 'text-nilin-error'}`}>
-                {transaction.type === 'credit' ? '+' : '−'}{getCurrencySymbol(wallet.currency)}{transaction.amount}
+                {transaction.type === 'credit' ? '+' : '−'}{fmtAmount(transaction.amount, wallet.currency)}
               </span>
             </div>
           ))}

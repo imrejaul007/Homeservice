@@ -72,6 +72,27 @@ const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
   ],
 };
 
+// GET /admin/rbac/roles/stats - User counts per role (read-only viewer)
+router.get('/roles/stats', asyncHandler(async (_req: Request, res: Response) => {
+  const User = (await import('../models/user.model')).default;
+  const counts = await User.aggregate([
+    { $group: { _id: '$role', userCount: { $sum: 1 } } },
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      stats: counts.map((row: { _id: string; userCount: number }) => ({
+        role: row._id,
+        userCount: row.userCount,
+        isSystem: true,
+        isActive: true,
+        permissionCount: ROLE_PERMISSIONS[row._id as RoleName]?.length ?? 0,
+      })),
+    },
+  });
+}));
+
 // GET /admin/rbac/roles - List all available roles
 router.get('/roles', asyncHandler(async (req: Request, res: Response) => {
   const roles = AVAILABLE_ROLES.map(role => ({

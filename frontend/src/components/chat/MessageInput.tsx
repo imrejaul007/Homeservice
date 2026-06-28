@@ -196,7 +196,8 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                 <button
                   type="button"
                   onClick={() => removeAttachment(index)}
-                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center transition-colors"
+                  className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E8B4A8] focus-visible:ring-offset-2"
+                  aria-label="Remove attachment"
                 >
                   <svg className="w-3 h-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -215,10 +216,11 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             onClick={handleAttachClick}
             disabled={disabled || isSending}
             className={cn(
-              'flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-colors',
+              'flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center transition-colors',
               'text-gray-500 hover:text-gray-700 hover:bg-gray-100',
               'disabled:opacity-50 disabled:cursor-not-allowed',
-              isFocused && 'bg-gray-100'
+              isFocused && 'bg-gray-100',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E8B4A8] focus-visible:ring-offset-2'
             )}
             aria-label="Attach file"
           >
@@ -277,10 +279,11 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             onClick={handleSend}
             disabled={disabled || isSending || (!message.trim() && attachments.length === 0)}
             className={cn(
-              'flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200',
+              'flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200',
               (message.trim() || attachments.length > 0)
                 ? 'bg-gradient-to-br from-[#E8B4A8] to-[#D4948A] text-white shadow-md hover:shadow-lg hover:scale-105 active:scale-95'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E8B4A8] focus-visible:ring-offset-2'
             )}
             aria-label="Send message"
           >

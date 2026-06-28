@@ -72,20 +72,51 @@ export const ProviderCardSkeleton: React.FC = () => (
   </div>
 );
 
-// Booking Card Skeleton
+// Booking Card Skeleton - matches actual BookingCard layout
 export const BookingCardSkeleton: React.FC = () => (
-  <div className="bg-white rounded-2xl p-4 shadow-sm border border-nilin-blush/20">
-    <div className="flex justify-between items-start mb-3">
-      <div>
-        <Skeleton className="w-40 h-5 mb-2" />
+  <div className="bg-white rounded-nilin border border-nilin-border overflow-hidden">
+    {/* Header with Status */}
+    <div className="p-4 border-b border-nilin-border flex items-start justify-between">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <Skeleton className="w-40 h-5" />
+          <Skeleton className="w-16 h-5 rounded-nilin-sm" />
+        </div>
         <Skeleton className="w-32 h-4" />
       </div>
       <Skeleton className="w-20 h-6 rounded-full" />
     </div>
-    <Skeleton className="w-full h-px mb-3" />
-    <div className="flex justify-between">
-      <Skeleton className="w-24 h-4" />
-      <Skeleton className="w-20 h-8 rounded-lg" />
+    {/* Booking Details Grid */}
+    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {/* Date & Time */}
+      <div className="flex items-start gap-3">
+        <Skeleton className="w-10 h-10 rounded-lg shrink-0" />
+        <div className="flex-1">
+          <Skeleton className="w-20 h-3 mb-1" />
+          <Skeleton className="w-28 h-4 mb-1" />
+          <Skeleton className="w-16 h-3" />
+        </div>
+      </div>
+      {/* Provider */}
+      <div className="flex items-start gap-3">
+        <Skeleton className="w-10 h-10 rounded-lg shrink-0" />
+        <div className="flex-1">
+          <Skeleton className="w-20 h-3 mb-1" />
+          <Skeleton className="w-32 h-4 mb-1" />
+          <Skeleton className="w-24 h-3" />
+        </div>
+      </div>
+    </div>
+    {/* Footer with Price and Actions */}
+    <div className="p-4 bg-nilin-muted border-t border-nilin-border flex items-center justify-between">
+      <div>
+        <Skeleton className="w-20 h-3 mb-1" />
+        <Skeleton className="w-24 h-6" />
+      </div>
+      <div className="flex gap-2">
+        <Skeleton className="w-16 h-9 rounded-nilin" />
+        <Skeleton className="w-20 h-9 rounded-nilin" />
+      </div>
     </div>
   </div>
 );

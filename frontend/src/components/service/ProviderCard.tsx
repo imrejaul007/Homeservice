@@ -81,9 +81,18 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   const avatarColor = getAvatarColor(displayName);
 
   return (
-    <div
+    <article
       onClick={onClick}
-      className="bg-white rounded-2xl border border-gray-100 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 cursor-pointer group overflow-hidden"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`${displayName}${provider.isVerified ? ', verified provider' : ''}, ${tierConfig.label} tier, ${rating > 0 ? `${rating.toFixed(1)} stars, ${reviewCount} reviews` : 'new on platform'}, starting at ${currency} ${minPrice}. Click to view details`}
+      className="bg-white rounded-2xl border border-gray-100 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 cursor-pointer group overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
     >
       <div className="p-5">
         {/* Top row: Avatar + info */}
@@ -93,7 +102,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             {provider.profilePhoto ? (
               <img
                 src={provider.profilePhoto}
-                alt={displayName}
+                alt={`${displayName}'s profile photo`}
                 className="w-16 h-16 rounded-2xl object-cover"
               />
             ) : (
@@ -102,7 +111,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
               </div>
             )}
             {provider.isVerified && (
-              <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-white">
+              <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-white" aria-label="Verified provider">
                 <BadgeCheck className="w-3 h-3 text-white" />
               </div>
             )}
@@ -123,8 +132,8 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             <div className="flex items-center gap-2 mb-2">
               {rating > 0 ? (
                 <>
-                  <div className="flex items-center gap-1">
-                    <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                  <div className="flex items-center gap-1" aria-label={`${rating.toFixed(1)} out of 5 stars`}>
+                    <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" aria-hidden="true" />
                     <span className="font-semibold text-gray-900 text-sm">{rating.toFixed(1)}</span>
                   </div>
                   {reviewCount > 0 && (
@@ -154,14 +163,14 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
               e.stopPropagation();
               onViewProfile();
             }}
-            className="flex items-center gap-1 px-4 py-2 bg-nilin-primary/10 text-nilin-primary rounded-full text-sm font-semibold hover:bg-nilin-primary hover:text-white transition-all"
+            className="flex items-center gap-1 px-4 py-2 bg-nilin-primary/10 text-nilin-primary rounded-full text-sm font-semibold hover:bg-nilin-primary hover:text-white transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
           >
             View Profile
-            <ChevronRight className="w-3.5 h-3.5" />
+            <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
       </div>
-    </div>
+    </article>
   );
 };
 

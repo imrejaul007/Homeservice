@@ -4,6 +4,7 @@ import { exportPrometheusMetrics, getPrometheusContentType } from '../monitoring
 import { aiService } from '../services/ai.service';
 import { getBreakerMetrics, CircuitState } from '../services/circuitBreaker.service';
 import { getFiringAlerts } from '../monitoring/alerts';
+import logger from '../utils/logger';
 
 const router = Router();
 
@@ -78,7 +79,10 @@ ai_alerts_critical ${firingAlerts.filter(a => a.annotations.summary?.toLowerCase
     // Combine all metrics
     res.send(`${defaultMetrics}\n${aiMetrics}\n${customMetrics}`);
   } catch (error) {
-    console.error('Error exporting metrics:', error);
+    logger.error('Error exporting metrics', {
+      context: 'MetricsRoutes',
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.status(500).send('Error exporting metrics');
   }
 });

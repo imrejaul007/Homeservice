@@ -10,6 +10,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { eventBus, EVENT_TYPES } from '../event-bus';
 import { getTenantId } from '../utils/tenantFilter';
 import logger from '../utils/logger';
+import { checkContent } from '../services/contentModeration.service';
 
 // Constants for review submission rules
 const REVIEW_WINDOW_DAYS = 14;  // Customer has 14 days after service to submit review
@@ -87,6 +88,32 @@ export const submitReview = asyncHandler(async (req: Request, res: Response) => 
     photos: photos || [],
     isVerified: true,  // Customer reviews from completed bookings are verified
   });
+
+  // Run content moderation check on review submission
+  const combinedContent = `${title || ''} ${comment}`.trim();
+  const moderationResult = checkContent(combinedContent);
+
+  // Log moderation decision
+  logger.info('Content moderation check for review', {
+    context: 'ReviewsController',
+    action: 'CONTENT_MODERATION',
+    reviewId: review._id?.toString(),
+    userId: user._id.toString(),
+    moderationScore: moderationResult.score,
+    moderationAction: moderationResult.action,
+    issues: moderationResult.issues.map(i => i.type),
+  });
+
+  // Auto-flag reviews with problematic content for manual review
+  if (moderationResult.action === 'flag' || moderationResult.action === 'reject') {
+    review.autoFlagged = true;
+    review.moderationScore = moderationResult.score;
+    review.moderationIssues = moderationResult.issues.map(i => i.type);
+    review.moderationReason = `Auto-flagged: ${moderationResult.issues.map(i => i.type).join(', ')} (score: ${moderationResult.score})`;
+  } else {
+    // Still store the score for analytics even if auto-approved
+    review.moderationScore = moderationResult.score;
+  }
 
   // Save the review first
   await review.save();
@@ -286,6 +313,33 @@ export const submitPackageReview = asyncHandler(async (req: Request, res: Respon
     photos: photos || [],
     isVerified: true,  // Customer reviews from completed bookings are verified
   });
+
+  // Run content moderation check on package review submission
+  const combinedContent = `${title || ''} ${comment}`.trim();
+  const moderationResult = checkContent(combinedContent);
+
+  // Log moderation decision
+  logger.info('Content moderation check for package review', {
+    context: 'ReviewsController',
+    action: 'CONTENT_MODERATION_PACKAGE',
+    reviewId: review._id?.toString(),
+    userId: user._id.toString(),
+    packageId,
+    moderationScore: moderationResult.score,
+    moderationAction: moderationResult.action,
+    issues: moderationResult.issues.map(i => i.type),
+  });
+
+  // Auto-flag reviews with problematic content for manual review
+  if (moderationResult.action === 'flag' || moderationResult.action === 'reject') {
+    review.autoFlagged = true;
+    review.moderationScore = moderationResult.score;
+    review.moderationIssues = moderationResult.issues.map(i => i.type);
+    review.moderationReason = `Auto-flagged: ${moderationResult.issues.map(i => i.type).join(', ')} (score: ${moderationResult.score})`;
+  } else {
+    // Still store the score for analytics even if auto-approved
+    review.moderationScore = moderationResult.score;
+  }
 
   // Save the review first
   await review.save();

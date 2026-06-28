@@ -1,0 +1,1710 @@
+openapi: 3.0.0
+info:
+  title: NILIN API
+  version: '1.0'
+  description: Home Service Marketplace Backend API
+  contact:
+    name: NILIN Support
+    email: support@nilin.app
+
+servers:
+  - url: /api
+    description: API v1
+
+tags:
+  - name: Authentication
+    description: User authentication and session management
+  - name: Bookings
+    description: Booking creation, management, and tracking
+  - name: Providers
+    description: Service provider management
+  - name: Services
+    description: Service listing and management
+  - name: Admin
+    description: Admin dashboard and management endpoints
+  - name: Analytics
+    description: Analytics and reporting endpoints
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+        message:
+          type: string
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        pages:
+          type: integer
+        hasNext:
+          type: boolean
+        hasPrev:
+          type: boolean
+
+    User:
+      type: object
+      properties:
+        _id:
+          type: string
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+          enum: [customer, provider, admin, super_admin]
+
+    Booking:
+      type: object
+      properties:
+        _id:
+          type: string
+        bookingNumber:
+          type: string
+        customerId:
+          type: string
+        providerId:
+          type: string
+        serviceId:
+          type: string
+        status:
+          type: string
+          enum: [pending, accepted, declined, in_progress, completed, cancelled]
+        scheduledDate:
+          type: string
+          format: date-time
+        scheduledTime:
+          type: string
+        totalAmount:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+
+    Service:
+      type: object
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        price:
+          type: object
+          properties:
+            amount:
+              type: number
+            currency:
+              type: string
+        duration:
+          type: integer
+          description: Duration in minutes
+        status:
+          type: string
+          enum: [draft, active, inactive, pending_review, rejected]
+        rating:
+          type: object
+          properties:
+            average:
+              type: number
+            count:
+              type: integer
+        isFeatured:
+          type: boolean
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ========================================
+  # Health & Platform
+  # ========================================
+  /health:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  service:
+                    type: string
+                    example: NILIN API
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /platform/status:
+    get:
+      summary: Platform maintenance status
+      responses:
+        '200':
+          description: Platform status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      maintenanceMode:
+                        type: boolean
+                      message:
+                        type: string
+
+  # ========================================
+  # Authentication
+  # ========================================
+  /auth/register/customer:
+    post:
+      tags: [Authentication]
+      summary: Register new customer
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, firstName, lastName]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phone:
+                  type: string
+      responses:
+        '201':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/register/provider:
+    post:
+      tags: [Authentication]
+      summary: Register new service provider
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, firstName, lastName, phone, serviceType]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phone:
+                  type: string
+                serviceType:
+                  type: string
+                  description: Type of services offered
+      responses:
+        '201':
+          description: Registration successful
+        '400':
+          description: Validation error
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+        '401':
+          description: Invalid credentials
+        '429':
+          description: Too many login attempts
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get current user profile
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+        '401':
+          description: Unauthorized
+
+  /auth/change-password:
+    post:
+      tags: [Authentication]
+      summary: Change password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Password changed successfully
+        '400':
+          description: Invalid current password
+
+  # ========================================
+  # Bookings
+  # ========================================
+  /bookings:
+    post:
+      tags: [Bookings]
+      summary: Create new booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId, serviceId, scheduledDate, scheduledTime, address]
+              properties:
+                providerId:
+                  type: string
+                serviceId:
+                  type: string
+                scheduledDate:
+                  type: string
+                  format: date
+                scheduledTime:
+                  type: string
+                address:
+                  type: object
+                  properties:
+                    street:
+                      type: string
+                    city:
+                      type: string
+                    district:
+                      type: string
+                notes:
+                  type: string
+      responses:
+        '201':
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      booking:
+                        $ref: '#/components/schemas/Booking'
+
+  /bookings/guest:
+    post:
+      tags: [Bookings]
+      summary: Create guest booking (no account required)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId, serviceId, guestEmail, guestPhone, scheduledDate, scheduledTime]
+              properties:
+                providerId:
+                  type: string
+                serviceId:
+                  type: string
+                guestEmail:
+                  type: string
+                  format: email
+                guestPhone:
+                  type: string
+                guestName:
+                  type: string
+                scheduledDate:
+                  type: string
+                  format: date
+                scheduledTime:
+                  type: string
+                address:
+                  type: object
+      responses:
+        '201':
+          description: Guest booking created
+
+  /bookings/customer:
+    get:
+      tags: [Bookings]
+      summary: Get current customer's bookings
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, accepted, declined, in_progress, completed, cancelled]
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      bookings:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Booking'
+                      pagination:
+                        $ref: '#/components/schemas/Pagination'
+
+  /bookings/{id}:
+    get:
+      tags: [Bookings]
+      summary: Get booking details
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Booking details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      booking:
+                        $ref: '#/components/schemas/Booking'
+        '404':
+          description: Booking not found
+
+  /bookings/{id}/cancel:
+    patch:
+      tags: [Bookings]
+      summary: Cancel booking
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Booking cancelled
+        '400':
+          description: Cannot cancel booking
+
+  /bookings/{id}/accept:
+    post:
+      tags: [Bookings]
+      summary: Provider accepts booking
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Booking accepted
+        '400':
+          description: Cannot accept booking
+
+  /bookings/{id}/reject:
+    patch:
+      tags: [Bookings]
+      summary: Provider rejects booking
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Booking rejected
+
+  /bookings/{id}/complete:
+    post:
+      tags: [Bookings]
+      summary: Mark booking as completed
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Booking completed
+
+  /bookings/track/{bookingNumber}:
+    get:
+      tags: [Bookings]
+      summary: Track booking by booking number (public)
+      security: []
+      parameters:
+        - in: path
+          name: bookingNumber
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Booking tracking info
+
+  # ========================================
+  # Availability
+  # ========================================
+  /availability:
+    get:
+      tags: [Bookings]
+      summary: Get provider's availability schedule
+      responses:
+        '200':
+          description: Availability schedule
+
+  /availability/provider/{providerId}/slots:
+    get:
+      tags: [Bookings]
+      summary: Get available time slots for provider
+      security: []
+      parameters:
+        - in: path
+          name: providerId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: serviceId
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Available time slots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      slots:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            time:
+                              type: string
+                            available:
+                              type: boolean
+
+  /availability/schedule:
+    put:
+      tags: [Bookings]
+      summary: Update weekly availability schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schedule:
+                  type: object
+                  description: Weekly schedule by day of week
+      responses:
+        '200':
+          description: Schedule updated
+
+  # ========================================
+  # Provider Services
+  # ========================================
+  /provider/services:
+    get:
+      tags: [Services]
+      summary: Get provider's services
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of services
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      services:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Service'
+                      pagination:
+                        $ref: '#/components/schemas/Pagination'
+
+    post:
+      tags: [Services]
+      summary: Create new service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, category]
+              properties:
+                name:
+                  type: string
+                shortDescription:
+                  type: string
+                description:
+                  type: string
+                category:
+                  type: string
+                subcategory:
+                  type: string
+                price:
+                  type: object
+                  properties:
+                    amount:
+                      type: number
+                    currency:
+                      type: string
+                      default: AED
+                duration:
+                  type: integer
+                  description: Duration in minutes
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Service created
+        '400':
+          description: Validation error
+
+  /provider/services/{id}:
+    get:
+      tags: [Services]
+      summary: Get service by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service details
+        '404':
+          description: Service not found
+
+    put:
+      tags: [Services]
+      summary: Update service
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Service updated
+        '404':
+          description: Service not found
+
+    delete:
+      tags: [Services]
+      summary: Soft delete service (move to trash)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service moved to trash
+
+  /provider/services/{id}/status:
+    patch:
+      tags: [Services]
+      summary: Toggle service status
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [active, inactive]
+      responses:
+        '200':
+          description: Service status updated
+
+  /provider/services/{id}/restore:
+    patch:
+      tags: [Services]
+      summary: Restore service from trash
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service restored
+
+  /provider/services/{id}/permanent:
+    delete:
+      tags: [Services]
+      summary: Permanently delete service
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service permanently deleted
+
+  /provider/services/trash:
+    get:
+      tags: [Services]
+      summary: Get deleted services
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of deleted services
+
+  /provider/services/trash/count:
+    get:
+      tags: [Services]
+      summary: Get count of deleted services
+      responses:
+        '200':
+          description: Trash count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+
+  /provider/services/export:
+    get:
+      tags: [Services]
+      summary: Export services data
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json, csv]
+            default: json
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: category
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Exported services data
+
+  /provider/services/{id}/analytics:
+    get:
+      tags: [Services]
+      summary: Get service analytics
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service analytics
+
+  /provider/services/bulk/activate:
+    post:
+      tags: [Services]
+      summary: Bulk activate services
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                serviceIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Services activated
+
+  /provider/services/bulk/deactivate:
+    post:
+      tags: [Services]
+      summary: Bulk deactivate services
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                serviceIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Services deactivated
+
+  /provider/services/bulk/delete:
+    delete:
+      tags: [Services]
+      summary: Bulk delete services
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                serviceIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Services deleted
+
+  # ========================================
+  # Provider Analytics
+  # ========================================
+  /provider/analytics:
+    get:
+      tags: [Analytics]
+      summary: Get provider overview analytics
+      responses:
+        '200':
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+
+  /provider/analytics/insights:
+    get:
+      tags: [Analytics]
+      summary: Get AI-powered provider insights
+      responses:
+        '200':
+          description: Provider insights
+
+  /provider/dashboard/stats:
+    get:
+      tags: [Analytics]
+      summary: Get dashboard statistics
+      responses:
+        '200':
+          description: Dashboard statistics
+
+  # ========================================
+  # Admin Widgets (P1 & P2)
+  # ========================================
+  /admin/fake-booking-detection:
+    get:
+      tags: [Admin]
+      summary: Get fake booking detection data
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Detection data
+
+  /admin/provider-abuse:
+    get:
+      tags: [Admin]
+      summary: Get provider abuse monitoring data
+      responses:
+        '200':
+          description: Abuse monitoring data
+
+  /admin/customer-abuse:
+    get:
+      tags: [Admin]
+      summary: Get customer abuse monitoring data
+      responses:
+        '200':
+          description: Abuse monitoring data
+
+  /admin/providers/risk:
+    get:
+      tags: [Admin]
+      summary: Get provider risk scores
+      responses:
+        '200':
+          description: Risk scores
+
+  /admin/revenue-by-city:
+    get:
+      tags: [Admin]
+      summary: Get revenue breakdown by city
+      responses:
+        '200':
+          description: Revenue data
+
+  /admin/suspensions:
+    get:
+      tags: [Admin]
+      summary: Get suspension center data
+      responses:
+        '200':
+          description: Suspension data
+
+  /admin/appeals:
+    get:
+      tags: [Admin]
+      summary: Get appeal center data
+      responses:
+        '200':
+          description: Appeal data
+
+  /admin/background-checks:
+    get:
+      tags: [Admin]
+      summary: Get background check dashboard
+      responses:
+        '200':
+          description: Background check data
+
+  /admin/verification-queue:
+    get:
+      tags: [Admin]
+      summary: Get verification queue
+      responses:
+        '200':
+          description: Verification queue
+
+  /admin/reconciliation:
+    get:
+      tags: [Admin]
+      summary: Get reconciliation engine data
+      responses:
+        '200':
+          description: Reconciliation data
+
+  /admin/commissions/reports:
+    get:
+      tags: [Admin]
+      summary: Get commission reports
+      responses:
+        '200':
+          description: Commission reports
+
+  /admin/tax-reports:
+    get:
+      tags: [Admin]
+      summary: Get tax reports
+      responses:
+        '200':
+          description: Tax reports
+
+  /admin/refunds/analytics:
+    get:
+      tags: [Admin]
+      summary: Get refund analytics
+      responses:
+        '200':
+          description: Refund analytics
+
+  # P2 Widgets
+  /admin/onboarding-funnel:
+    get:
+      tags: [Admin]
+      summary: Get onboarding funnel metrics
+      responses:
+        '200':
+          description: Funnel metrics
+
+  /admin/supply-demand:
+    get:
+      tags: [Admin]
+      summary: Get supply/demand ratio
+      responses:
+        '200':
+          description: Supply/demand data
+
+  /admin/provider-utilization:
+    get:
+      tags: [Admin]
+      summary: Get provider utilization metrics
+      responses:
+        '200':
+          description: Utilization metrics
+
+  /admin/geographic/performance:
+    get:
+      tags: [Admin]
+      summary: Get geographic performance data
+      responses:
+        '200':
+          description: Geographic data
+
+  /admin/safe-search:
+    get:
+      tags: [Admin]
+      summary: Get safe search controls
+      responses:
+        '200':
+          description: Safe search data
+
+  /admin/incidents:
+    get:
+      tags: [Admin]
+      summary: Get incident list
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Incident list
+
+    post:
+      tags: [Admin]
+      summary: Create new incident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                severity:
+                  type: string
+                  enum: [low, medium, high, critical]
+      responses:
+        '201':
+          description: Incident created
+
+  /admin/churn/predictions:
+    get:
+      tags: [Admin]
+      summary: Get churn predictions
+      responses:
+        '200':
+          description: Churn predictions
+
+  /admin/automation/winback:
+    get:
+      tags: [Admin]
+      summary: Get win-back campaign dashboard
+      responses:
+        '200':
+          description: Win-back data
+
+  /admin/vip/segment:
+    get:
+      tags: [Admin]
+      summary: Get VIP segment data
+      responses:
+        '200':
+          description: VIP segment data
+
+  /admin/forecasting:
+    get:
+      tags: [Admin]
+      summary: Get trend forecasting
+      responses:
+        '200':
+          description: Forecasting data
+
+  /admin/provider-pl:
+    get:
+      tags: [Admin]
+      summary: Get provider P&L report
+      responses:
+        '200':
+          description: P&L report
+
+  /admin/unit-economics:
+    get:
+      tags: [Admin]
+      summary: Get unit economics data
+      responses:
+        '200':
+          description: Unit economics
+
+  /admin/customer-journey:
+    get:
+      tags: [Admin]
+      summary: Get customer journey data
+      responses:
+        '200':
+          description: Journey data
+
+  /admin/funnel-dropoff:
+    get:
+      tags: [Admin]
+      summary: Get funnel drop-off data
+      responses:
+        '200':
+          description: Drop-off data
+
+  # ========================================
+  # Hero Slides (Admin)
+  # ========================================
+  /admin/hero-slides:
+    get:
+      tags: [Admin]
+      summary: List all hero slides
+      parameters:
+        - in: query
+          name: isActive
+          schema:
+            type: boolean
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of hero slides
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      slides:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            _id:
+                              type: string
+                            image:
+                              type: string
+                            badge:
+                              type: string
+                            title:
+                              type: string
+                            subtitle:
+                              type: string
+                            cta:
+                              type: string
+                            ctaLink:
+                              type: string
+                            sortOrder:
+                              type: integer
+                            isActive:
+                              type: boolean
+                            startsAt:
+                              type: string
+                              format: date-time
+                            endsAt:
+                              type: string
+                              format: date-time
+                      stats:
+                        type: object
+                      pagination:
+                        $ref: '#/components/schemas/Pagination'
+
+    post:
+      tags: [Admin]
+      summary: Create new hero slide
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [image, badge, title, subtitle, cta, ctaLink]
+              properties:
+                image:
+                  type: string
+                  format: uri
+                badge:
+                  type: string
+                  maxLength: 80
+                title:
+                  type: string
+                  maxLength: 120
+                subtitle:
+                  type: string
+                  maxLength: 200
+                cta:
+                  type: string
+                  maxLength: 60
+                ctaLink:
+                  type: string
+                  format: uri
+                sortOrder:
+                  type: integer
+                  default: 0
+                isActive:
+                  type: boolean
+                  default: true
+                startsAt:
+                  type: string
+                  format: date-time
+                endsAt:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: Hero slide created
+
+  /admin/hero-slides/{id}:
+    get:
+      tags: [Admin]
+      summary: Get hero slide by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Hero slide details
+        '404':
+          description: Hero slide not found
+
+    put:
+      tags: [Admin]
+      summary: Update hero slide
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Hero slide updated
+        '404':
+          description: Hero slide not found
+
+    delete:
+      tags: [Admin]
+      summary: Delete hero slide
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Hero slide deleted
+        '404':
+          description: Hero slide not found
+
+  /admin/hero-slides/{id}/toggle:
+    patch:
+      tags: [Admin]
+      summary: Toggle hero slide active status
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status toggled
+
+  /admin/hero-slides/{id}/reorder:
+    patch:
+      tags: [Admin]
+      summary: Reorder hero slide
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sortOrder:
+                  type: integer
+      responses:
+        '200':
+          description: Hero slide reordered
+
+  /admin/hero-slides/reorder-all:
+    post:
+      tags: [Admin]
+      summary: Reorder multiple hero slides
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slides:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      sortOrder:
+                        type: integer
+      responses:
+        '200':
+          description: Slides reordered
+
+  # ========================================
+  # Automation
+  # ========================================
+  /automation/welcome:
+    post:
+      tags: [Admin]
+      summary: Trigger welcome automation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                name:
+                  type: string
+                source:
+                  type: string
+      responses:
+        '200':
+          description: Welcome automation triggered
+
+  /automation/winback:
+    post:
+      tags: [Admin]
+      summary: Trigger win-back campaign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                reason:
+                  type: string
+                offerCode:
+                  type: string
+      responses:
+        '200':
+          description: Win-back automation triggered
+
+  /automation/status:
+    get:
+      tags: [Admin]
+      summary: Get automation status
+      parameters:
+        - in: query
+          name: automationType
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed]
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Automation status
+
+  /automation/review-request:
+    post:
+      tags: [Admin]
+      summary: Trigger review request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bookingId:
+                  type: string
+                customerId:
+                  type: string
+                delay:
+                  type: integer
+                  default: 24
+      responses:
+        '200':
+          description: Review request scheduled
+
+  # ========================================
+  # Batch Operations
+  # ========================================
+  /batch:
+    post:
+      tags: [Bookings]
+      summary: Batch fetch multiple resources
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requests:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      method:
+                        type: string
+                        enum: [GET, POST, PUT, PATCH, DELETE]
+                      path:
+                        type: string
+                      body:
+                        type: object
+      responses:
+        '200':
+          description: Batch results
+
+  # ========================================
+  # Search
+  # ========================================
+  /search:
+    get:
+      tags: [Services]
+      summary: Search services and providers
+      security: []
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: location
+          schema:
+            type: string
+        - in: query
+          name: minPrice
+          schema:
+            type: number
+        - in: query
+          name: maxPrice
+          schema:
+            type: number
+        - in: query
+          name: minRating
+          schema:
+            type: number
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      services:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Service'
+                      providers:
+                        type: array
+                        items:
+                          type: object
+                      pagination:
+                        $ref: '#/components/schemas/Pagination'

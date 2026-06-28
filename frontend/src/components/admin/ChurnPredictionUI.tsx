@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   TrendingDown,
@@ -40,6 +41,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface ChurnPrediction {
   customerId: string;
@@ -129,135 +133,11 @@ export const ChurnPredictionUI: React.FC<ChurnPredictionUIProps> = ({
         setPredictions(response.data.data.predictions || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setPredictions([
-          {
-            customerId: 'cust-001',
-            name: 'Ahmed Hassan',
-            email: 'ahmed@email.com',
-            riskScore: 85,
-            riskLevel: 'critical',
-            churnProbability: 0.78,
-            predictedChurnDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-            daysUntilChurn: 14,
-            lastActive: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
-            lastBooking: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-            bookingFrequency: 0.5,
-            avgOrderValue: 350,
-            totalSpend: 4200,
-            engagementScore: 25,
-            factors: [
-              { factor: 'Declining engagement', impact: 0.35, direction: 'negative' },
-              { factor: 'No recent bookings', impact: 0.28, direction: 'negative' },
-              { factor: 'Negative reviews', impact: 0.15, direction: 'negative' },
-              { factor: 'Price sensitivity', impact: 0.12, direction: 'negative' }
-            ],
-            recommendedActions: ['Send personalized discount', 'Phone outreach', 'Schedule check-in'],
-            contactAttempts: 0,
-            outreachStatus: 'none'
-          },
-          {
-            customerId: 'cust-002',
-            name: 'Sarah Khan',
-            email: 'sarah@email.com',
-            riskScore: 62,
-            riskLevel: 'high',
-            churnProbability: 0.55,
-            predictedChurnDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            daysUntilChurn: 30,
-            lastActive: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-            lastBooking: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
-            bookingFrequency: 0.8,
-            avgOrderValue: 280,
-            totalSpend: 5600,
-            engagementScore: 42,
-            factors: [
-              { factor: 'Decreased frequency', impact: 0.25, direction: 'negative' },
-              { factor: 'Competitor activity', impact: 0.18, direction: 'negative' },
-              { factor: 'Support tickets', impact: 0.12, direction: 'negative' }
-            ],
-            recommendedActions: ['Offer loyalty reward', 'Exclusive early access'],
-            contactAttempts: 1,
-            outreachStatus: 'contacted'
-          },
-          {
-            customerId: 'cust-003',
-            name: 'Mohammed Ali',
-            email: 'mohammed@email.com',
-            riskScore: 45,
-            riskLevel: 'medium',
-            churnProbability: 0.35,
-            lastActive: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-            lastBooking: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
-            bookingFrequency: 1.2,
-            avgOrderValue: 420,
-            totalSpend: 12600,
-            engagementScore: 58,
-            factors: [
-              { factor: 'Lower engagement', impact: 0.15, direction: 'negative' },
-              { factor: 'Price concerns', impact: 0.10, direction: 'negative' }
-            ],
-            recommendedActions: ['Engagement campaign', 'Value proposition reminder'],
-            contactAttempts: 0,
-            outreachStatus: 'pending'
-          },
-          {
-            customerId: 'cust-004',
-            name: 'Fatima Omar',
-            email: 'fatima@email.com',
-            riskScore: 18,
-            riskLevel: 'low',
-            churnProbability: 0.12,
-            lastActive: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            lastBooking: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            bookingFrequency: 2.5,
-            avgOrderValue: 380,
-            totalSpend: 22800,
-            engagementScore: 85,
-            factors: [
-              { factor: 'Consistent engagement', impact: -0.15, direction: 'positive' }
-            ],
-            recommendedActions: ['VIP treatment', 'Referral program'],
-            contactAttempts: 0,
-            outreachStatus: 'none'
-          }
-        ]);
-        setStats({
-          totalCustomers: 12450,
-          atRisk: 847,
-          criticalRisk: 123,
-          churnRate: 5.2,
-          predictedChurnRate: 6.8,
-          retentionRate: 94.8,
-          avgChurnProbability: 34,
-          savedByCampaigns: 156,
-          churnTrend: [
-            { date: 'Jan', churnRate: 5.8, predicted: 6.2 },
-            { date: 'Feb', churnRate: 5.4, predicted: 6.0 },
-            { date: 'Mar', churnRate: 5.1, predicted: 6.5 },
-            { date: 'Apr', churnRate: 5.3, predicted: 6.8 },
-            { date: 'May', churnRate: 5.2, predicted: 6.8 },
-            { date: 'Jun', churnRate: 4.9, predicted: 6.4 }
-          ],
-          riskDistribution: [
-            { level: 'Low', count: 11456, color: '#10B981' },
-            { level: 'Medium', count: 624, color: '#F59E0B' },
-            { level: 'High', count: 312, color: '#F97316' },
-            { level: 'Critical', count: 123, color: '#EF4444' }
-          ],
-          topChurnFactors: [
-            { factor: 'Declining engagement', impact: 0.35 },
-            { factor: 'No recent activity', impact: 0.28 },
-            { factor: 'Competitor switching', impact: 0.22 },
-            { factor: 'Price sensitivity', impact: 0.18 },
-            { factor: 'Service issues', impact: 0.15 }
-          ],
-          retentionCost: 45600
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching churn data:', err);
-      setError('Failed to load churn predictions');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -274,6 +154,7 @@ export const ChurnPredictionUI: React.FC<ChurnPredictionUIProps> = ({
   };
 
   const handleUpdateOutreach = async (customerId: string, newStatus: ChurnPrediction['outreachStatus']) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(customerId);
     try {
       await api.patch(`/admin/churn/predictions/${customerId}`, { outreachStatus: newStatus });
@@ -555,8 +436,9 @@ export const ChurnPredictionUI: React.FC<ChurnPredictionUIProps> = ({
                     {(pred.outreachStatus === 'none' || pred.outreachStatus === 'pending') && pred.riskLevel !== 'low' && (
                       <button
                         onClick={() => handleUpdateOutreach(pred.customerId, 'contacted')}
-                        disabled={actionLoading === pred.customerId}
-                        className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors text-sm font-medium"
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === pred.customerId}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Mark as contacted'}
+                        className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Contact
                       </button>
@@ -564,8 +446,9 @@ export const ChurnPredictionUI: React.FC<ChurnPredictionUIProps> = ({
                     {pred.outreachStatus === 'contacted' && (
                       <button
                         onClick={() => handleUpdateOutreach(pred.customerId, 'retained')}
-                        disabled={actionLoading === pred.customerId}
-                        className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium"
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === pred.customerId}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Mark as retained'}
+                        className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Mark Retained
                       </button>

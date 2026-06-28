@@ -110,6 +110,9 @@ export interface BookingFiltersDTO {
   reviewable?: boolean;
   /** Filter by service location city/emirate */
   city?: string;
+  // Price range filters
+  minPrice?: number;
+  maxPrice?: number;
 }
 
 export interface PaginationDTO {

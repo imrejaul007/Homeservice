@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { ApiError, ERROR_CODES } from './ApiError';
 import { IUser } from '../models/user.model';
+import logger from './logger';
 
 // Allowed algorithms for JWT signing - RS256 only for production security
 // This prevents alg: "none" attacks and other algorithm confusion vulnerabilities
@@ -41,13 +42,17 @@ class JWTService {
     } else {
       // In development, use fallbacks with warnings
       if (!accessSecret) {
-        console.warn('⚠️ WARNING: Using insecure fallback JWT access secret. Set JWT_ACCESS_SECRET in production!');
+        logger.warn('Using insecure fallback JWT access secret. Set JWT_ACCESS_SECRET in production!', {
+          context: 'JWTService',
+        });
         this.accessTokenSecret = 'dev_access_secret_do_not_use_in_prod';
       } else {
         this.accessTokenSecret = accessSecret;
       }
       if (!refreshSecret) {
-        console.warn('⚠️ WARNING: Using insecure fallback JWT refresh secret. Set JWT_REFRESH_SECRET in production!');
+        logger.warn('Using insecure fallback JWT refresh secret. Set JWT_REFRESH_SECRET in production!', {
+          context: 'JWTService',
+        });
         this.refreshTokenSecret = 'dev_refresh_secret_do_not_use_in_prod';
       } else {
         this.refreshTokenSecret = refreshSecret;
@@ -94,6 +99,8 @@ class JWTService {
 
   generateAccessToken(payload: TokenPayload): string {
     // SECURITY FIX: Explicitly specify RS256 algorithm to prevent algorithm confusion attacks
+    // SECURITY FIX: This service uses RS256. The user.model.ts also has legacy generateAuthToken()
+    // that uses HS256 for backward compatibility. New code should use this jwtService instead.
     return jwt.sign(payload, this.accessTokenSecret, {
       algorithm: 'RS256', // SECURITY FIX: Explicitly set algorithm
       expiresIn: this.accessTokenExpiry,
@@ -138,6 +145,14 @@ class JWTService {
       this.validateAlgorithm(token);
 
       // SECURITY FIX: Explicitly specify RS256 algorithm in verify options
+      // SECURITY FIX: Add explicit algorithm header check to prevent algorithm confusion attacks
+      const decodedHeader = jwt.decode(token, { complete: true });
+      if (decodedHeader && typeof decodedHeader !== 'string' && decodedHeader.header) {
+        if (decodedHeader.header.alg !== 'RS256') {
+          throw new ApiError(401, 'Invalid token algorithm: expected RS256');
+        }
+      }
+
       const decoded = jwt.verify(token, this.accessTokenSecret, {
         algorithms: ['RS256'] as jwt.Algorithm[], // SECURITY FIX: Only allow RS256
         issuer: 'home-service-platform',
@@ -159,6 +174,14 @@ class JWTService {
     try {
       // SECURITY FIX: Validate algorithm before verification (prevents alg:none attack)
       this.validateAlgorithm(token);
+
+      // SECURITY FIX: Add explicit algorithm header check to prevent algorithm confusion attacks
+      const decodedHeader = jwt.decode(token, { complete: true });
+      if (decodedHeader && typeof decodedHeader !== 'string' && decodedHeader.header) {
+        if (decodedHeader.header.alg !== 'RS256') {
+          throw new ApiError(401, 'Invalid token algorithm: expected RS256');
+        }
+      }
 
       // SECURITY FIX: Explicitly specify RS256 algorithm in verify options
       const decoded = jwt.verify(token, this.refreshTokenSecret, {
@@ -214,6 +237,14 @@ class JWTService {
       // SECURITY FIX: Validate algorithm before verification
       this.validateAlgorithm(token);
 
+      // SECURITY FIX: Add explicit algorithm header check to prevent algorithm confusion attacks
+      const decodedHeader = jwt.decode(token, { complete: true });
+      if (decodedHeader && typeof decodedHeader !== 'string' && decodedHeader.header) {
+        if (decodedHeader.header.alg !== 'RS256') {
+          throw new ApiError(400, 'Invalid token algorithm: expected RS256');
+        }
+      }
+
       // SECURITY FIX: Explicitly specify RS256 algorithm
       const decoded = jwt.verify(token, this.accessTokenSecret, {
         algorithms: ['RS256'] as jwt.Algorithm[], // SECURITY FIX: Only allow RS256
@@ -255,6 +286,14 @@ class JWTService {
     try {
       // SECURITY FIX: Validate algorithm before verification
       this.validateAlgorithm(token);
+
+      // SECURITY FIX: Add explicit algorithm header check to prevent algorithm confusion attacks
+      const decodedHeader = jwt.decode(token, { complete: true });
+      if (decodedHeader && typeof decodedHeader !== 'string' && decodedHeader.header) {
+        if (decodedHeader.header.alg !== 'RS256') {
+          throw new ApiError(400, 'Invalid token algorithm: expected RS256');
+        }
+      }
 
       // SECURITY FIX: Explicitly specify RS256 algorithm
       const decoded = jwt.verify(token, this.refreshTokenSecret, {

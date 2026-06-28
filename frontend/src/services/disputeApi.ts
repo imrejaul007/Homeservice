@@ -6,8 +6,19 @@ import authService from './AuthService';
 
 export type DisputeStatus = 'open' | 'under_review' | 'resolved' | 'escalated' | 'closed';
 export type ResolutionType = 'refund' | 'partial_refund' | 'no_action' | 'provider_warning' | 'provider_suspended';
+export type AppealStatus = 'none' | 'pending' | 'approved' | 'rejected';
 export type RefundStatus = 'pending' | 'approved' | 'processing' | 'completed' | 'rejected' | 'failed';
 export type RefundType = 'full' | 'partial' | 'prorated' | 'chargeback' | 'dispute';
+
+// Escalation trigger types
+export type EscalationTrigger =
+  | 'high_amount'
+  | 'unresolved_too_long'
+  | 'banned_user_involved'
+  | 'suspended_user_involved'
+  | 'repeat_disputes'
+  | 'repeat_refunds'
+  | 'chargeback';
 
 export interface DisputeParty {
   userId: string;
@@ -53,6 +64,22 @@ export interface DisputeTimeline {
   newStatus?: DisputeStatus;
 }
 
+export interface DisputeAppeal {
+  status: AppealStatus;
+  reason: string;
+  submittedBy: string;
+  submittedAt: string;
+  deadline: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewNotes?: string;
+  originalResolution?: {
+    type: ResolutionType;
+    amount?: number;
+    reason: string;
+  };
+}
+
 export interface BookingReference {
   bookingNumber: string;
   serviceName: string;
@@ -75,6 +102,7 @@ export interface Dispute {
   evidence: DisputeEvidence[];
   messages: DisputeMessage[];
   resolution?: DisputeResolution;
+  appeal?: DisputeAppeal;
   assignedTo?: {
     _id: string;
     firstName: string;
@@ -83,6 +111,7 @@ export interface Dispute {
   assignedAt?: string;
   escalatedAt?: string;
   escalationReason?: string;
+  escalationTriggers?: EscalationTrigger[];
   timeline: DisputeTimeline[];
   bookingReference?: BookingReference;
   adminNotes?: string;
@@ -128,6 +157,9 @@ export interface RefundRequest {
   approvedAt?: string;
   processedAt?: string;
   completedAt?: string;
+  escalatedAt?: string;
+  escalationTriggers?: EscalationTrigger[];
+  isEscalated?: boolean;
   timeline: Array<{
     action: string;
     performedBy: string;
@@ -210,6 +242,7 @@ export interface PaginatedResponse<T> {
     pages: number;
     hasMore: boolean;
   };
+  statusBreakdown?: Record<string, number>;
 }
 
 export interface ApiResponse<T> {
@@ -282,7 +315,7 @@ class DisputeApiService {
    */
   async getMyDispute(disputeId: string): Promise<ApiResponse<Dispute>> {
     try {
-      const response = await authService.get<ApiResponse<Dispute>>(`/disputes/my/${disputeId}`);
+      const response = await authService.get<ApiResponse<Dispute>>(`/disputes/my/detail/${disputeId}`);
       return response;
     } catch (error: any) {
       throw new Error(error?.response?.data?.message || error?.message || 'Failed to get dispute');
@@ -329,10 +362,16 @@ class DisputeApiService {
       }
 
       const url = `/disputes/my${params.toString() ? `?${params.toString()}` : ''}`;
-      const response = await authService.get<ApiResponse<Dispute[]> & { pagination: PaginatedResponse<Dispute>['pagination'] }>(url);
+      const response = await authService.get<
+        ApiResponse<Dispute[]> & {
+          pagination: PaginatedResponse<Dispute>['pagination'];
+          statusBreakdown?: Record<string, number>;
+        }
+      >(url);
       return {
         data: response.data || [],
         pagination: response.pagination || { page: 1, limit: 20, total: 0, pages: 0, hasMore: false },
+        statusBreakdown: response.statusBreakdown,
       };
     } catch (error: any) {
       throw new Error(error?.response?.data?.message || error?.message || 'Failed to get disputes');
@@ -463,6 +502,96 @@ class DisputeApiService {
     } catch (error: any) {
       throw new Error(error?.response?.data?.message || error?.message || 'Failed to update notes');
     }
+  }
+
+  // ========================================
+  // APPEAL METHODS
+  // ========================================
+
+  /**
+   * Submit appeal for a resolved dispute
+   */
+  async submitAppeal(disputeId: string, reason: string): Promise<ApiResponse<Dispute>> {
+    try {
+      const response = await authService.post<ApiResponse<Dispute>>(`/disputes/${disputeId}/appeal`, { reason });
+      return response;
+    } catch (error: any) {
+      throw new Error(error?.response?.data?.message || error?.message || 'Failed to submit appeal');
+    }
+  }
+
+  /**
+   * List pending appeals (admin)
+   */
+  async getPendingAppeals(page?: number, limit?: number): Promise<PaginatedResponse<Dispute>> {
+    try {
+      const params = new URLSearchParams();
+      if (page) params.append('page', String(page));
+      if (limit) params.append('limit', String(limit));
+
+      const url = `/disputes/admin/appeals${params.toString() ? `?${params.toString()}` : ''}`;
+      const response = await authService.get<ApiResponse<Dispute[]> & { pagination: PaginatedResponse<Dispute>['pagination'] }>(url);
+      return {
+        data: response.data || [],
+        pagination: response.pagination || { page: 1, limit: 20, total: 0, pages: 0, hasMore: false },
+      };
+    } catch (error: any) {
+      throw new Error(error?.response?.data?.message || error?.message || 'Failed to get pending appeals');
+    }
+  }
+
+  /**
+   * Review appeal (approve/reject)
+   */
+  async reviewAppeal(disputeId: string, action: 'approve' | 'reject', reviewNotes?: string): Promise<ApiResponse<Dispute>> {
+    try {
+      const response = await authService.post<ApiResponse<Dispute>>(`/disputes/admin/${disputeId}/appeal-review`, { action, reviewNotes });
+      return response;
+    } catch (error: any) {
+      throw new Error(error?.response?.data?.message || error?.message || 'Failed to review appeal');
+    }
+  }
+
+  /**
+   * Get appeal deadline status
+   */
+  getAppealDeadlineStatus(deadline: string): { canAppeal: boolean; daysRemaining: number; isExpired: boolean } {
+    const now = new Date();
+    const deadlineDate = new Date(deadline);
+    const diffMs = deadlineDate.getTime() - now.getTime();
+    const daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+    return {
+      canAppeal: daysRemaining > 0,
+      daysRemaining: Math.max(0, daysRemaining),
+      isExpired: daysRemaining <= 0,
+    };
+  }
+
+  /**
+   * Get appeal status color
+   */
+  getAppealStatusColor(status: AppealStatus): string {
+    const colors: Record<string, string> = {
+      none: 'bg-gray-100 text-gray-800',
+      pending: 'bg-yellow-100 text-yellow-800',
+      approved: 'bg-green-100 text-green-800',
+      rejected: 'bg-red-100 text-red-800',
+    };
+    return colors[status] || 'bg-gray-100 text-gray-800';
+  }
+
+  /**
+   * Get appeal status label
+   */
+  getAppealStatusLabel(status: AppealStatus): string {
+    const labels: Record<string, string> = {
+      none: 'No Appeal',
+      pending: 'Pending Review',
+      approved: 'Approved',
+      rejected: 'Rejected',
+    };
+    return labels[status] || status;
   }
 
   // ========================================
@@ -681,6 +810,38 @@ class DisputeApiService {
       provider_suspended: 'Provider Suspended',
     };
     return labels[type] || type;
+  }
+
+  /**
+   * Get escalation trigger description
+   */
+  getEscalationTriggerDescription(trigger: EscalationTrigger): string {
+    const descriptions: Record<EscalationTrigger, string> = {
+      high_amount: 'High transaction amount',
+      unresolved_too_long: 'Unresolved too long',
+      banned_user_involved: 'Banned user involved',
+      suspended_user_involved: 'Suspended user involved',
+      repeat_disputes: 'Repeat disputes between parties',
+      repeat_refunds: 'Repeat refunds from customer',
+      chargeback: 'Chargeback initiated',
+    };
+    return descriptions[trigger] || trigger;
+  }
+
+  /**
+   * Get escalation trigger color
+   */
+  getEscalationTriggerColor(trigger: EscalationTrigger): string {
+    const colors: Record<EscalationTrigger, string> = {
+      high_amount: 'bg-orange-100 text-orange-800',
+      unresolved_too_long: 'bg-yellow-100 text-yellow-800',
+      banned_user_involved: 'bg-red-100 text-red-800',
+      suspended_user_involved: 'bg-red-100 text-red-800',
+      repeat_disputes: 'bg-purple-100 text-purple-800',
+      repeat_refunds: 'bg-purple-100 text-purple-800',
+      chargeback: 'bg-red-100 text-red-800',
+    };
+    return colors[trigger] || 'bg-gray-100 text-gray-800';
   }
 
   /**

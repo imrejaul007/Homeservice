@@ -10,9 +10,9 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { Gift, Users, TrendingUp, Copy, Share2, Loader, CheckCircle } from 'lucide-react';
+import { Gift, Users, TrendingUp, Copy, Share2, Loader, CheckCircle, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
-import authService from '../../../services/AuthService';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface ReferralAttributionProps {
   customerId?: string;
@@ -50,97 +50,69 @@ interface ChannelData {
   color: string;
 }
 
-const MOCK_REFERRALS: ReferralData[] = [
-  {
-    referralId: '1',
-    referrerName: 'Ahmed M.',
-    referralDate: '2026-05-15',
-    status: 'converted',
-    reward: { amount: 50, type: 'coins', claimedAt: '2026-05-20' },
-  },
-  {
-    referralId: '2',
-    referrerName: 'Sarah K.',
-    referralDate: '2026-05-18',
-    status: 'pending',
-  },
-  {
-    referralId: '3',
-    referrerName: 'John D.',
-    referralDate: '2026-05-22',
-    status: 'converted',
-    reward: { amount: 50, type: 'coins', claimedAt: '2026-05-25' },
-  },
-];
-
-const MOCK_STATS: ReferralStats = {
-  totalReferrals: 12,
-  successfulReferrals: 8,
-  pendingReferrals: 3,
-  conversionRate: 66.7,
-  totalEarnings: 400,
-  referralCode: 'AHMED50',
-  shareUrl: 'https://rezin.ae/ref/AHMED50',
+const EMPTY_STATS: ReferralStats = {
+  totalReferrals: 0,
+  successfulReferrals: 0,
+  pendingReferrals: 0,
+  conversionRate: 0,
+  totalEarnings: 0,
+  referralCode: '',
+  shareUrl: '',
 };
-
-const MOCK_CHANNEL_DATA: ChannelData[] = [
-  { channel: 'Social Media', referrals: 45, conversions: 28, conversionRate: 62, revenue: 1400, color: '#2563EB' },
-  { channel: 'Email', referrals: 32, conversions: 24, conversionRate: 75, revenue: 1200, color: '#7C3AED' },
-  { channel: 'WhatsApp', referrals: 58, conversions: 38, conversionRate: 66, revenue: 1900, color: '#10B981' },
-  { channel: 'SMS', referrals: 18, conversions: 8, conversionRate: 44, revenue: 400, color: '#F59E0B' },
-  { channel: 'QR Code', referrals: 25, conversions: 18, conversionRate: 72, revenue: 900, color: '#EF4444' },
-];
 
 export const ReferralAttribution: React.FC<ReferralAttributionProps> = ({
   customerId,
   referralCode,
 }) => {
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<ReferralStats>(MOCK_STATS);
-  const [referrals, setReferrals] = useState<ReferralData[]>(MOCK_REFERRALS);
-  const [channelData, setChannelData] = useState<ChannelData[]>(MOCK_CHANNEL_DATA);
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<ReferralStats>(EMPTY_STATS);
+  const [referrals, setReferrals] = useState<ReferralData[]>([]);
+  const [channelData, setChannelData] = useState<ChannelData[]>([]);
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'referrals' | 'channels'>('overview');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      setError(null);
+
       try {
-        // Fetch referral stats from API
-        const [codeResponse, statsResponse] = await Promise.all([
-          authService.getReferralCode(),
-          authService.getReferralStats(),
-        ]);
-
-        if (codeResponse.success && codeResponse.data) {
-          setStats((prev) => ({
-            ...prev,
-            referralCode: codeResponse.data!.code,
-            shareUrl: `https://rezin.ae/ref/${codeResponse.data!.code}`,
-          }));
-        }
-
-        if (statsResponse.success && statsResponse.data) {
-          const { totalReferrals, successfulReferrals, totalEarned } = statsResponse.data;
-          setStats((prev) => ({
-            ...prev,
-            totalReferrals,
-            successfulReferrals,
-            pendingReferrals: totalReferrals - successfulReferrals,
-            conversionRate: totalReferrals > 0
-              ? Math.round((successfulReferrals / totalReferrals) * 100 * 10) / 10
-              : 0,
-            totalEarnings: totalEarned,
-          }));
-        }
-      } catch (error) {
-        console.error('Failed to fetch referral data:', error);
+        const apiData = await analyticsApi.getCustomerReferralAttribution(customerId);
+        setStats({
+          ...apiData.stats,
+          referralCode: referralCode || apiData.stats.referralCode,
+          shareUrl: apiData.stats.shareUrl,
+        });
+        setReferrals(
+          apiData.referrals.map((referral) => ({
+            referralId: referral.referralId,
+            referrerName: referral.referrerName,
+            referralDate: new Date(referral.referralDate).toISOString().split('T')[0],
+            status: referral.status,
+            reward: referral.reward
+              ? {
+                  amount: referral.reward.amount,
+                  type: referral.reward.type,
+                  claimedAt: referral.reward.claimedAt
+                    ? new Date(referral.reward.claimedAt).toISOString().split('T')[0]
+                    : undefined,
+                }
+              : undefined,
+          })),
+        );
+        setChannelData(apiData.channels || []);
+      } catch (err) {
+        setStats(EMPTY_STATS);
+        setReferrals([]);
+        setChannelData([]);
+        setError(err instanceof Error ? err.message : 'Failed to load referral data');
       } finally {
         setLoading(false);
       }
     };
     fetchData();
-  }, [customerId]);
+  }, [customerId, referralCode]);
 
   const handleCopyCode = async () => {
     try {
@@ -208,6 +180,12 @@ export const ReferralAttribution: React.FC<ReferralAttributionProps> = ({
       animate={{ opacity: 1, y: 0 }}
       className="bg-white rounded-xl shadow-sm border border-gray-200 p-6"
     >
+      {error && (
+        <div className="mb-4 flex items-center gap-2 text-red-600 text-sm">
+          <AlertCircle className="h-5 w-5" />
+          <p>{error}</p>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>

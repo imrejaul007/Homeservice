@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import authService from '../../services/AuthService';
+import { socketService } from '../../services/socket';
 
 // ============================================
 // TYPE DEFINITIONS
@@ -438,6 +439,8 @@ export const LiveChat: React.FC<LiveChatProps> = ({
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const autoStartAttemptedRef = useRef(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isTypingRef = useRef(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   // Quick replies for common questions
@@ -514,12 +517,6 @@ export const LiveChat: React.FC<LiveChatProps> = ({
           setMessages(normalized);
           await liveChatApi.markRead(session.sessionId);
         }
-
-        // Simulate agent typing (in production, this would come from WebSocket)
-        if (Math.random() > 0.7) {
-          setIsTyping(true);
-          setTimeout(() => setIsTyping(false), 2000);
-        }
       } catch (error) {
         console.error('Failed to poll messages:', error);
       }
@@ -539,6 +536,80 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       }
     };
   }, [session?.sessionId, chatStatus, messages.length]);
+
+  // Socket event handlers for real-time typing and messages
+  useEffect(() => {
+    if (!session?.chatRoomId || chatStatus !== 'active') return;
+
+    // Join the chat room
+    socketService.joinChatRoom(session.chatRoomId);
+
+    // Listen for typing start from other users (agent)
+    const unsubTypingStart = socketService.onChatTypingStart((data) => {
+      if (data.chatRoomId === session.chatRoomId) {
+        setIsTyping(true);
+        // Auto-clear typing after 5 seconds if no message arrives
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+        typingTimeoutRef.current = setTimeout(() => {
+          setIsTyping(false);
+        }, 5000);
+      }
+    });
+
+    // Listen for typing stop from other users
+    const unsubTypingStop = socketService.onChatTypingStop((data) => {
+      if (data.chatRoomId === session.chatRoomId) {
+        setIsTyping(false);
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = null;
+        }
+      }
+    });
+
+    // Listen for new messages from agent
+    const unsubNewMessage = socketService.onNewChatMessage((data) => {
+      if (data.chatRoomId === session.chatRoomId) {
+        // Agent sent a message - clear typing and add message
+        setIsTyping(false);
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = null;
+        }
+
+        const newMessage: ChatMessage = {
+          id: data.messageId,
+          content: data.content,
+          sender: data.senderId !== session.agentId ? 'customer' : 'agent',
+          senderName: data.senderId !== session.agentId ? 'You' : (session.agentName || 'Support'),
+          timestamp: new Date(data.createdAt),
+          type: data.type,
+          attachments: data.attachments,
+        };
+
+        setMessages((prev) => {
+          // Avoid duplicates
+          if (prev.some((m) => m.id === newMessage.id)) {
+            return prev;
+          }
+          return [...prev, newMessage];
+        });
+      }
+    });
+
+    return () => {
+      socketService.leaveChatRoom(session.chatRoomId);
+      unsubTypingStart();
+      unsubTypingStop();
+      unsubNewMessage();
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+    };
+  }, [session?.chatRoomId, chatStatus]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -566,6 +637,16 @@ export const LiveChat: React.FC<LiveChatProps> = ({
     const messageText = inputValue.trim();
     setInputValue('');
     setIsSending(true);
+
+    // Clear typing indicator when message is sent
+    if (isTypingRef.current && session.chatRoomId) {
+      isTypingRef.current = false;
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+      socketService.stopChatTyping(session.chatRoomId);
+    }
 
     // Optimistically add user message
     const tempMessage: ChatMessage = {
@@ -792,7 +873,24 @@ export const LiveChat: React.FC<LiveChatProps> = ({
                 <textarea
                   ref={inputRef}
                   value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
+                  onChange={(e) => {
+                    setInputValue(e.target.value);
+                    // Emit typing indicator to agent
+                    if (session?.chatRoomId) {
+                      if (!isTypingRef.current) {
+                        isTypingRef.current = true;
+                        socketService.startChatTyping(session.chatRoomId);
+                      }
+                      // Reset typing timeout
+                      if (typingTimeoutRef.current) {
+                        clearTimeout(typingTimeoutRef.current);
+                      }
+                      typingTimeoutRef.current = setTimeout(() => {
+                        isTypingRef.current = false;
+                        socketService.stopChatTyping(session.chatRoomId);
+                      }, 2000);
+                    }
+                  }}
                   onKeyDown={handleKeyPress}
                   placeholder="Type your message..."
                   rows={1}

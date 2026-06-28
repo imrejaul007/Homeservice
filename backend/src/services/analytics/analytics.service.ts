@@ -7,6 +7,54 @@ import { cache } from '../../config/redis';
 import { Request } from 'express';
 import { addTenantToAggregation, addTenantFilter, isAdminOrSystem, getTenantIdOptional } from '../../utils/tenantFilter';
 
+/**
+ * ============================================
+ * ANALYTICS SERVICE - REVENUE CALCULATION FORMULAS
+ * ============================================
+ *
+ * FIX #1: Revenue Calculation
+ * The platform uses the following revenue calculation formula:
+ *
+ * Booking Pricing Structure:
+ * - totalAmount: The gross booking value (what customer pays)
+ * - platformAmount: The platform's share (commission + fees)
+ * - providerPayout: What the provider receives (totalAmount - platformAmount)
+ *
+ * Revenue Types:
+ * - Gross Revenue = Sum of all totalAmount (total customer payments)
+ * - Platform Revenue = Sum of all platformAmount (platform's earnings)
+ * - Provider Earnings = Sum of all providerPayout (what providers receive)
+ *
+ * Correct Formula:
+ * platformRevenue = grossRevenue - providerEarnings
+ * OR equivalently: platformRevenue = Sum(platformAmount)
+ *
+ * NOT: Use totalAmount for provider earnings (this would be incorrect)
+ *
+ * ============================================
+ * FIX #2: Duplicate Booking Count Prevention
+ * ============================================
+ *
+ * When counting bookings in aggregations:
+ * - Use $addToSet to collect unique booking IDs
+ * - Then use $size to count the unique IDs
+ * - This prevents counting the same booking multiple times
+ *
+ * Example:
+ * { $group: { _id: null, bookings: { $addToSet: '$_id' } } }
+ * { $project: { count: { $size: '$bookings' } } }
+ *
+ * ============================================
+ * FIX #8: Funnel Analytics - Unique Customers
+ * ============================================
+ *
+ * The conversion funnel tracks unique customers per stage:
+ * - Count unique customer IDs per status using $addToSet
+ * - This ensures rebookings don't inflate funnel metrics
+ *
+ * ============================================
+ */
+
 interface DateRange {
   startDate: Date;
   endDate: Date;
@@ -193,14 +241,29 @@ export const getBookingAnalytics = async (period: string = 'month', req?: Reques
       prevMatch.tenantId = tenantId;
     }
 
+    // FIX #2: Use $addToSet instead of $sum to avoid counting duplicate bookings
+    // FIX #1: Use platformAmount for accurate platform revenue calculation
+    // totalAmount = gross booking value
+    // platformAmount = platform's share (commission + fees)
+    // providerPayout = booking total - platform's share
     const [stats, completedStats, previousPeriodBookings] = await Promise.all([
       Booking.aggregate([
         { $match: baseMatch },
         {
           $group: {
             _id: null,
-            totalBookings: { $sum: 1 },
+            // Use $addToSet to count unique booking IDs, avoiding duplicates
+            totalBookings: { $addToSet: '$_id' },
+            // Use totalAmount for gross revenue, platformAmount for platform's cut
             totalRevenue: { $sum: '$pricing.totalAmount' },
+            platformRevenue: { $sum: '$pricing.platformAmount' },
+          },
+        },
+        {
+          $project: {
+            totalBookings: { $size: '$totalBookings' },
+            totalRevenue: 1,
+            platformRevenue: 1,
           },
         },
       ]),
@@ -209,8 +272,14 @@ export const getBookingAnalytics = async (period: string = 'month', req?: Reques
         {
           $group: {
             _id: null,
-            completed: { $sum: 1 },
+            completed: { $addToSet: '$_id' },
             revenue: { $sum: '$pricing.totalAmount' },
+          },
+        },
+        {
+          $project: {
+            completed: { $size: '$completed' },
+            revenue: 1,
           },
         },
       ]),
@@ -718,6 +787,88 @@ export const clearAnalyticsCache = async (): Promise<void> => {
   }
 };
 
+/**
+ * FIX #6: Selective cache invalidation
+ * Invalidate specific analytics cache entries without clearing all caches
+ *
+ * Usage:
+ *   - After a booking is created/completed: invalidateBookingCache()
+ *   - After a provider changes: invalidateProviderCache(providerId)
+ *   - After a customer signs up: invalidateCustomerCache()
+ */
+export const invalidateAnalyticsCache = async (options: {
+  type?: 'booking' | 'provider' | 'customer' | 'revenue' | 'service' | 'all';
+  providerId?: string;
+  tenantId?: string;
+} = {}): Promise<number> => {
+  try {
+    const client = cache.client;
+    if (!client) return 0;
+
+    const { type = 'all', providerId, tenantId } = options;
+
+    let pattern = 'analytics:*';
+
+    // Build specific pattern based on type
+    if (type !== 'all') {
+      pattern = `analytics:${type}:*`;
+    }
+    if (providerId) {
+      pattern = `analytics:*:${providerId}*`;
+    }
+    if (tenantId) {
+      pattern = `analytics:*:${tenantId}*`;
+    }
+
+    let cursor = 0;
+    let deletedCount = 0;
+
+    do {
+      const [nextCursor, keys] = await client.scan(
+        cursor,
+        'MATCH',
+        pattern,
+        'COUNT',
+        100
+      );
+      cursor = parseInt(nextCursor, 10);
+
+      if (keys.length > 0) {
+        await client.del(...keys);
+        deletedCount += keys.length;
+      }
+    } while (cursor !== 0);
+
+    if (deletedCount > 0) {
+      logger.info('Analytics cache invalidated', {
+        keysDeleted: deletedCount,
+        type,
+        providerId,
+        tenantId,
+        action: 'ANALYTICS_CACHE_INVALIDATED',
+      });
+    }
+
+    return deletedCount;
+  } catch (error) {
+    logger.error('Failed to invalidate analytics cache', { error });
+    return 0;
+  }
+};
+
+// Convenience functions for common invalidation scenarios
+export const invalidateBookingCache = async (tenantId?: string): Promise<number> => {
+  return invalidateAnalyticsCache({ type: 'booking', tenantId });
+};
+
+export const invalidateProviderCache = async (providerId: string): Promise<number> => {
+  return invalidateAnalyticsCache({ type: 'provider', providerId });
+};
+
+export const invalidateCustomerCache = async (tenantId?: string): Promise<number> => {
+  return invalidateAnalyticsCache({ type: 'customer', tenantId });
+};
+
 export default {
   getBookingAnalytics,
   getProviderAnalytics,
@@ -725,4 +876,8 @@ export default {
   getRevenueAnalytics,
   getServiceAnalytics,
   clearAnalyticsCache,
+  invalidateAnalyticsCache,
+  invalidateBookingCache,
+  invalidateProviderCache,
+  invalidateCustomerCache,
 };

@@ -34,6 +34,13 @@ import {
   Target,
   ArrowUpRight,
   ArrowDownRight,
+  CheckSquare,
+  Square,
+  Download,
+  MailOpen,
+  UserCheck,
+  Percent,
+  X,
 } from 'lucide-react';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
@@ -124,8 +131,11 @@ const CustomerCard: React.FC<CustomerCardProps> = ({ customer, onExecuteAction }
 
   return (
     <div className="rounded-xl border border-nilin-border/50 bg-white/60 overflow-hidden">
-      <div
-        className="p-4 cursor-pointer hover:bg-nilin-blush/30 transition-colors"
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} details for ${getCustomerLabel(customer)}`}
+        className="w-full p-4 text-left cursor-pointer hover:bg-nilin-blush/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-inset"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center justify-between">
@@ -163,7 +173,7 @@ const CustomerCard: React.FC<CustomerCardProps> = ({ customer, onExecuteAction }
             {(customer.confidence * 100).toFixed(0)}% confidence
           </span>
         </div>
-      </div>
+      </button>
 
       {expanded && (
         <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-gray-50 dark:bg-gray-900/50">
@@ -398,6 +408,12 @@ const ChurnReport: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <AdminPageShell
         wideLayout
         title="Churn & Retention"
@@ -418,7 +434,7 @@ const ChurnReport: React.FC = () => {
           </button>
         }
       >
-      <div className="space-y-6">
+      <div id="main-content" className="space-y-6">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             {

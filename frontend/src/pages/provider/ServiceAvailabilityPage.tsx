@@ -89,15 +89,20 @@ const ServiceAvailabilityPage: React.FC = () => {
       setLoading(true);
       // Fetch provider's services
       const servicesRes = await api.get('/provider/services');
-      setServices(servicesRes.data.data || []);
+      const servicesPayload = servicesRes.data.data;
+      const servicesList = Array.isArray(servicesPayload)
+        ? servicesPayload
+        : servicesPayload?.services || [];
+      setServices(servicesList);
 
-      // Fetch provider's bundles/packages - use /bundles/my for provider's own bundles
+      // Fetch provider's bundles/packages
       const bundlesRes = await api.get('/bundles/my');
-      setBundles(bundlesRes.data.data?.bundles || bundlesRes.data.data || []);
+      const bundlesPayload = bundlesRes.data.data;
+      setBundles(Array.isArray(bundlesPayload) ? bundlesPayload : bundlesPayload?.bundles || []);
 
       // Auto-select first service/bundle
-      if (servicesRes.data.data?.length > 0) {
-        setSelectedService(servicesRes.data.data[0]._id);
+      if (servicesList.length > 0) {
+        setSelectedService(servicesList[0]._id);
       }
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -142,7 +147,15 @@ const ServiceAvailabilityPage: React.FC = () => {
 
   return (
     <PageLayout>
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      <main id="main-content" className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
           <button
@@ -310,7 +323,7 @@ const ServiceAvailabilityPage: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
+      </main>
     </PageLayout>
   );
 };

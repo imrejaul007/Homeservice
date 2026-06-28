@@ -14,6 +14,13 @@ export interface DateRange {
 // Customer Analytics Types
 // ============================================
 
+export interface BookingFrequencyTimePoint {
+  date: string;
+  bookings: number;
+  revenue: number;
+  avgValue: number;
+}
+
 export interface CustomerBookingFrequency {
   customerId: string;
   totalBookings: number;
@@ -25,9 +32,11 @@ export interface CustomerBookingFrequency {
   };
   averageBookingsPerMonth: number;
   trend: number;
+  trendDirection: 'up' | 'down' | 'stable';
   mostActiveDay: string;
   peakHours: string;
   favoriteCategories: string[];
+  timeSeries: BookingFrequencyTimePoint[];
 }
 
 export interface CustomerAOVTrend {
@@ -40,6 +49,13 @@ export interface CustomerAOVTrend {
   lifetimeAverage: number;
   highestOrder: number;
   lowestOrder: number;
+  targetAOV: number;
+  timeSeries: Array<{
+    date: string;
+    aov: number;
+    orderCount: number;
+    totalSpent: number;
+  }>;
   aovByCategory: Array<{
     categoryId: string;
     categoryName: string;
@@ -59,6 +75,7 @@ export interface CategoryDistribution {
   totalSpent: number;
   diversification: number;
   topCategory: string;
+  monthlyTrend: Array<Record<string, string | number>>;
 }
 
 export interface SeasonalPattern {
@@ -114,6 +131,8 @@ const getSeason = (month: number): 'winter' | 'spring' | 'summer' | 'fall' => {
   return 'fall';
 };
 
+const MONTH_ORDER = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 const getDateRange = (period: string): DateRange => {
   const now = new Date();
   const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
@@ -132,11 +151,125 @@ const getDateRange = (period: string): DateRange => {
     case '1y':
       startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
       break;
+    case 'all':
+      startDate = new Date(2020, 0, 1);
+      break;
     default:
       startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   }
 
   return { startDate, endDate };
+};
+
+const buildBookingFrequencyTimeSeries = (
+  bookings: Array<{ createdAt: Date; pricing?: { totalAmount?: number } }>,
+  period: string,
+): BookingFrequencyTimePoint[] => {
+  const getAmount = (booking: { pricing?: { totalAmount?: number } }) =>
+    booking.pricing?.totalAmount || 0;
+
+  if (period === '7d') {
+    const order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const buckets = Object.fromEntries(order.map((day) => [day, { bookings: 0, revenue: 0 }]));
+
+    bookings.forEach((booking) => {
+      const day = new Date(booking.createdAt).toLocaleDateString('en-US', { weekday: 'short' });
+      if (!buckets[day]) {
+        buckets[day] = { bookings: 0, revenue: 0 };
+      }
+      buckets[day].bookings += 1;
+      buckets[day].revenue += getAmount(booking);
+    });
+
+    return order.map((date) => ({
+      date,
+      bookings: buckets[date].bookings,
+      revenue: buckets[date].revenue,
+      avgValue: buckets[date].bookings > 0 ? buckets[date].revenue / buckets[date].bookings : 0,
+    }));
+  }
+
+  if (period === '30d') {
+    const now = new Date();
+    const weeks: BookingFrequencyTimePoint[] = [];
+
+    for (let weekIndex = 3; weekIndex >= 0; weekIndex -= 1) {
+      const weekEnd = new Date(now.getTime() - weekIndex * 7 * 24 * 60 * 60 * 1000);
+      const weekStart = new Date(weekEnd.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const inWeek = bookings.filter((booking) => {
+        const createdAt = new Date(booking.createdAt);
+        return createdAt > weekStart && createdAt <= weekEnd;
+      });
+      const revenue = inWeek.reduce((sum, booking) => sum + getAmount(booking), 0);
+
+      weeks.push({
+        date: `Week ${4 - weekIndex}`,
+        bookings: inWeek.length,
+        revenue,
+        avgValue: inWeek.length > 0 ? revenue / inWeek.length : 0,
+      });
+    }
+
+    return weeks;
+  }
+
+  if (period === '90d') {
+    const monthFormatter = new Intl.DateTimeFormat('en-US', { month: 'short' });
+    const buckets = new Map<string, { bookings: number; revenue: number; sortKey: number }>();
+
+    bookings.forEach((booking) => {
+      const createdAt = new Date(booking.createdAt);
+      const sortKey = createdAt.getFullYear() * 12 + createdAt.getMonth();
+      const label = monthFormatter.format(createdAt);
+      const current = buckets.get(label) || { bookings: 0, revenue: 0, sortKey };
+      current.bookings += 1;
+      current.revenue += getAmount(booking);
+      buckets.set(label, current);
+    });
+
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[1].sortKey - b[1].sortKey)
+      .map(([date, bucket]) => ({
+        date,
+        bookings: bucket.bookings,
+        revenue: bucket.revenue,
+        avgValue: bucket.bookings > 0 ? bucket.revenue / bucket.bookings : 0,
+      }));
+  }
+
+  const quarterBuckets = new Map<string, { bookings: number; revenue: number; sortKey: number }>();
+  bookings.forEach((booking) => {
+    const createdAt = new Date(booking.createdAt);
+    const quarter = Math.floor(createdAt.getMonth() / 3) + 1;
+    const label = `Q${quarter}`;
+    const sortKey = createdAt.getFullYear() * 10 + quarter;
+    const current = quarterBuckets.get(label) || { bookings: 0, revenue: 0, sortKey };
+    current.bookings += 1;
+    current.revenue += getAmount(booking);
+    quarterBuckets.set(label, current);
+  });
+
+  return Array.from(quarterBuckets.entries())
+    .sort((a, b) => a[1].sortKey - b[1].sortKey)
+    .map(([date, bucket]) => ({
+      date,
+      bookings: bucket.bookings,
+      revenue: bucket.revenue,
+      avgValue: bucket.bookings > 0 ? bucket.revenue / bucket.bookings : 0,
+    }));
+};
+
+const buildAOVTrendTimeSeries = (
+  bookings: Array<{ createdAt: Date; pricing?: { totalAmount?: number } }>,
+  period: string,
+) => {
+  const frequencySeries = buildBookingFrequencyTimeSeries(bookings, period);
+  return frequencySeries.map((point) => ({
+    date: point.date,
+    aov: point.avgValue,
+    orderCount: point.bookings,
+    totalSpent: point.revenue,
+  }));
 };
 
 const getCachedData = async <T>(key: string, fetchFn: () => Promise<T>, ttl = 300): Promise<T> => {
@@ -272,15 +405,23 @@ export class CustomerAnalyticsService {
         ? ((currentBookings - previousBookings) / previousBookings) * 100
         : currentBookings > 0 ? 100 : 0;
 
+      const trendDirection: 'up' | 'down' | 'stable' =
+        trend > 1 ? 'up' : trend < -1 ? 'down' : 'stable';
+
+      const monthsInPeriod = period === '7d' ? 0.25 : period === '30d' ? 1 : period === '90d' ? 3 : 12;
+      const averageBookingsPerMonth = monthsInPeriod > 0 ? currentBookings / monthsInPeriod : currentBookings;
+
       return {
         customerId,
         totalBookings: currentBookings,
         bookingsByPeriod,
-        averageBookingsPerMonth: currentBookings / 3,
-        trend,
+        averageBookingsPerMonth: Math.round(averageBookingsPerMonth * 10) / 10,
+        trend: Math.round(trend * 10) / 10,
+        trendDirection,
         mostActiveDay,
         peakHours,
         favoriteCategories,
+        timeSeries: buildBookingFrequencyTimeSeries(bookings, period),
       };
     }, 300);
   }
@@ -382,6 +523,8 @@ export class CustomerAnalyticsService {
         .sort((a, b) => b.aov - a.aov);
 
       const trend: 'up' | 'down' | 'stable' = changePercent > 1 ? 'up' : changePercent < -1 ? 'down' : 'stable';
+      const timeSeries = buildAOVTrendTimeSeries(currentBookings, period);
+      const targetAOV = lifetimeAverage > 0 ? Math.round(lifetimeAverage * 1.15) : 0;
 
       return {
         customerId,
@@ -393,6 +536,8 @@ export class CustomerAnalyticsService {
         lifetimeAverage,
         highestOrder,
         lowestOrder,
+        targetAOV,
+        timeSeries,
         aovByCategory,
       };
     }, 300);
@@ -480,12 +625,31 @@ export class CustomerAnalyticsService {
 
       const topCategory = categories[0]?.categoryName || 'N/A';
 
+      const monthFormatter = new Intl.DateTimeFormat('en-US', { month: 'short' });
+      const trendBuckets = new Map<string, Record<string, string | number>>();
+      const topCategoryNames = categories.slice(0, 4).map((category) => category.categoryName);
+
+      bookings.forEach((booking) => {
+        const createdAt = new Date(booking.createdAt);
+        const monthLabel = monthFormatter.format(createdAt);
+        const categoryName = booking.categoryName || 'Other';
+        if (!topCategoryNames.includes(categoryName)) return;
+
+        const bucket = trendBuckets.get(monthLabel) || { month: monthLabel };
+        bucket[categoryName] = (Number(bucket[categoryName] || 0)) + (booking.amount || 0);
+        trendBuckets.set(monthLabel, bucket);
+      });
+
+      const monthlyTrend = Array.from(trendBuckets.values())
+        .sort((a, b) => MONTH_ORDER.indexOf(String(a.month)) - MONTH_ORDER.indexOf(String(b.month)));
+
       return {
         customerId,
         categories,
         totalSpent,
         diversification: Math.max(0, Math.min(100, normalizedDiversification)),
         topCategory,
+        monthlyTrend,
       };
     }, 600);
   }
@@ -573,6 +737,94 @@ export class CustomerAnalyticsService {
   /**
    * Clear cache for a customer
    */
+  async getReferralAttribution(customerId: string) {
+    const cacheKey = `analytics:customer:${customerId}:referral-attribution`;
+
+    return getCachedData(cacheKey, async () => {
+      const user = await User.findById(customerId).lean();
+      if (!user) {
+        throw new Error('Customer not found');
+      }
+
+      const referredUsers = await User.find({
+        'loyaltySystem.referredBy': customerId,
+      }).select('firstName lastName createdAt loyaltySystem.pointsHistory').lean();
+
+      const totalReferralRewards = (user.loyaltySystem?.pointsHistory || [])
+        .filter((entry) => entry.type === 'referral')
+        .reduce((sum, entry) => sum + entry.amount, 0);
+
+      const successfulReferrals = referredUsers.filter((referredUser) =>
+        (referredUser.loyaltySystem?.pointsHistory || []).some((entry) => entry.type === 'referral'),
+      );
+
+      const referrals = referredUsers.map((referredUser, index) => {
+        const converted = successfulReferrals.some((entry) => entry._id?.toString() === referredUser._id?.toString());
+        const rewardEntry = (user.loyaltySystem?.pointsHistory || []).find(
+          (entry) => entry.type === 'referral' && entry.relatedBooking,
+        );
+
+        return {
+          referralId: referredUser._id?.toString() || String(index),
+          referrerName: `${referredUser.firstName || ''} ${(referredUser.lastName || '').charAt(0)}.`.trim(),
+          referralDate: referredUser.createdAt,
+          status: converted ? 'converted' as const : 'pending' as const,
+          reward: converted
+            ? {
+                amount: rewardEntry?.amount || 0,
+                type: 'coins',
+                claimedAt: rewardEntry?.date,
+              }
+            : undefined,
+        };
+      });
+
+      const channelMap = new Map<string, { referrals: number; conversions: number; revenue: number }>();
+      referrals.forEach(() => {
+        const channel = 'Direct Share';
+        const bucket = channelMap.get(channel) || { referrals: 0, conversions: 0, revenue: 0 };
+        bucket.referrals += 1;
+        channelMap.set(channel, bucket);
+      });
+      successfulReferrals.forEach(() => {
+        const channel = 'Direct Share';
+        const bucket = channelMap.get(channel) || { referrals: 0, conversions: 0, revenue: 0 };
+        bucket.conversions += 1;
+        bucket.revenue += 50;
+        channelMap.set(channel, bucket);
+      });
+
+      const channelColors = ['#2563EB', '#7C3AED', '#10B981', '#F59E0B', '#EF4444'];
+      const channels = Array.from(channelMap.entries()).map(([channel, data], index) => ({
+        channel,
+        referrals: data.referrals,
+        conversions: data.conversions,
+        conversionRate: data.referrals > 0 ? Math.round((data.conversions / data.referrals) * 100) : 0,
+        revenue: data.revenue,
+        color: channelColors[index % channelColors.length],
+      }));
+
+      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+      const referralCode = user.loyaltySystem?.referralCode || '';
+
+      return {
+        stats: {
+          totalReferrals: referredUsers.length,
+          successfulReferrals: successfulReferrals.length,
+          pendingReferrals: referredUsers.length - successfulReferrals.length,
+          conversionRate: referredUsers.length > 0
+            ? Math.round((successfulReferrals.length / referredUsers.length) * 1000) / 10
+            : 0,
+          totalEarnings: totalReferralRewards,
+          referralCode,
+          shareUrl: `${clientUrl}/register/customer?ref=${encodeURIComponent(referralCode)}`,
+        },
+        referrals,
+        channels,
+      };
+    }, 300);
+  }
+
   async clearCache(customerId: string): Promise<void> {
     try {
       const client = cache.client;

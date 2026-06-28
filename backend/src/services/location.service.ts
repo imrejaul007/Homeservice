@@ -1,10 +1,18 @@
 import mongoose from 'mongoose';
+import { Client } from '@googlemaps/google-maps-services-js';
+import axios from 'axios';
 import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { getOrSet } from './cache.service';
 import { CACHE_KEYS } from './cache.service';
+
+// Initialize Google Maps client
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY;
+const OPENCAGE_BASE_URL = 'https://api.opencagedata.com/geocode/v1/json';
+const googleMapsClient = new Client({});
 
 interface Coordinates {
   lat: number;
@@ -240,20 +248,115 @@ export const estimateArrivalTime = (
   };
 };
 
-// Geocode address (stub)
+// Geocode address to coordinates
 export const geocodeAddress = async (
-  _address: string
+  address: string
 ): Promise<Coordinates | null> => {
-  logger.warn('Geocoding not implemented - requires Google Maps API key');
-  return null;
+  try {
+    // Try Google Maps first if API key is available
+    if (GOOGLE_MAPS_API_KEY) {
+      const response = await googleMapsClient.geocode({
+        params: {
+          address,
+          key: GOOGLE_MAPS_API_KEY,
+        },
+        timeout: 8000,
+      });
+
+      if (response.data.results && response.data.results.length > 0) {
+        const location = response.data.results[0].geometry.location;
+        logger.debug('Geocoded address using Google Maps', { address, lat: location.lat, lng: location.lng });
+        return {
+          lat: location.lat,
+          lng: location.lng,
+        };
+      }
+    }
+
+    // Fallback to OpenCage if Google Maps is not available or failed
+    if (OPENCAGE_API_KEY) {
+      const response = await axios.get(OPENCAGE_BASE_URL, {
+        params: {
+          key: OPENCAGE_API_KEY,
+          q: address,
+          format: 'json',
+          language: 'en',
+          limit: 1,
+          no_annotations: 1,
+        },
+        timeout: 8000,
+      });
+
+      if (response.data.results && response.data.results.length > 0) {
+        const result = response.data.results[0];
+        logger.debug('Geocoded address using OpenCage', { address, lat: result.geometry.lat, lng: result.geometry.lng });
+        return {
+          lat: result.geometry.lat,
+          lng: result.geometry.lng,
+        };
+      }
+    }
+
+    logger.warn('No geocoding provider available', { address });
+    return null;
+  } catch (error) {
+    logger.error('Geocoding error', { address, error });
+    return null;
+  }
 };
 
-// Reverse geocode (stub)
+// Reverse geocode coordinates to address
 export const reverseGeocode = async (
-  _coordinates: Coordinates
+  coordinates: Coordinates
 ): Promise<string | null> => {
-  logger.warn('Reverse geocoding not implemented - requires Google Maps API key');
-  return null;
+  try {
+    const { lat, lng } = coordinates;
+
+    // Try Google Maps first if API key is available
+    if (GOOGLE_MAPS_API_KEY) {
+      const response = await googleMapsClient.reverseGeocode({
+        params: {
+          latlng: { lat, lng },
+          key: GOOGLE_MAPS_API_KEY,
+        },
+        timeout: 8000,
+      });
+
+      if (response.data.results && response.data.results.length > 0) {
+        // Get the most specific formatted address
+        const result = response.data.results[0];
+        logger.debug('Reverse geocoded using Google Maps', { lat, lng, address: result.formatted_address });
+        return result.formatted_address;
+      }
+    }
+
+    // Fallback to OpenCage if Google Maps is not available or failed
+    if (OPENCAGE_API_KEY) {
+      const response = await axios.get(OPENCAGE_BASE_URL, {
+        params: {
+          key: OPENCAGE_API_KEY,
+          q: `${lat},${lng}`,
+          format: 'json',
+          language: 'en',
+          limit: 1,
+          no_annotations: 1,
+        },
+        timeout: 8000,
+      });
+
+      if (response.data.results && response.data.results.length > 0) {
+        const result = response.data.results[0];
+        logger.debug('Reverse geocoded using OpenCage', { lat, lng, address: result.formatted });
+        return result.formatted;
+      }
+    }
+
+    logger.warn('No reverse geocoding provider available', { lat, lng });
+    return null;
+  } catch (error) {
+    logger.error('Reverse geocoding error', { coordinates, error });
+    return null;
+  }
 };
 
 export default {

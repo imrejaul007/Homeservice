@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import { authenticate, requireRole, createRateLimit } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { createRateLimiter } from '../middleware/rateLimit.middleware';
 import {
   chat,
   getConversations,
@@ -22,11 +23,11 @@ const router = Router();
 // Note: Individual routes below have explicit authenticate middleware for security clarity
 
 // AI Chat rate limiter - prevent abuse of AI chat endpoint (issue #8)
-const aiLimiter = createRateLimit(
-  1 * 60 * 1000, // 1 minute
-  20, // 20 messages per minute - reasonable for chat
-  'Too many chat requests, please slow down'
-);
+const aiLimiter = createRateLimiter({
+  windowMs: 1 * 60 * 1000,
+  max: 20,
+  message: 'Too many chat requests, please slow down'
+});
 
 // Validation helper for MongoDB ObjectId
 const isValidObjectId = (id: string): boolean => mongoose.Types.ObjectId.isValid(id);

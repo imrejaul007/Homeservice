@@ -11,7 +11,8 @@ import {
   ArrowLeft,
   AlertCircle,
   RefreshCw,
-  Edit
+  Edit,
+  Navigation
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
@@ -301,6 +302,19 @@ const BookingDetailPage: React.FC = () => {
                       {currentBooking.address?.street}, {currentBooking.address?.city}
                     </div>
                   </div>
+                  {currentBooking.status === 'in_progress' && (
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+                        `${currentBooking.address?.street}, ${currentBooking.address?.city}`
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-nilin-coral text-white text-sm font-medium rounded-lg hover:bg-nilin-rose transition-colors"
+                    >
+                      <Navigation className="w-4 h-4" />
+                      Track
+                    </a>
+                  )}
                 </div>
               </div>
 
@@ -386,14 +400,14 @@ const BookingDetailPage: React.FC = () => {
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowCancelModal(false)}
-                className="px-4 py-2 text-nilin-warmGray hover:bg-nilin-muted rounded-lg transition-colors"
+                className="min-h-11 px-4 py-2 text-nilin-warmGray hover:bg-nilin-muted rounded-lg transition-colors"
               >
                 Keep Booking
               </button>
               <button
                 onClick={handleConfirmCancel}
                 disabled={isCancelling}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                className="min-h-11 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
                 {isCancelling ? (
                   <>

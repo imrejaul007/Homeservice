@@ -3,6 +3,7 @@ import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import Service from '../models/service.model';
 import { Commission } from '../models/commission.model';
+import Review from '../models/review.model';
 import logger from '../utils/logger';
 import { cache } from '../config/redis';
 
@@ -667,11 +668,87 @@ export class BusinessIntelligenceService {
         customerGrowth,
         bookingGrowth,
         averageOrderValueGrowth: aovGrowth,
+        // FIX #4: Include zero/null ratings in NPS calculation, count them as detractors
         npsGrowth: 0, // Would require NPS survey data
         customerAcquisitionRate: customerGrowth,
         customerRetentionRate: retention.retentionRate,
       };
     }, this.CACHE_TTL.MEDIUM);
+  }
+
+  /**
+   * FIX #4: Calculate NPS (Net Promoter Score) with proper handling of null/zero ratings
+   * NPS = Percentage of Promoters (9-10) - Percentage of Detractors (0-6)
+   * Detractors include: ratings < 7, null ratings, and zero ratings
+   */
+  async calculateNPS(startDate?: Date, endDate?: Date): Promise<{ nps: number; promoters: number; passives: number; detractors: number; total: number }> {
+    const cacheKey = `bi:nps:${startDate?.toISOString() || 'all'}:${endDate?.toISOString() || 'all'}`;
+
+    return this.getCachedData(cacheKey, async () => {
+      // Build match criteria
+      const matchCriteria: any = {};
+      if (startDate && endDate) {
+        matchCriteria.createdAt = { $gte: startDate, $lte: endDate };
+      }
+
+      // FIX #4: Include zero/null ratings as detractors in NPS calculation
+      // This ensures accurate NPS even when rating data is incomplete
+      const npsData = await Review.aggregate([
+        { $match: matchCriteria },
+        {
+          $group: {
+            _id: null,
+            // Promoters: rating >= 9
+            promoters: {
+              $sum: {
+                $cond: [{ $and: [{ $gte: ['$rating', 9] }, { $ne: ['$rating', null] }] }, 1, 0]
+              }
+            },
+            // Passives: rating >= 7 and < 9
+            passives: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $gte: ['$rating', 7] }, { $lt: ['$rating', 9] }] },
+                  1,
+                  0
+                ]
+              }
+            },
+            // Detractors: rating < 7 OR rating is null/zero
+            detractors: {
+              $sum: {
+                $cond: [
+                  { $or: [
+                    { $lt: ['$rating', 7] },
+                    { $eq: ['$rating', null] },
+                    { $eq: ['$rating', 0] }
+                  ]},
+                  1,
+                  0
+                ]
+              }
+            },
+            total: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const data = npsData[0] || { promoters: 0, passives: 0, detractors: 0, total: 0 };
+      const total = data.total || 1; // Prevent division by zero
+
+      // Calculate NPS score
+      const promoterPercent = (data.promoters / total) * 100;
+      const detractorPercent = (data.detractors / total) * 100;
+      const nps = promoterPercent - detractorPercent;
+
+      return {
+        nps: Math.round(nps * 10) / 10, // Round to 1 decimal place
+        promoters: data.promoters,
+        passives: data.passives,
+        detractors: data.detractors,
+        total: data.total,
+      };
+    }, this.CACHE_TTL.LONG);
   }
 
   /**

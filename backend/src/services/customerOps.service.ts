@@ -1165,6 +1165,198 @@ export class CustomerOpsService {
   }
 
   /**
+   * Get paginated bookings for a specific user
+   */
+  async getUserBookings(
+    userId: string,
+    options: {
+      page?: number;
+      limit?: number;
+      status?: string;
+      startDate?: Date;
+      endDate?: Date;
+    }
+  ): Promise<{
+    items: Array<{
+      id: string;
+      bookingNumber: string;
+      scheduledDate: Date;
+      scheduledTime: string;
+      duration: number;
+      status: string;
+      service: {
+        id: string;
+        name: string;
+        category?: string;
+        image?: string;
+      };
+      provider: {
+        id: string;
+        firstName: string;
+        lastName: string;
+        avatar?: string;
+        businessName?: string;
+      };
+      location: {
+        type: string;
+        address?: {
+          street?: string;
+          city?: string;
+          state?: string;
+        };
+      };
+      pricing: {
+        basePrice: number;
+        addOns: Array<{ name: string; price: number }>;
+        discounts: Array<{ type: string; amount: number }>;
+        couponDiscount: number;
+        subtotal: number;
+        tax: number;
+        totalAmount: number;
+        currency: string;
+      };
+      customerInfo: {
+        firstName?: string;
+        lastName?: string;
+        email?: string;
+        phone?: string;
+      };
+      payment: {
+        status: string;
+        method?: string;
+        paidAt?: Date;
+      };
+      statusHistory: Array<{
+        status: string;
+        timestamp: Date;
+        reason?: string;
+        updatedBy: string;
+      }>;
+      cancellationDetails?: {
+        cancelledBy: string;
+        reason: string;
+        refundAmount: number;
+        refundStatus: string;
+      };
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      pages: number;
+      hasNext: boolean;
+      hasPrev: boolean;
+      nextPage: number | null;
+      prevPage: number | null;
+    };
+  }> {
+    const { page = 1, limit = 20, status, startDate, endDate } = options;
+    const userObjectId = new Types.ObjectId(userId);
+    const query: Record<string, unknown> = { customerId: userObjectId };
+
+    // Status filter
+    if (status && status !== 'all') {
+      if (status === 'active') {
+        query.status = { $in: ['pending', 'confirmed', 'in_progress'] };
+      } else if (status === 'completed') {
+        query.status = { $in: ['completed', 'refunded'] };
+      } else {
+        query.status = status;
+      }
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      query.scheduledDate = {};
+      if (startDate) {
+        (query.scheduledDate as Record<string, Date>).$gte = startDate;
+      }
+      if (endDate) {
+        const endDateObj = new Date(endDate);
+        endDateObj.setHours(23, 59, 59, 999);
+        (query.scheduledDate as Record<string, Date>).$lte = endDateObj;
+      }
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [bookings, total] = await Promise.all([
+      Booking.find(query)
+        .sort({ scheduledDate: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('service', 'name category image')
+        .populate('provider', 'firstName lastName avatar')
+        .populate('provider.providerProfile', 'businessInfo')
+        .lean(),
+      Booking.countDocuments(query),
+    ]);
+
+    const pages = Math.ceil(total / limit);
+
+    const items = bookings.map((booking) => {
+      const provider = booking.provider as any;
+      const providerProfile = provider?.providerProfile as any;
+
+      return {
+        id: booking._id.toString(),
+        bookingNumber: booking.bookingNumber,
+        scheduledDate: booking.scheduledDate,
+        scheduledTime: booking.scheduledTime,
+        duration: booking.duration,
+        status: booking.status,
+        service: {
+          id: (booking.service as any)?._id?.toString() || '',
+          name: (booking.service as any)?.name || 'Unknown Service',
+          category: (booking.service as any)?.category,
+          image: (booking.service as any)?.image,
+        },
+        provider: {
+          id: provider?._id?.toString() || '',
+          firstName: provider?.firstName || '',
+          lastName: provider?.lastName || '',
+          avatar: provider?.avatar,
+          businessName: providerProfile?.businessInfo?.businessName,
+        },
+        location: booking.location,
+        pricing: booking.pricing,
+        customerInfo: booking.customerInfo,
+        payment: booking.payment,
+        statusHistory: booking.statusHistory.map((h) => ({
+          status: h.status,
+          timestamp: h.timestamp,
+          reason: h.reason,
+          updatedBy: h.updatedBy,
+        })),
+        cancellationDetails: booking.cancellationDetails ? {
+          cancelledBy: booking.cancellationDetails.cancelledBy,
+          reason: booking.cancellationDetails.reason,
+          refundAmount: booking.cancellationDetails.refundAmount,
+          refundStatus: booking.cancellationDetails.refundStatus,
+        } : undefined,
+        createdAt: booking.createdAt,
+        updatedAt: booking.updatedAt,
+      };
+    });
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages,
+        hasNext: page < pages,
+        hasPrev: page > 1,
+        nextPage: page < pages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+      },
+    };
+  }
+
+  /**
    * Create or update metrics for all customers
    */
   async initializeMetricsForAllCustomers(): Promise<{ created: number; updated: number }> {

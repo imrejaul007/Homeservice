@@ -8,6 +8,7 @@ import { sendViaPlatformTransport } from './platformEmailTransport.service';
 import { withCircuitBreaker, createCircuitBreaker } from './circuitBreaker.service';
 import { withRetry, retryConfigs } from '../utils/retry.util';
 import User from '../models/user.model';
+import { FailedEmailQueue, IFailedEmailQueue } from '../models/failedEmailQueue.model';
 
 // Email templates
 interface EmailTemplate {
@@ -109,183 +110,213 @@ const emailCircuitBreaker = createCircuitBreaker('email-service', {
   halfOpenMaxAttempts: 3,
 });
 
-// Email queue for failed emails with improved retry logic
-interface QueuedEmail {
-  to: string;
-  subject: string;
-  html: string;
-  text?: string;
-  attempt: number;
-  maxAttempts: number;
-  lastAttempt: Date;
-  nextRetry: Date;
-  error?: string;
-  priority: 'high' | 'normal' | 'low';
-  metadata?: {
-    userId?: string;
-    bookingId?: string;
-    type: string;
-  };
-}
-
-const failedEmailQueue: QueuedEmail[] = [];
-const EMAIL_QUEUE_MAX_SIZE = 1000;
+// Email queue constants (kept for backward compatibility)
 const EMAIL_RETRY_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const MAX_EMAIL_ATTEMPTS = 5;
 const RETRY_DELAYS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000];
 
-// FIX: Priority queue helpers
+// Helper to get retry delay
 function getNextRetryDelay(attempt: number): number {
   return RETRY_DELAYS[Math.min(attempt, RETRY_DELAYS.length - 1)];
 }
 
-function shouldRetry(email: QueuedEmail): boolean {
-  return email.attempt < email.maxAttempts && Date.now() >= email.nextRetry.getTime();
-}
-
-function sortQueue(): void {
-  failedEmailQueue.sort((a, b) => {
-    const priorityOrder = { high: 0, normal: 1, low: 2 };
-    const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
-    if (priorityDiff !== 0) return priorityDiff;
-    return a.nextRetry.getTime() - b.nextRetry.getTime();
-  });
-}
-
-// FIX: Improved email queue with deduplication and priority
+// FIX P0: Persistent email queue with MongoDB
+// Previously used in-memory array which lost queue on server restart
 export const queueFailedEmail = async (
-  email: Omit<QueuedEmail, 'attempt' | 'lastAttempt' | 'nextRetry' | 'maxAttempts' | 'priority'>
+  email: {
+    to: string;
+    subject: string;
+    html: string;
+    text?: string;
+    metadata?: {
+      userId?: string;
+      bookingId?: string;
+      type: string;
+    };
+  }
 ): Promise<{ queued: boolean; position?: number }> => {
-  // Check for duplicate email in queue (prevent duplicate sends)
-  const existingIndex = failedEmailQueue.findIndex(q => q.to === email.to && q.subject === email.subject);
-  if (existingIndex !== -1) {
-    const existing = failedEmailQueue[existingIndex];
-    if (existing.attempt < existing.maxAttempts) {
+  try {
+    // Check for duplicate email in queue (prevent duplicate sends)
+    const existing = await FailedEmailQueue.findOne({
+      to: email.to,
+      subject: email.subject,
+      status: { $in: ['pending', 'processing'] }
+    });
+
+    if (existing) {
+      // Update existing entry for retry
       existing.lastAttempt = new Date();
       existing.nextRetry = new Date(Date.now() + getNextRetryDelay(existing.attempt));
-      sortQueue();
-      return { queued: true, position: existingIndex + 1 };
-    }
-  }
+      existing.attempt = 0; // Reset attempt count for fresh retry
+      await existing.save();
 
-  if (failedEmailQueue.length >= EMAIL_QUEUE_MAX_SIZE) {
-    // Remove oldest low-priority email to make room
-    const lowPriorityIndex = failedEmailQueue.findIndex(e => e.priority === 'low');
-    if (lowPriorityIndex !== -1) {
-      logger.warn('Email queue full, removing oldest low-priority email', {
-        to: failedEmailQueue[lowPriorityIndex].to
+      const stats = await FailedEmailQueue.getStats();
+      logger.info('Existing queued email updated for retry', {
+        to: email.to,
+        queuePosition: stats.readyToProcess
       });
-      failedEmailQueue.splice(lowPriorityIndex, 1);
-    } else {
-      logger.error('Email queue full, cannot add email', { to: email.to });
-      return { queued: false };
+
+      return { queued: true, position: stats.readyToProcess };
     }
+
+    // Create new queue entry
+    const queuedEmail = new FailedEmailQueue({
+      to: email.to,
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+      attempt: 0,
+      maxAttempts: MAX_EMAIL_ATTEMPTS,
+      lastAttempt: new Date(),
+      nextRetry: new Date(Date.now() + getNextRetryDelay(0)),
+      priority: email.metadata?.type === 'booking' ? 'high' : 'normal',
+      metadata: {
+        type: email.metadata?.type || 'general',
+        userId: email.metadata?.userId,
+        bookingId: email.metadata?.bookingId
+      },
+      status: 'pending'
+    });
+
+    await queuedEmail.save();
+
+    const stats = await FailedEmailQueue.getStats();
+    logger.info('Email queued for retry (MongoDB persisted)', {
+      to: email.to,
+      queuePosition: stats.readyToProcess,
+      total: stats.pending
+    });
+
+    return { queued: true, position: stats.readyToProcess };
+  } catch (error) {
+    logger.error('Failed to queue email for retry', {
+      to: email.to,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return { queued: false };
   }
-
-  const queuedEmail: QueuedEmail = {
-    ...email,
-    attempt: 0,
-    maxAttempts: MAX_EMAIL_ATTEMPTS,
-    lastAttempt: new Date(),
-    nextRetry: new Date(Date.now() + getNextRetryDelay(0)),
-    priority: email.metadata?.type === 'booking' ? 'high' : 'normal'
-  };
-
-  failedEmailQueue.push(queuedEmail);
-  sortQueue();
-
-  const position = failedEmailQueue.findIndex(q => q === queuedEmail) + 1;
-  logger.info('Email queued for retry', {
-    to: email.to,
-    position,
-    total: failedEmailQueue.length
-  });
-
-  return { queued: true, position };
 };
 
-// FIX: Improved queue processing with exponential backoff
+// FIX P0: Process email queue from MongoDB instead of in-memory
 const processEmailQueue = async (): Promise<{ processed: number; succeeded: number; failed: number }> => {
   const stats = { processed: 0, succeeded: 0, failed: 0 };
-  const now = Date.now();
 
-  // Get emails that are ready to retry
-  const readyEmails = failedEmailQueue.filter(e => e.nextRetry.getTime() <= now);
-  // Process up to 10 emails per cycle
-  const batch = readyEmails.slice(0, 10);
+  try {
+    // Get batch of emails ready for retry from MongoDB
+    const batch = await FailedEmailQueue.getNextBatch(10);
 
-  for (const email of batch) {
-    stats.processed++;
+    for (const email of batch) {
+      stats.processed++;
 
-    try {
-      const result = await withRetry(
-        () => sendEmailInternal(email.to, email.subject, email.html, email.text),
-        retryConfigs.quick
-      );
+      try {
+        // Mark as processing
+        email.status = 'processing';
+        await email.save();
 
-      if (result.success) {
-        const index = failedEmailQueue.indexOf(email);
-        if (index !== -1) failedEmailQueue.splice(index, 1);
-        stats.succeeded++;
-        logger.info('Queued email sent successfully', {
-          to: email.to,
-          attempts: email.attempt + 1
-        });
-      } else {
+        const result = await withRetry(
+          () => sendEmailInternal(email.to, email.subject, email.html, email.text),
+          retryConfigs.quick
+        );
+
+        if (result.success) {
+          await email.markCompleted();
+          stats.succeeded++;
+          logger.info('Queued email sent successfully (MongoDB)', {
+            to: email.to,
+            attempts: email.attempt + 1
+          });
+        } else {
+          email.attempt++;
+          email.lastAttempt = new Date();
+          email.error = result.error?.message;
+
+          await email.markFailed(result.error?.message || 'Send failed');
+          stats.failed++;
+
+          if (email.attempt >= email.maxAttempts) {
+            logger.error('Email permanently failed after max attempts', {
+              to: email.to,
+              lastError: email.error
+            });
+          }
+        }
+      } catch (error) {
         email.attempt++;
         email.lastAttempt = new Date();
-        email.nextRetry = new Date(Date.now() + getNextRetryDelay(email.attempt));
-        email.error = result.error?.message;
+        email.error = error instanceof Error ? error.message : 'Unknown error';
 
-        if (email.attempt >= email.maxAttempts) {
-          const index = failedEmailQueue.indexOf(email);
-          if (index !== -1) failedEmailQueue.splice(index, 1);
+        await email.markFailed(email.error);
+
+        if (email.status === 'failed') {
           stats.failed++;
-          logger.error('Email permanently failed after max attempts', {
-            to: email.to,
-            lastError: email.error
-          });
         }
-      }
-    } catch (error) {
-      email.attempt++;
-      email.lastAttempt = new Date();
-      email.nextRetry = new Date(Date.now() + getNextRetryDelay(email.attempt));
-      email.error = error instanceof Error ? error.message : 'Unknown error';
 
-      if (email.attempt >= email.maxAttempts) {
-        const index = failedEmailQueue.indexOf(email);
-        if (index !== -1) failedEmailQueue.splice(index, 1);
-        stats.failed++;
+        logger.error('Failed to process queued email', {
+          to: email.to,
+          error: email.error
+        });
       }
-
-      logger.error('Failed to process queued email', { to: email.to, error: email.error });
     }
+  } catch (error) {
+    logger.error('Email queue processing error', {
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 
   return stats;
 };
 
-// Process queue every 5 minutes
-setInterval(async () => {
-  try {
-    const stats = await processEmailQueue();
-    if (stats.processed > 0) {
-      logger.info('Email queue processed', stats);
-    }
-  } catch (error) {
-    logger.error('Email queue processing error', { error });
-  }
-}, EMAIL_RETRY_INTERVAL);
+// Process queue every 5 minutes (from MongoDB)
+let emailQueueInterval: NodeJS.Timeout | null = null;
 
-// Export queue stats for monitoring
-export const getEmailQueueStats = (): {
+export const startEmailQueueProcessor = (): void => {
+  if (emailQueueInterval) return; // Already running
+
+  emailQueueInterval = setInterval(async () => {
+    try {
+      const stats = await processEmailQueue();
+      if (stats.processed > 0) {
+        logger.info('Email queue processed (MongoDB)', stats);
+      }
+    } catch (error) {
+      logger.error('Email queue processing error', { error });
+    }
+  }, EMAIL_RETRY_INTERVAL);
+
+  logger.info('Email queue processor started', {
+    intervalMs: EMAIL_RETRY_INTERVAL,
+    source: 'MongoDB'
+  });
+};
+
+// Stop the processor (for graceful shutdown)
+export const stopEmailQueueProcessor = (): void => {
+  if (emailQueueInterval) {
+    clearInterval(emailQueueInterval);
+    emailQueueInterval = null;
+    logger.info('Email queue processor stopped');
+  }
+};
+
+// Export queue stats for monitoring (from MongoDB)
+export const getEmailQueueStats = async (): Promise<{
   size: number;
   emailsReadyToRetry: number;
-} => ({
-  size: failedEmailQueue.length,
-  emailsReadyToRetry: failedEmailQueue.filter(e => e.nextRetry.getTime() <= Date.now()).length
-});
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+}> => {
+  const stats = await FailedEmailQueue.getStats();
+  return {
+    size: stats.pending + stats.processing,
+    emailsReadyToRetry: stats.readyToProcess,
+    ...stats
+  };
+};
+
+// Initialize queue processor on module load
+startEmailQueueProcessor();
 
 // NILIN Brand Colors
 const BRAND_COLORS = {

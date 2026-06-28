@@ -1,14 +1,15 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
-import type { AuthTokens, AuthUser, LoginCredentials, RegisterData } from '../services/AuthService';
-import { ApiError } from '../services/AuthService';
+import type { AuthResponse, AuthTokens, AuthUser, LoginCredentials, RegisterData } from '../services/AuthService';
+import { ApiError, Requires2FAError } from '../services/AuthService';
 import type { BusinessInfo, LocationInfo, ServiceInput } from '../types/auth';
 import { secureStorage } from '@/lib/security';
 import { socketService } from '../services/socket';
 import logger from '../lib/logger';
 
-let getCurrentUserInFlight: Promise<void> | null = null;
+// WeakMap to track in-flight getCurrentUser promises per store instance
+const getCurrentUserPromises = new WeakMap<object, Promise<void>>();
 
 async function refreshFeatureFlagsForUser(userId?: string): Promise<void> {
   try {
@@ -19,19 +20,64 @@ async function refreshFeatureFlagsForUser(userId?: string): Promise<void> {
   }
 }
 
+/** Connect socket when user is authenticated (no-op if already connected). */
+async function connectAuthenticatedSocket(): Promise<void> {
+  try {
+    if (!socketService.isConnected()) {
+      await socketService.connect();
+    }
+  } catch (error) {
+    logger.warn('[Auth] Socket connect failed', error);
+  }
+}
+
 /**
  * Custom zustand storage adapter that uses secureStorage
  * This provides XSS protection by not exposing tokens in raw sessionStorage
  */
 const secureAuthStorage: StateStorage = {
   getItem: (name: string): string | null => {
-    return secureStorage.getItem(name);
+    try {
+      return secureStorage.getItem(name);
+    } catch (error) {
+      console.error('secureAuthStorage.getItem error:', error);
+      return null;
+    }
   },
   setItem: (name: string, value: string): void => {
-    secureStorage.setItem(name, value);
+    try {
+      secureStorage.setItem(name, value);
+    } catch (error) {
+      // Handle QuotaExceededError gracefully
+      if (error instanceof Error && error.name === 'QuotaExceededError') {
+        console.error('Storage quota exceeded. Attempting to clear old data...');
+        // Try to clear non-essential storage and retry once
+        try {
+          if (typeof localStorage !== 'undefined') {
+            // Clear non-critical localStorage items
+            const keysToKeep = ['auth-storage', 'nilin-preferences'];
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+              const key = localStorage.key(i);
+              if (key && !keysToKeep.some(k => key.includes(k))) {
+                localStorage.removeItem(key);
+              }
+            }
+          }
+          secureStorage.setItem(name, value);
+        } catch (retryError) {
+          console.error('Failed to save after clearing storage:', retryError);
+        }
+      } else {
+        console.error('secureAuthStorage.setItem error:', error);
+      }
+    }
   },
   removeItem: (name: string): void => {
-    secureStorage.removeItem(name);
+    try {
+      secureStorage.removeItem(name);
+    } catch (error) {
+      console.error('secureAuthStorage.removeItem error:', error);
+    }
   },
 };
 
@@ -202,6 +248,7 @@ export interface AuthState {
   customerProfile: CustomerProfile | null;
   providerProfile: ProviderProfile | null;
   tokens: AuthTokens | null;
+  sessionId: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   isInitialized: boolean;
@@ -209,6 +256,7 @@ export interface AuthState {
 
   // Actions
   login: (credentials: LoginCredentials) => Promise<void>;
+  verifyLogin2FA: (preAuthToken: string, code: string) => Promise<void>;
   registerCustomer: (data: RegisterCustomerData) => Promise<void>;
   registerProvider: (data: RegisterProviderData, files?: FormData) => Promise<void>;
   logout: () => Promise<void>;
@@ -218,10 +266,10 @@ export interface AuthState {
   updateProfile: (data: Partial<User>, files?: FormData) => Promise<void>;
   updateAvatar: (avatarUrl: string) => void;
   changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => Promise<void>;
-  forgotPassword: (email: string) => Promise<void>;
-  resetPassword: (token: string, password: string, confirmPassword: string) => Promise<void>;
+  forgotPassword: (email: string, captchaToken?: string) => Promise<void>;
+  resetPassword: (token: string, password: string, confirmPassword: string, captchaToken?: string) => Promise<void>;
   verifyEmail: (token: string) => Promise<void>;
-  resendVerification: (email: string) => Promise<void>;
+  resendVerification: (email: string, captchaToken?: string) => Promise<void>;
   refreshToken: () => Promise<boolean>;
   clearErrors: () => void;
   setError: (error: AuthError) => void;
@@ -246,6 +294,7 @@ export const useAuthStore = create<AuthState>()(
       customerProfile: null,
       providerProfile: null,
       tokens: null,
+      sessionId: null,
       isAuthenticated: false,
       isLoading: false,
       isInitialized: false,
@@ -253,8 +302,8 @@ export const useAuthStore = create<AuthState>()(
 
       // Actions - All delegate to AuthService for single source of truth
       login: async (credentials: LoginCredentials) => {
-        // Lazy import to avoid circular dependency
         const authService = (await import('../services/AuthService')).default;
+        const { Requires2FAError } = await import('../services/AuthService');
 
         try {
           set((state) => {
@@ -263,15 +312,15 @@ export const useAuthStore = create<AuthState>()(
           });
 
           const response = await authService.login(credentials);
-
           const loggedInUser = response.data.user;
+
           set((state) => {
             state.user = loggedInUser;
-            state.tokens = response.data.tokens;
-            state.isAuthenticated = true;
+            state.tokens = response.data.tokens ?? null;
+            state.sessionId = response.data.sessionId ?? null;
+            state.isAuthenticated = Boolean(response.data.tokens?.accessToken);
             state.isLoading = false;
 
-            // Set role-specific profiles using correct property names
             if (loggedInUser.role === 'customer' && response.data.customerProfile) {
               state.customerProfile = response.data.customerProfile;
             } else if (loggedInUser.role === 'provider' && response.data.providerProfile) {
@@ -279,12 +328,58 @@ export const useAuthStore = create<AuthState>()(
             }
           });
           await refreshFeatureFlagsForUser(loggedInUser.id || loggedInUser._id);
+          await connectAuthenticatedSocket();
         } catch (error) {
+          if (error instanceof Requires2FAError) {
+            set((state) => {
+              state.isLoading = false;
+            });
+            throw error;
+          }
           set((state) => {
             state.isLoading = false;
             state.errors = [{
               message: error instanceof Error ? error.message : 'Login failed',
               code: 'LOGIN_ERROR'
+            }];
+          });
+          throw error;
+        }
+      },
+
+      verifyLogin2FA: async (preAuthToken: string, code: string) => {
+        const authService = (await import('../services/AuthService')).default;
+
+        try {
+          set((state) => {
+            state.isLoading = true;
+            state.errors = [];
+          });
+
+          const response = await authService.verifyLogin2FA(preAuthToken, code);
+          const loggedInUser = response.data.user;
+
+          set((state) => {
+            state.user = loggedInUser;
+            state.tokens = response.data.tokens ?? null;
+            state.sessionId = response.data.sessionId ?? null;
+            state.isAuthenticated = Boolean(response.data.tokens?.accessToken);
+            state.isLoading = false;
+
+            if (loggedInUser.role === 'customer' && response.data.customerProfile) {
+              state.customerProfile = response.data.customerProfile;
+            } else if (loggedInUser.role === 'provider' && response.data.providerProfile) {
+              state.providerProfile = response.data.providerProfile;
+            }
+          });
+          await refreshFeatureFlagsForUser(loggedInUser.id || loggedInUser._id);
+          await connectAuthenticatedSocket();
+        } catch (error) {
+          set((state) => {
+            state.isLoading = false;
+            state.errors = [{
+              message: error instanceof Error ? error.message : 'Two-factor verification failed',
+              code: 'LOGIN_2FA_ERROR'
             }];
           });
           throw error;
@@ -309,6 +404,7 @@ export const useAuthStore = create<AuthState>()(
             state.isAuthenticated = true;
             state.isLoading = false;
           });
+          await connectAuthenticatedSocket();
         } catch (err: unknown) {
           // Preserve the ApiError structure so components can access status and data
           const error = err instanceof ApiError ? err : ApiError.fromAxios(err);
@@ -358,18 +454,24 @@ export const useAuthStore = create<AuthState>()(
             }
 
             // Use file upload method
-            const response = await authService.uploadFile<{ user: AuthUser; tokens: AuthTokens; providerProfile: ProviderProfile | null }>(
+            const response = await authService.uploadFile<{
+              success: boolean;
+              data: { user: AuthUser; tokens: AuthTokens; providerProfile: ProviderProfile | null };
+            }>(
               '/auth/register/provider',
               formData
             );
 
+            const payload = response.data ?? response;
+
             set((state) => {
-              state.user = response.user;
-              state.tokens = response.tokens;
-              state.providerProfile = response.providerProfile ?? null;
+              state.user = payload.user;
+              state.tokens = payload.tokens;
+              state.providerProfile = payload.providerProfile ?? null;
               state.isAuthenticated = true;
               state.isLoading = false;
             });
+            await connectAuthenticatedSocket();
             return;
           }
 
@@ -382,6 +484,7 @@ export const useAuthStore = create<AuthState>()(
             state.isAuthenticated = true;
             state.isLoading = false;
           });
+          await connectAuthenticatedSocket();
         } catch (error) {
           set((state) => {
             state.isLoading = false;
@@ -423,6 +526,7 @@ export const useAuthStore = create<AuthState>()(
             state.customerProfile = null;
             state.providerProfile = null;
             state.tokens = null;
+            state.sessionId = null;
             state.isAuthenticated = false;
             state.errors = [];
           });
@@ -457,6 +561,7 @@ export const useAuthStore = create<AuthState>()(
             state.customerProfile = null;
             state.providerProfile = null;
             state.tokens = null;
+            state.sessionId = null;
             state.isAuthenticated = false;
             state.errors = [];
           });
@@ -472,17 +577,20 @@ export const useAuthStore = create<AuthState>()(
           state.customerProfile = null;
           state.providerProfile = null;
           state.tokens = null;
+          state.sessionId = null;
           state.isAuthenticated = false;
           state.errors = [];
         });
       },
 
       getCurrentUser: async () => {
-        if (getCurrentUserInFlight) {
-          return getCurrentUserInFlight;
+        // Use WeakMap to track in-flight promise for this specific store instance
+        const existingPromise = getCurrentUserPromises.get(store);
+        if (existingPromise) {
+          return existingPromise;
         }
 
-        getCurrentUserInFlight = (async () => {
+        const newPromise = (async () => {
           const authService = (await import('../services/AuthService')).default;
 
           try {
@@ -503,11 +611,12 @@ export const useAuthStore = create<AuthState>()(
           } catch (error) {
             console.error('Get current user error:', error);
           } finally {
-            getCurrentUserInFlight = null;
+            getCurrentUserPromises.delete(store);
           }
         })();
 
-        return getCurrentUserInFlight;
+        getCurrentUserPromises.set(store, newPromise);
+        return newPromise;
       },
 
       updateProfile: async (data: Partial<User>, files?: FormData) => {
@@ -589,7 +698,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      forgotPassword: async (email: string) => {
+      forgotPassword: async (email: string, captchaToken?: string) => {
         const authService = (await import('../services/AuthService')).default;
 
         try {
@@ -598,7 +707,7 @@ export const useAuthStore = create<AuthState>()(
             state.errors = [];
           });
 
-          await authService.forgotPassword(email);
+          await authService.forgotPassword(email, captchaToken);
 
           set((state) => {
             state.isLoading = false;
@@ -615,7 +724,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      resetPassword: async (token: string, password: string, confirmPassword: string) => {
+      resetPassword: async (token: string, password: string, confirmPassword: string, captchaToken?: string) => {
         const authService = (await import('../services/AuthService')).default;
 
         try {
@@ -624,7 +733,7 @@ export const useAuthStore = create<AuthState>()(
             state.errors = [];
           });
 
-          await authService.resetPassword(token, password, confirmPassword);
+          await authService.resetPassword(token, password, confirmPassword, captchaToken);
 
           set((state) => {
             state.isLoading = false;
@@ -670,7 +779,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      resendVerification: async (email: string) => {
+      resendVerification: async (email: string, captchaToken?: string) => {
         const authService = (await import('../services/AuthService')).default;
 
         try {
@@ -679,7 +788,7 @@ export const useAuthStore = create<AuthState>()(
             state.errors = [];
           });
 
-          await authService.resendVerification(email);
+          await authService.resendVerification(email, captchaToken);
 
           set((state) => {
             state.isLoading = false;
@@ -709,15 +818,20 @@ export const useAuthStore = create<AuthState>()(
           }
 
           // Call the refresh endpoint
-          const response = await authService.post<{ tokens: AuthTokens; user: AuthUser }>('/auth/refresh-token', {
+          const response = await authService.post<AuthResponse<{ tokens: AuthTokens; user: AuthUser }>>('/auth/refresh-token', {
             refreshToken: tokens.refreshToken
           });
 
-          if (response.tokens) {
+          if (response.data?.tokens) {
             // Update tokens in store
             set((state) => {
-              state.tokens = response.tokens;
+              state.tokens = response.data.tokens;
             });
+            if (get().isAuthenticated) {
+              await socketService.reconnect().catch((err) => {
+                logger.warn('[Auth] Socket reconnect after token refresh failed', err);
+              });
+            }
             return true;
           }
 
@@ -749,8 +863,26 @@ export const useAuthStore = create<AuthState>()(
 
       initialize: async () => {
         const tokens = get().tokens;
+        const authService = (await import('../services/AuthService')).default;
 
         if (tokens?.accessToken) {
+          if (!authService.isTokenValid() && tokens.refreshToken) {
+            const refreshed = await get().refreshToken();
+            if (!refreshed) {
+              get().clearAuth();
+              set((state) => {
+                state.isInitialized = true;
+              });
+              return;
+            }
+          } else if (!authService.isTokenValid()) {
+            get().clearAuth();
+            set((state) => {
+              state.isInitialized = true;
+            });
+            return;
+          }
+
           try {
             // First try to get current user
             await get().getCurrentUser();
@@ -758,6 +890,7 @@ export const useAuthStore = create<AuthState>()(
               state.isAuthenticated = true;
               state.isInitialized = true;
             });
+            await connectAuthenticatedSocket();
           } catch (error: unknown) {
             console.error('Failed to initialize auth:', error);
 
@@ -772,11 +905,11 @@ export const useAuthStore = create<AuthState>()(
             if (isAxiosError && (error as { response: { status?: number } }).response?.status === 401 && tokens?.refreshToken) {
               try {
                 const authService = (await import('../services/AuthService')).default;
-                const response = await authService.post<{ tokens: AuthTokens }>('/auth/refresh-token', {
+                const response = await authService.post<AuthResponse<{ tokens: AuthTokens }>>('/auth/refresh-token', {
                   refreshToken: tokens.refreshToken
                 });
 
-                const newTokens = response.tokens;
+                const newTokens = response.data.tokens;
                 set((state) => {
                   state.tokens = newTokens;
                 });
@@ -787,6 +920,7 @@ export const useAuthStore = create<AuthState>()(
                   state.isAuthenticated = true;
                   state.isInitialized = true;
                 });
+                await connectAuthenticatedSocket();
                 return;
               } catch (refreshError) {
                 console.error('Token refresh failed during init:', refreshError);
@@ -851,6 +985,7 @@ export const useAuthStore = create<AuthState>()(
 
       // Token update handler reference for cleanup
       _tokenUpdateHandler: null as ((event: CustomEvent) => void) | null,
+      _socketUnauthorizedHandler: null as (() => void) | null,
       _initTimerId: null as ReturnType<typeof setTimeout> | null,
 
       // Initialize event listener for token updates from API service
@@ -865,18 +1000,38 @@ export const useAuthStore = create<AuthState>()(
               set((state) => {
                 state.tokens = newTokens;
               });
+              if (get().isAuthenticated) {
+                socketService.reconnect().catch((err) => {
+                  logger.warn('[Auth] Socket reconnect after token update failed', err);
+                });
+              }
             }
           }) as (event: CustomEvent) => void;
 
-          window.addEventListener('auth-tokens-updated', store._tokenUpdateHandler as any);
+          window.addEventListener('auth-tokens-updated', store._tokenUpdateHandler as EventListener);
+
+          const handleSocketUnauthorized = async () => {
+            const refreshed = await get().refreshToken();
+            if (refreshed) {
+              await socketService.reconnect().catch((err) => {
+                logger.warn('[Auth] Socket reconnect after unauthorized failed', err);
+              });
+            }
+          };
+          window.addEventListener('socket:unauthorized', handleSocketUnauthorized);
+          store._socketUnauthorizedHandler = handleSocketUnauthorized;
         }
       },
 
       // Cleanup event listener - call this on logout
       _cleanupTokenListener: () => {
         if (typeof window !== 'undefined' && store._tokenUpdateHandler) {
-          window.removeEventListener('auth-tokens-updated', store._tokenUpdateHandler as any);
+          window.removeEventListener('auth-tokens-updated', store._tokenUpdateHandler as EventListener);
           store._tokenUpdateHandler = null;
+        }
+        if (typeof window !== 'undefined' && store._socketUnauthorizedHandler) {
+          window.removeEventListener('socket:unauthorized', store._socketUnauthorizedHandler);
+          store._socketUnauthorizedHandler = null;
         }
         // Clear the init timer if it exists
         if (store._initTimerId !== null) {
@@ -907,6 +1062,7 @@ export const useAuthStore = create<AuthState>()(
         customerProfile: state.customerProfile,
         providerProfile: state.providerProfile,
         tokens: state.tokens,
+        sessionId: state.sessionId,
         isAuthenticated: state.isAuthenticated,
       }),
     }

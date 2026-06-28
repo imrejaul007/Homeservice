@@ -1,6 +1,7 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import { AxiosError } from 'axios';
 import { API_BASE_URL } from '@/config/api';
-import { secureStorage } from '@/lib/security';
+import { api as centralizedApi } from './api';
+import { useAuthStore } from '@/stores/authStore';
 
 export class WalletApiError extends Error {
   constructor(
@@ -13,31 +14,33 @@ export class WalletApiError extends Error {
   }
 }
 
-function createWalletClient(prefix: 'customer' | 'provider'): AxiosInstance {
-  const client = axios.create({
-    baseURL: `${API_BASE_URL}/${prefix}`,
-    withCredentials: true,
-  });
+type WalletHttpClient = {
+  get: (path: string) => ReturnType<typeof centralizedApi.get>;
+  post: (path: string, data?: unknown) => ReturnType<typeof centralizedApi.post>;
+};
 
-  client.interceptors.request.use((config) => {
-    const stored = secureStorage.getItem('auth-storage');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        const token = parsed?.state?.tokens?.accessToken;
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-      } catch (e) {
-        if (process.env.NODE_ENV === 'development') {
-          console.warn('[WalletApi] Failed to parse auth storage:', e);
-        }
-      }
-    }
-    return config;
-  });
+function getWalletAuthHeader(): Record<string, string> {
+  // Prefer in-memory Zustand state (freshest), fallback to interceptor/storage behavior.
+  const accessToken = useAuthStore.getState().tokens?.accessToken;
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
 
-  return client;
+function createWalletClient(prefix: 'customer' | 'provider'): WalletHttpClient {
+  // Reuse centralized client so wallet requests benefit from:
+  // - token refresh on 401
+  // - CSRF handling
+  // - consistent auth/correlation headers
+  const basePath = `/${prefix}`;
+  return {
+    get: (path: string) =>
+      centralizedApi.get(`${basePath}${path}`, {
+        headers: getWalletAuthHeader(),
+      }),
+    post: (path: string, data?: unknown) =>
+      centralizedApi.post(`${basePath}${path}`, data, {
+        headers: getWalletAuthHeader(),
+      }),
+  };
 }
 
 // Note: Backend returns Date objects that serialize to ISO strings in JSON
@@ -140,7 +143,7 @@ interface DeductCreditsResponse {
 }
 
 class WalletApiService {
-  constructor(private readonly api: AxiosInstance) {}
+  constructor(private readonly api: WalletHttpClient) {}
 
   async getWallet(): Promise<WalletResponse> {
     try {

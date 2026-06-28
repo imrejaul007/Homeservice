@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { checkIndexHealth, createAllIndexes, getIndexSummary } from '../models/indexes';
 import {
   getAdminStats,
@@ -16,6 +17,7 @@ import {
   updateServiceStatus,
   adminDeleteService,
   getServiceStats,
+  searchServices,
   getAllUsers,
   updateUserStatus,
   adminDeleteUser,
@@ -25,10 +27,14 @@ import {
   getProviderServices,
   // Bookings Management
   getAllBookings,
+  searchBookings,
   getBookingDetails,
   updateBookingStatus,
   getBookingStats,
   cancelBooking,
+  batchRefund,
+  getRefundAnalytics,
+  reindexSearch,
   // Categories Management
   getAllCategories,
   getCategoryDetails,
@@ -60,7 +66,17 @@ import {
   executeChurnRetentionAction,
   // Real-time metrics
   getRealtimeMetrics,
+  // Provider Bookings
+  getProviderBookings,
+  // User-Provider Relationship
+  getUserProviderRelationship,
 } from '../controllers/admin.controller';
+import { chatService } from '../services/chat.service';
+import { notificationService } from '../services/notification.service';
+import Message from '../models/message.model';
+import ChatRoom from '../models/chatRoom.model';
+import User from '../models/user.model';
+import { getProviderEarnings } from '../controllers/earnings.controller';
 import { disputeService } from '../services/dispute.service';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
@@ -74,6 +90,7 @@ import Joi from 'joi';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
+import adminAnalyticsRoutes from './adminAnalytics.routes';
 
 const router = express.Router();
 
@@ -210,6 +227,9 @@ router.post('/churn/execute/:userId', executeChurnRetentionAction);
 // Real-time metrics (must come before /:id routes)
 router.get('/realtime-metrics', getRealtimeMetrics);
 
+// Platform analytics aggregates
+router.use('/analytics', adminAnalyticsRoutes);
+
 // Provider verification routes
 router.get('/providers/pending', getPendingProviders);
 router.get('/providers/stats', getVerificationStats);
@@ -221,10 +241,24 @@ router.post('/providers/:id/suspend', suspendProvider);
 router.post('/providers/:id/reactivate', reactivateProvider);
 router.post('/providers/batch', batchProviderAction);
 
+// Provider Bookings Management
+router.get('/providers/:id/bookings', getProviderBookings);
+
+// Provider Earnings (Admin only)
+router.get('/providers/:id/earnings', getProviderEarnings);
+
+// ========================================
+// User-Provider Relationship Routes
+// ========================================
+
+// Get comprehensive relationship data between a customer and provider
+router.get('/relationships/user-provider', getUserProviderRelationship);
+
 // ========================================
 // Service Management Routes
 // ========================================
 
+router.get('/services/search', searchServices);
 router.get('/services', getAllServices);
 router.get('/services/pending', getPendingServices);
 router.get('/services/stats', getServiceStats);
@@ -266,10 +300,113 @@ router.post('/services/batch-action', batchServiceAction);
 // ========================================
 
 router.get('/bookings', getAllBookings);
+router.get('/bookings/search', searchBookings);
 router.get('/bookings/stats', getBookingStats);
 router.get('/bookings/:id', getBookingDetails);
 router.patch('/bookings/:id/status', validateBookingStatus, updateBookingStatus);
 router.post('/bookings/:id/cancel', cancelBooking);
+router.post('/bookings/batch-refund', batchRefund);
+router.post('/bookings/:id/refund', asyncHandler(async (req: Request, res: Response) => {
+  req.body = {
+    ...req.body,
+    reason: req.body?.reason || 'Admin-initiated refund',
+    refundPolicy: req.body?.refundPolicy || 'full',
+    bookingIds: [req.params.id],
+  };
+  return batchRefund(req, res, () => undefined);
+}));
+router.post('/bookings/export', asyncHandler(async (req: Request, res: Response) => {
+  const Booking = (await import('../models/booking.model')).default;
+  const {
+    search,
+    status,
+    provider,
+    customer,
+    dateFrom,
+    dateTo,
+  } = req.body ?? {};
+
+  const query: Record<string, unknown> = { isDeleted: { $ne: true } };
+
+  if (search && typeof search === 'string') {
+    query.$or = [
+      { bookingNumber: { $regex: search, $options: 'i' } },
+      { 'customerInfo.email': { $regex: search, $options: 'i' } },
+      { 'customerInfo.firstName': { $regex: search, $options: 'i' } },
+    ];
+  }
+
+  if (status && typeof status === 'string' && status !== 'all') {
+    if (status === 'active') {
+      query.status = { $in: ['pending', 'confirmed', 'in_progress'] };
+    } else {
+      query.status = status;
+    }
+  }
+
+  if (provider && typeof provider === 'string') {
+    query.providerId = provider;
+  }
+
+  if (customer && typeof customer === 'string') {
+    query.customerId = customer;
+  }
+
+  if (dateFrom || dateTo) {
+    query.scheduledDate = {};
+    if (dateFrom) {
+      (query.scheduledDate as Record<string, Date>).$gte = new Date(dateFrom as string);
+    }
+    if (dateTo) {
+      (query.scheduledDate as Record<string, Date>).$lte = new Date(dateTo as string);
+    }
+  }
+
+  const bookings = await Booking.find(query)
+    .populate('customerId', 'firstName lastName email')
+    .populate('providerId', 'firstName lastName email businessName')
+    .populate('serviceId', 'name')
+    .sort({ createdAt: -1 })
+    .limit(5000)
+    .lean();
+
+  const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const headers = ['Booking Number', 'Status', 'Customer', 'Provider', 'Service', 'Scheduled Date', 'Amount', 'Currency'];
+  const rows = bookings.map((booking) => {
+    const customerUser = booking.customerId as { firstName?: string; lastName?: string; email?: string } | null;
+    const providerUser = booking.providerId as { firstName?: string; lastName?: string; businessName?: string } | null;
+    const service = booking.serviceId as { name?: string } | null;
+    const customerName = customerUser
+      ? `${customerUser.firstName ?? ''} ${customerUser.lastName ?? ''}`.trim() || customerUser.email
+      : '';
+    const providerName = providerUser?.businessName
+      || `${providerUser?.firstName ?? ''} ${providerUser?.lastName ?? ''}`.trim();
+    const amount = booking.pricing?.totalAmount ?? 0;
+    const currency = booking.pricing?.currency ?? 'AED';
+
+    return [
+      booking.bookingNumber ?? booking._id,
+      booking.status,
+      customerName,
+      providerName,
+      service?.name ?? '',
+      booking.scheduledDate ? new Date(booking.scheduledDate).toISOString() : '',
+      amount,
+      currency,
+    ].map(escapeCsv).join(',');
+  });
+
+  const csv = [headers.map(escapeCsv).join(','), ...rows].join('\n');
+  const filename = `bookings-export-${new Date().toISOString().split('T')[0]}.csv`;
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(csv);
+}));
+router.get('/refunds/analytics', requireAdminRole, getRefundAnalytics);
+
+// Search Management
+router.post('/search/reindex', requireAdminRole, reindexSearch);
 
 // ========================================
 // Categories Management Routes
@@ -418,6 +555,32 @@ router.get('/disputes/stats', asyncHandler(async (req: Request, res: Response) =
   });
 }));
 
+/**
+ * @route   GET /api/admin/disputes/search
+ * @desc    Search disputes by dispute number, customer name, or provider name
+ * @access  Private (Admin only)
+ * @query   q - Search query (min 2 characters)
+ * @query   limit - Maximum results to return (default 10, max 20)
+ */
+router.get('/disputes/search', asyncHandler(async (req: Request, res: Response) => {
+  const { q, limit } = req.query;
+
+  if (!q || typeof q !== 'string' || q.trim().length < 2) {
+    throw ApiError.badRequest('Search query must be at least 2 characters', [], 'VALIDATION_ERROR');
+  }
+
+  const maxLimit = Math.min(parseInt(limit as string) || 10, 20);
+  const results = await disputeService.searchDisputes(q.trim(), maxLimit);
+
+  res.json({
+    success: true,
+    data: {
+      items: results,
+      count: results.length,
+    },
+  });
+}));
+
 // ========================================
 // Withdrawal Management Routes
 // ========================================
@@ -562,5 +725,421 @@ router.post('/indexes/recreate', asyncHandler(async (req: Request, res: Response
     }
   });
 }));
+
+// ========================================
+// Admin-to-Provider Messaging Routes
+// ========================================
+
+/**
+ * Validation schema for sending admin message to provider
+ */
+const adminMessageSchema = Joi.object({
+  message: Joi.string().required().min(1).max(5000).messages({
+    'string.empty': 'Message content is required',
+    'any.required': 'Message content is required',
+    'string.min': 'Message must be at least 1 character',
+    'string.max': 'Message cannot exceed 5000 characters'
+  }),
+  type: Joi.string().valid('warning', 'info', 'urgent').default('info').messages({
+    'any.only': 'Message type must be one of: warning, info, urgent'
+  }),
+  attachments: Joi.array().items(
+    Joi.object({
+      url: Joi.string().required(),
+      filename: Joi.string().required(),
+      mimeType: Joi.string().required(),
+      size: Joi.number().positive().required(),
+      thumbnailUrl: Joi.string().optional()
+    })
+  ).max(10).optional()
+});
+
+/**
+ * Validation schema for fetching provider messages
+ */
+const providerMessagesQuerySchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  includeDeleted: Joi.boolean().default(false)
+});
+
+/**
+ * POST /api/admin/providers/:id/message
+ * Send a message from admin to a provider
+ * Creates or uses existing conversation between admin and provider
+ */
+router.post(
+  '/providers/:id/message',
+  asyncHandler(async (req: Request, res: Response) => {
+    const adminUser = (req as any).user;
+    const providerId = req.params.id;
+
+    // Validate provider ID
+    if (!providerId || !mongoose.Types.ObjectId.isValid(providerId)) {
+      throw ApiError.badRequest('Valid provider ID is required', [], ERROR_CODES.VALIDATION_ERROR);
+    }
+
+    // Verify provider exists and has 'provider' role
+    const provider = await User.findById(providerId);
+    if (!provider) {
+      throw ApiError.notFound('Provider not found', ERROR_CODES.NOT_FOUND);
+    }
+    if (provider.role !== 'provider') {
+      throw ApiError.badRequest('Target user is not a provider', [], ERROR_CODES.VALIDATION_ERROR);
+    }
+
+    // Validate message body
+    const { error, value } = adminMessageSchema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true
+    });
+    if (error) {
+      throw ApiError.badRequest(
+        error.details.map(d => d.message).join('; '),
+        error.details.map(d => ({ field: d.path.join('.'), message: d.message })),
+        ERROR_CODES.VALIDATION_ERROR
+      );
+    }
+
+    // Find or create direct chat room between admin and provider
+    const chatRoom = await ChatRoom.findOrCreateDirectChat(
+      new mongoose.Types.ObjectId(adminUser._id.toString()),
+      new mongoose.Types.ObjectId(providerId)
+    );
+
+    // Create message with system-style metadata for admin messages
+    const message = new Message({
+      chatRoomId: chatRoom._id,
+      senderId: new mongoose.Types.ObjectId(adminUser._id.toString()),
+      receiverId: new mongoose.Types.ObjectId(providerId),
+      content: value.message,
+      type: 'text',
+      status: 'sent',
+      attachments: value.attachments,
+      metadata: {
+        isAdminMessage: true,
+        adminMessageType: value.type,
+        deviceType: req.headers['x-device-type'] as 'mobile' | 'desktop' | 'tablet' | undefined,
+        userAgent: req.headers['user-agent']
+      }
+    });
+
+    await message.save();
+
+    // Update chat room with last message
+    await ChatRoom.updateLastMessage(
+      chatRoom._id.toString(),
+      message._id as mongoose.Types.ObjectId,
+      value.message.substring(0, 100)
+    );
+
+    // Increment unread count for provider
+    await chatRoom.incrementUnreadCount(new mongoose.Types.ObjectId(providerId));
+
+    // Emit socket event for real-time delivery
+    const { getSocketServer } = await import('../socket');
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitToChatRoom(chatRoom._id.toString(), 'message:new', {
+        messageId: message._id.toString(),
+        chatRoomId: chatRoom._id.toString(),
+        senderId: adminUser._id.toString(),
+        receiverId: providerId,
+        content: value.message,
+        type: 'text',
+        attachments: value.attachments,
+        status: 'sent',
+        metadata: message.metadata,
+        createdAt: message.createdAt
+      });
+    }
+
+    // Send notification to provider
+    const adminName = `${adminUser.firstName || ''} ${adminUser.lastName || ''}`.trim() || 'Admin';
+    const notificationTitle = value.type === 'urgent' ? 'Urgent Message from Admin' :
+                             value.type === 'warning' ? 'Warning from Admin' :
+                             'Message from Admin';
+
+    await notificationService.createInAppNotification({
+      recipientId: providerId,
+      type: 'message_received',
+      title: notificationTitle,
+      message: `${adminName}: ${value.message.substring(0, 100)}${value.message.length > 100 ? '...' : ''}`,
+      actionText: 'View Message',
+      actionUrl: '/provider/messages',
+      metadata: {
+        chatRoomId: chatRoom._id.toString(),
+        senderId: adminUser._id.toString(),
+        messageId: message._id.toString(),
+        isAdminMessage: true,
+        adminMessageType: value.type
+      }
+    });
+
+    logger.info('Admin message sent to provider', {
+      context: 'AdminRoutes',
+      action: 'ADMIN_SEND_MESSAGE',
+      adminId: adminUser._id.toString(),
+      providerId,
+      messageId: message._id.toString(),
+      chatRoomId: chatRoom._id.toString(),
+      messageType: value.type
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        conversationId: chatRoom._id.toString(),
+        messageId: message._id.toString()
+      }
+    });
+  })
+);
+
+/**
+ * GET /api/admin/providers/:id/messages
+ * Get message history between admin and provider
+ * Includes pagination support
+ */
+router.get(
+  '/providers/:id/messages',
+  asyncHandler(async (req: Request, res: Response) => {
+    const adminUser = (req as any).user;
+    const providerId = req.params.id;
+
+    // Validate provider ID
+    if (!providerId || !mongoose.Types.ObjectId.isValid(providerId)) {
+      throw ApiError.badRequest('Valid provider ID is required', [], ERROR_CODES.VALIDATION_ERROR);
+    }
+
+    // Verify provider exists
+    const provider = await User.findById(providerId);
+    if (!provider) {
+      throw ApiError.notFound('Provider not found', ERROR_CODES.NOT_FOUND);
+    }
+
+    // Validate query params
+    const { error, value } = providerMessagesQuerySchema.validate(req.query, {
+      stripUnknown: true
+    });
+    if (error) {
+      throw ApiError.badRequest(
+        error.details.map(d => d.message).join('; '),
+        error.details.map(d => ({ field: d.path.join('.'), message: d.message })),
+        ERROR_CODES.VALIDATION_ERROR
+      );
+    }
+
+    const { page, limit, includeDeleted } = value;
+    const skip = (page - 1) * limit;
+
+    // Find the direct chat room between admin and provider
+    const chatRoom = await ChatRoom.findOne({
+      type: 'direct',
+      'participants.userId': { $all: [
+        new mongoose.Types.ObjectId(adminUser._id.toString()),
+        new mongoose.Types.ObjectId(providerId)
+      ]},
+      status: { $ne: 'blocked' },
+      isDeleted: false
+    });
+
+    // Build query for messages
+    const messageQuery: Record<string, unknown> = {};
+
+    if (chatRoom) {
+      messageQuery.chatRoomId = chatRoom._id;
+    } else {
+      // No conversation exists - return empty results
+      res.json({
+        success: true,
+        data: {
+          items: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            pages: 0,
+            hasNext: false,
+            hasPrev: false,
+            nextPage: null,
+            prevPage: null
+          }
+        }
+      });
+      return;
+    }
+
+    if (!includeDeleted) {
+      messageQuery.isDeleted = false;
+    }
+
+    // Get total count for pagination
+    const total = await Message.countDocuments(messageQuery);
+    const totalPages = Math.ceil(total / limit);
+    const hasNext = page < totalPages;
+    const hasPrev = page > 1;
+
+    // Fetch messages with pagination
+    const messages = await Message.find(messageQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('senderId', 'firstName lastName avatar role')
+      .populate('receiverId', 'firstName lastName avatar role')
+      .lean();
+
+    // Reverse to show oldest first
+    const messagesReversed = messages.reverse();
+
+    logger.info('Admin fetched provider messages', {
+      context: 'AdminRoutes',
+      action: 'ADMIN_GET_MESSAGES',
+      adminId: adminUser._id.toString(),
+      providerId,
+      chatRoomId: chatRoom._id.toString(),
+      messageCount: messages.length,
+      page
+    });
+
+    res.json({
+      success: true,
+      data: {
+        items: messagesReversed,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: totalPages,
+          hasNext,
+          hasPrev,
+          nextPage: hasNext ? page + 1 : null,
+          prevPage: hasPrev ? page - 1 : null
+        }
+      }
+    });
+  })
+);
+
+/**
+ * GET /api/admin/providers/:id/conversation
+ * Get conversation details between admin and provider
+ */
+router.get(
+  '/providers/:id/conversation',
+  asyncHandler(async (req: Request, res: Response) => {
+    const adminUser = (req as any).user;
+    const providerId = req.params.id;
+
+    // Validate provider ID
+    if (!providerId || !mongoose.Types.ObjectId.isValid(providerId)) {
+      throw ApiError.badRequest('Valid provider ID is required', [], ERROR_CODES.VALIDATION_ERROR);
+    }
+
+    // Find the direct chat room between admin and provider
+    const chatRoom = await ChatRoom.findOne({
+      type: 'direct',
+      'participants.userId': { $all: [
+        new mongoose.Types.ObjectId(adminUser._id.toString()),
+        new mongoose.Types.ObjectId(providerId)
+      ]},
+      status: { $ne: 'blocked' },
+      isDeleted: false
+    })
+      .populate('participants.userId', 'firstName lastName avatar role email phone');
+
+    if (!chatRoom) {
+      throw ApiError.notFound('No conversation found with this provider', ERROR_CODES.NOT_FOUND);
+    }
+
+    // Get unread count for admin in this conversation
+    const unreadCount = await Message.countDocuments({
+      chatRoomId: chatRoom._id,
+      receiverId: adminUser._id,
+      senderId: new mongoose.Types.ObjectId(providerId),
+      status: { $ne: 'read' },
+      isDeleted: false
+    });
+
+    // Get last message
+    const lastMessage = await Message.findOne({
+      chatRoomId: chatRoom._id,
+      isDeleted: false
+    })
+      .sort({ createdAt: -1 })
+      .populate('senderId', 'firstName lastName avatar role')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        conversationId: chatRoom._id.toString(),
+        provider: {
+          _id: providerId,
+          firstName: (chatRoom.participants.find(
+            (p: any) => p.userId._id.toString() === providerId
+          )?.userId as any)?.firstName,
+          lastName: (chatRoom.participants.find(
+            (p: any) => p.userId._id.toString() === providerId
+          )?.userId as any)?.lastName,
+          avatar: (chatRoom.participants.find(
+            (p: any) => p.userId._id.toString() === providerId
+          )?.userId as any)?.avatar,
+          email: (chatRoom.participants.find(
+            (p: any) => p.userId._id.toString() === providerId
+          )?.userId as any)?.email,
+          phone: (chatRoom.participants.find(
+            (p: any) => p.userId._id.toString() === providerId
+          )?.userId as any)?.phone
+        },
+        status: chatRoom.status,
+        unreadCount,
+        lastMessage: lastMessage ? {
+          _id: lastMessage._id,
+          content: lastMessage.content,
+          type: lastMessage.type,
+          senderId: lastMessage.senderId,
+          createdAt: lastMessage.createdAt
+        } : null,
+        createdAt: chatRoom.createdAt,
+        updatedAt: chatRoom.updatedAt
+      }
+    });
+  })
+);
+
+// ============================================
+// Custom Report Routes
+// ============================================
+import {
+  generateCustomReport,
+  getReportTemplates,
+  createReportTemplate,
+  getReportTemplateById,
+  updateReportTemplate,
+  deleteReportTemplate,
+  getScheduledReports,
+  createScheduledReport,
+  updateScheduledReport,
+  deleteScheduledReport,
+  toggleScheduledReport,
+} from '../controllers/report.controller';
+
+// Custom report generation
+router.post('/reports/generate', authenticate, requireRole('admin'), adminLimiter, generateCustomReport);
+
+// Report templates
+router.get('/reports/templates', authenticate, requireRole('admin'), getReportTemplates);
+router.post('/reports/templates', authenticate, requireRole('admin'), createReportTemplate);
+router.get('/reports/templates/:id', authenticate, requireRole('admin'), getReportTemplateById);
+router.patch('/reports/templates/:id', authenticate, requireRole('admin'), updateReportTemplate);
+router.delete('/reports/templates/:id', authenticate, requireRole('admin'), deleteReportTemplate);
+
+// Scheduled reports
+router.get('/reports/scheduled', authenticate, requireRole('admin'), getScheduledReports);
+router.post('/reports/scheduled', authenticate, requireRole('admin'), createScheduledReport);
+router.patch('/reports/scheduled/:id', authenticate, requireRole('admin'), updateScheduledReport);
+router.delete('/reports/scheduled/:id', authenticate, requireRole('admin'), deleteScheduledReport);
+router.post('/reports/scheduled/:id/toggle', authenticate, requireRole('admin'), toggleScheduledReport);
 
 export default router;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   Search,
@@ -8,8 +8,6 @@ import {
   XCircle,
   Trash2,
   Eye,
-  ChevronLeft,
-  ChevronRight,
   AlertTriangle,
   Loader2,
   X,
@@ -22,9 +20,12 @@ import {
   Link2,
   ThumbsUp,
   TrendingUp,
+  Download,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import { BulkActionToolbar } from '../../components/admin/BulkActionToolbar';
+import { AdminPagination } from '../../components/admin/AdminPagination';
 import { cn } from '../../lib/utils';
 import {
   adminReviewApi,
@@ -59,6 +60,7 @@ const statusStyles: Record<
   all: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'All' },
   pending: { bg: 'bg-yellow-100', text: 'text-yellow-800', label: 'Pending' },
   flagged: { bg: 'bg-red-100', text: 'text-red-800', label: 'Flagged' },
+  autoFlagged: { bg: 'bg-orange-100', text: 'text-orange-800', label: 'Auto-flagged' },
   approved: { bg: 'bg-green-100', text: 'text-green-800', label: 'Approved' },
   rejected: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Rejected' },
   hidden: { bg: 'bg-slate-100', text: 'text-slate-600', label: 'Hidden' },
@@ -106,7 +108,7 @@ const ReviewDetailModal: React.FC<{
             <h2 className="text-xl font-serif text-nilin-charcoal">Review details</h2>
             <p className="text-sm text-nilin-warmGray mt-1 font-mono">#{review._id.slice(-8)}</p>
           </div>
-          <button type="button" onClick={onClose} className="p-2 hover:bg-nilin-blush/40 rounded-lg">
+          <button type="button" onClick={onClose} className="w-11 h-11 flex items-center justify-center hover:bg-nilin-blush/40 rounded-lg" aria-label="Close modal">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -119,6 +121,13 @@ const ReviewDetailModal: React.FC<{
             </div>
             <div className="flex gap-2 flex-wrap">
               <StatusBadge status={status} />
+              {review.autoFlagged && (
+                <span className="px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700 flex items-center gap-1" title={review.moderationReason || 'Content flagged by automated moderation'}>
+                  <AlertTriangle className="w-3 h-3" />
+                  Auto-flagged
+                  {review.moderationScore && ` (${review.moderationScore})`}
+                </span>
+              )}
               {review.reportCount > 0 && (
                 <span className="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700 flex items-center gap-1">
                   <Flag className="w-3 h-3" />
@@ -257,6 +266,149 @@ const ReviewModeration: React.FC = () => {
   const [selectedReview, setSelectedReview] = useState<AdminReview | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionReviewId, setActionReviewId] = useState<string | null>(null);
+  const [selectedReviews, setSelectedReviews] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  // Derived selection state
+  const selectedCount = selectedReviews.size;
+  const isAllVisibleSelected = useMemo(
+    () => reviews.length > 0 && reviews.every((r) => selectedReviews.has(r._id)),
+    [reviews, selectedReviews]
+  );
+  const isSomeSelected = useMemo(
+    () => selectedCount > 0 && !isAllVisibleSelected,
+    [selectedCount, isAllVisibleSelected]
+  );
+
+  // Toggle single review selection
+  const toggleReviewSelection = useCallback((reviewId: string) => {
+    setSelectedReviews((prev) => {
+      const next = new Set(prev);
+      if (next.has(reviewId)) {
+        next.delete(reviewId);
+      } else {
+        next.add(reviewId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Toggle all visible reviews
+  const toggleAllVisible = useCallback(() => {
+    if (isAllVisibleSelected) {
+      setSelectedReviews(new Set());
+    } else {
+      setSelectedReviews(new Set(reviews.map((r) => r._id)));
+    }
+  }, [reviews, isAllVisibleSelected]);
+
+  // Clear all selections
+  const clearSelection = useCallback(() => {
+    setSelectedReviews(new Set());
+  }, []);
+
+  // Handle bulk actions
+  const handleBulkAction = useCallback(
+    async (actionId: string, _selectedIds: string[], _items: AdminReview[]) => {
+      setBulkLoading(true);
+      const ids = Array.from(selectedReviews);
+      const results = { success: 0, failed: 0 };
+
+      try {
+        for (const id of ids) {
+          try {
+            await adminReviewApi.moderate(id, actionId as 'approve' | 'reject' | 'delete');
+            results.success++;
+          } catch {
+            results.failed++;
+          }
+        }
+
+        if (results.success > 0) {
+          toast.success(`${results.success} review${results.success > 1 ? 's' : ''} ${actionId}d`);
+        }
+        if (results.failed > 0) {
+          toast.error(`Failed to ${actionId} ${results.failed} review${results.failed > 1 ? 's' : ''}`);
+        }
+
+        clearSelection();
+        await loadData(true);
+      } finally {
+        setBulkLoading(false);
+      }
+    },
+    [selectedReviews, clearSelection, loadData]
+  );
+
+  // Export selected reviews
+  const exportSelectedReviews = useCallback(() => {
+    const selectedData = reviews.filter((r) => selectedReviews.has(r._id));
+    const csvContent = [
+      ['ID', 'Rating', 'Title', 'Comment', 'Customer', 'Provider', 'Status', 'Date', 'Reports'].join(','),
+      ...selectedData.map((r) =>
+        [
+          r._id,
+          r.rating,
+          `"${(r.title || '').replace(/"/g, '""')}"`,
+          `"${r.comment.replace(/"/g, '""')}"`,
+          `"${formatReviewUserName(r.reviewerId)}"`,
+          `"${formatReviewUserName(r.revieweeId)}"`,
+          r.moderationStatus,
+          new Date(r.createdAt).toISOString(),
+          r.reportCount,
+        ].join(',')
+      ),
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `reviews-export-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${selectedData.length} review${selectedData.length > 1 ? 's' : ''}`);
+  }, [reviews, selectedReviews]);
+
+  // Bulk actions configuration
+  const bulkActions = useMemo(
+    () => [
+      {
+        id: 'approve',
+        label: 'Approve',
+        icon: <CheckCircle className="w-4 h-4" />,
+        variant: 'success' as const,
+        loading: bulkLoading,
+      },
+      {
+        id: 'reject',
+        label: 'Reject',
+        icon: <XCircle className="w-4 h-4" />,
+        variant: 'warning' as const,
+        requiresConfirm: true,
+        confirmTitle: 'Reject Reviews',
+        confirmDescription: `Are you sure you want to reject ${selectedCount} review${selectedCount > 1 ? 's' : ''}? They will be hidden from customers.`,
+        loading: bulkLoading,
+      },
+      {
+        id: 'delete',
+        label: 'Delete',
+        icon: <Trash2 className="w-4 h-4" />,
+        variant: 'danger' as const,
+        requiresConfirm: true,
+        confirmTitle: 'Delete Reviews',
+        confirmDescription: `Are you sure you want to permanently delete ${selectedCount} review${selectedCount > 1 ? 's' : ''}? This action cannot be undone.`,
+        loading: bulkLoading,
+      },
+      {
+        id: 'export',
+        label: 'Export',
+        icon: <Download className="w-4 h-4" />,
+        variant: 'default' as const,
+      },
+    ],
+    [selectedCount, bulkLoading]
+  );
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -298,6 +450,11 @@ const ReviewModeration: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  // Clear selection when filters change
+  useEffect(() => {
+    clearSelection();
+  }, [statusFilter, search, pagination.page, clearSelection]);
+
   const moderateReview = async (
     reviewId: string,
     action: 'approve' | 'reject' | 'restore' | 'delete'
@@ -327,6 +484,7 @@ const ReviewModeration: React.FC = () => {
     ? {
         all: stats.total,
         pending: stats.pending,
+        autoFlagged: stats.autoFlagged || 0,
         flagged: stats.flagged,
         approved: stats.approved,
         rejected: stats.rejected,
@@ -335,6 +493,12 @@ const ReviewModeration: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <AdminPageShell
         wideLayout
         title="Review Moderation"
@@ -355,7 +519,7 @@ const ReviewModeration: React.FC = () => {
           </button>
         }
       >
-        <div className="space-y-6">
+        <div id="main-content" className="space-y-6">
           <div className="rounded-2xl border border-violet-200/70 bg-violet-50/60 px-5 py-4 flex gap-3">
             <Info className="w-5 h-5 text-violet-800 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-violet-950 space-y-1">
@@ -374,11 +538,12 @@ const ReviewModeration: React.FC = () => {
           </div>
 
           {stats && (
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
               {[
                 { label: 'Total', value: stats.total },
                 { label: 'Pending', value: stats.pending, accent: 'text-amber-700' },
-                { label: 'Flagged', value: stats.flagged, accent: 'text-red-600' },
+                { label: 'Auto-flagged', value: stats.autoFlagged || 0, accent: 'text-orange-600' },
+                { label: 'Flagged (reports)', value: stats.flagged, accent: 'text-red-600' },
                 { label: 'Approved', value: stats.approved, accent: 'text-emerald-700' },
                 {
                   label: 'Avg rating',
@@ -473,18 +638,21 @@ const ReviewModeration: React.FC = () => {
           )}
 
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-4 space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {(['all', 'pending', 'flagged', 'approved', 'rejected'] as FilterStatus[]).map(
+            <div role="tablist" aria-label="Review status filters" className="flex flex-wrap gap-2">
+              {(['all', 'pending', 'autoFlagged', 'flagged', 'approved', 'rejected'] as FilterStatus[]).map(
                 (status) => (
                   <button
                     key={status}
                     type="button"
+                    role="tab"
+                    aria-selected={statusFilter === status}
+                    tabIndex={statusFilter === status ? 0 : -1}
                     onClick={() => {
                       setStatusFilter(status);
                       setPagination((p) => ({ ...p, page: 1 }));
                     }}
                     className={cn(
-                      'px-4 py-2 rounded-xl text-sm font-medium transition-colors',
+                      'px-4 py-2 rounded-xl text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2',
                       statusFilter === status
                         ? 'bg-gradient-to-r from-nilin-rose to-nilin-coral text-white'
                         : 'bg-white/80 border border-nilin-border/50 hover:bg-nilin-blush/30'
@@ -525,6 +693,28 @@ const ReviewModeration: React.FC = () => {
                 <table className="min-w-full text-sm font-sans">
                   <thead>
                     <tr className="border-b border-nilin-border/50 bg-nilin-blush/20">
+                      <th className="px-3 py-3 w-12">
+                        <div className="flex items-center justify-center">
+                          <button
+                            type="button"
+                            onClick={toggleAllVisible}
+                            className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-white/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                            aria-label={isAllVisibleSelected ? 'Deselect all' : 'Select all'}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isAllVisibleSelected}
+                              ref={(el) => {
+                                if (el) el.indeterminate = isSomeSelected;
+                              }}
+                              onChange={toggleAllVisible}
+                              className="w-4 h-4 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral"
+                              aria-hidden="true"
+                              tabIndex={-1}
+                            />
+                          </button>
+                        </div>
+                      </th>
                       {['Rating', 'Review', 'Customer', 'Provider', 'Status', 'Date', 'Actions'].map(
                         (h) => (
                           <th
@@ -544,8 +734,26 @@ const ReviewModeration: React.FC = () => {
                     {reviews.map((review) => {
                       const displayStatus = getReviewDisplayStatus(review);
                       const busy = actionReviewId === review._id;
+                      const isSelected = selectedReviews.has(review._id);
                       return (
-                        <tr key={review._id} className="hover:bg-nilin-blush/10">
+                        <tr
+                          key={review._id}
+                          className={cn(
+                            'hover:bg-nilin-blush/10 transition-colors',
+                            isSelected && 'bg-nilin-coral/5'
+                          )}
+                        >
+                          <td className="px-3 py-4">
+                            <div className="flex items-center justify-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleReviewSelection(review._id)}
+                                className="w-4 h-4 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral cursor-pointer"
+                                aria-label={`Select review by ${formatReviewUserName(review.reviewerId)}`}
+                              />
+                            </div>
+                          </td>
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-2">
                               <StarRating rating={review.rating} />
@@ -587,8 +795,8 @@ const ReviewModeration: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => setSelectedReview(review)}
-                                className="p-2 rounded-lg hover:bg-nilin-blush/50"
-                                title="View"
+                                className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-nilin-blush/50"
+                                aria-label="View review details"
                               >
                                 <Eye className="w-4 h-4 text-nilin-coral" />
                               </button>
@@ -597,8 +805,8 @@ const ReviewModeration: React.FC = () => {
                                   type="button"
                                   disabled={busy}
                                   onClick={() => moderateReview(review._id, 'approve')}
-                                  className="p-2 rounded-lg hover:bg-emerald-50 disabled:opacity-50"
-                                  title="Approve"
+                                  className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-emerald-50 disabled:opacity-50"
+                                  aria-label="Approve review"
                                 >
                                   {busy ? (
                                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -612,8 +820,8 @@ const ReviewModeration: React.FC = () => {
                                   type="button"
                                   disabled={busy}
                                   onClick={() => moderateReview(review._id, 'reject')}
-                                  className="p-2 rounded-lg hover:bg-red-50 disabled:opacity-50"
-                                  title="Reject"
+                                  className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-red-50 disabled:opacity-50"
+                                  aria-label="Reject review"
                                 >
                                   <XCircle className="w-4 h-4 text-red-600" />
                                 </button>
@@ -628,31 +836,17 @@ const ReviewModeration: React.FC = () => {
               </div>
             )}
 
-            {pagination.pages > 1 && (
-              <div className="px-5 py-4 border-t border-nilin-border/40 flex items-center justify-between text-sm">
-                <span className="text-nilin-warmGray">
-                  Page {pagination.page} of {pagination.pages} ({pagination.total} total)
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={!pagination.hasPrev}
-                    onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
-                    className="p-2 rounded-lg border disabled:opacity-40"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!pagination.hasNext}
-                    onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
-                    className="p-2 rounded-lg border disabled:opacity-40"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-            )}
+            <AdminPagination
+              page={pagination.page}
+              totalPages={pagination.pages}
+              total={pagination.total}
+              pageSize={pagination.limit}
+              onPageChange={(page) => setPagination((p) => ({ ...p, page }))}
+              showPageNumbers
+              showTotal
+              className="px-5 py-4 border-t border-nilin-border/40"
+              ariaLabel="Review list pagination"
+            />
           </div>
         </div>
 
@@ -664,6 +858,23 @@ const ReviewModeration: React.FC = () => {
             isLoading={actionLoading}
           />
         )}
+
+        {/* Bulk Action Toolbar */}
+        <BulkActionToolbar
+          selectedItems={reviews.filter((r) => selectedReviews.has(r._id))}
+          totalCount={pagination.total}
+          entityName="reviews"
+          actions={bulkActions}
+          onAction={(actionId) => {
+            if (actionId === 'export') {
+              exportSelectedReviews();
+            } else {
+              handleBulkAction(actionId, Array.from(selectedReviews), []);
+            }
+          }}
+          onClear={clearSelection}
+          visible={selectedCount > 0}
+        />
       </AdminPageShell>
     </ErrorBoundary>
   );

@@ -8,6 +8,15 @@ import {
   Bell,
   User,
   Star,
+  Heart,
+  Gift,
+  Bookmark,
+  FileText,
+  BarChart3,
+  Download,
+  Shield,
+  Bot,
+  TrendingUp,
 } from 'lucide-react';
 import { useComparisonStore } from '../../stores/comparisonStore';
 
@@ -15,10 +24,19 @@ const NAV_ITEMS = [
   { to: '/customer/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/customer/bookings', label: 'Bookings', icon: Calendar },
   { to: '/customer/book-services', label: 'Book', icon: PlusCircle },
+  { to: '/customer/favorites', label: 'Favorites', icon: Heart },
+  { to: '/customer/wishlist', label: 'Wishlist', icon: Bookmark },
+  { to: '/customer/rewards', label: 'Rewards', icon: Gift },
   { to: '/customer/wallet', label: 'Wallet', icon: Wallet },
   { to: '/customer/notifications', label: 'Alerts', icon: Bell },
   { to: '/customer/reviews', label: 'Reviews', icon: Star },
+  { to: '/customer/my-claims', label: 'Claims', icon: FileText },
   { to: '/customer/profile', label: 'Profile', icon: User },
+  { to: '/customer/analytics', label: 'Analytics', icon: BarChart3 },
+  { to: '/customer/stats', label: 'Stats', icon: TrendingUp },
+  { to: '/customer/ai-assistant', label: 'AI Assist', icon: Bot },
+  { to: '/customer/gdpr', label: 'Data', icon: Download },
+  { to: '/customer/privacy-settings', label: 'Privacy', icon: Shield },
 ] as const;
 
 const isActivePath = (pathname: string, to: string): boolean => {
@@ -50,7 +68,7 @@ const CustomerHubNav: React.FC = () => {
                 key={to}
                 to={to}
                 aria-current={active ? 'page' : undefined}
-                className={`flex-shrink-0 relative inline-flex items-center gap-2 px-3.5 py-2 text-[13px] font-medium transition-colors duration-150 rounded-[var(--dash-radius-pill)]
+                className={`flex-shrink-0 relative inline-flex items-center gap-2 px-3.5 py-2.5 min-h-[44px] text-[13px] font-medium transition-colors duration-150 rounded-[var(--dash-radius-pill)]
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dash-cta)] focus-visible:ring-offset-2
                   ${active
                     ? 'bg-[var(--dash-cta)] text-[var(--dash-cta-text)]'

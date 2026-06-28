@@ -649,6 +649,7 @@ class ChurnService {
 
   /**
    * Get comprehensive churn statistics
+   * FIX #3: Include trial users in churn denominator for accurate calculation
    */
   async getChurnStats(dateRange: DateRange): Promise<ChurnStats> {
     const cacheKey = `${this.CACHE_PREFIX}stats:${dateRange.startDate.toISOString()}:${dateRange.endDate.toISOString()}`;
@@ -663,15 +664,47 @@ class ChurnService {
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
-    // Get customer counts
-    const [totalCustomers, activeCustomers, atRiskCustomers] = await Promise.all([
-      User.countDocuments({ role: 'customer' }),
-      User.countDocuments({
-        role: 'customer',
-        updatedAt: { $gte: thirtyDaysAgo },
-      }),
-      this.getAtRiskCustomers({ minRiskLevel: 'medium', limit: 1000 }),
+    // FIX #3: Use aggregation to include ALL customers including trial users in denominator
+    // This ensures accurate churn rate calculation
+    const customerStats = await User.aggregate([
+      {
+        $match: {
+          role: 'customer',
+          isDeleted: false, // Include all non-deleted users
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          active: {
+            $sum: {
+              $cond: [{ $gte: ['$updatedAt', thirtyDaysAgo] }, 1, 0]
+            }
+          },
+          previousActive: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $gte: ['$updatedAt', sixtyDaysAgo] },
+                  { $lt: ['$updatedAt', thirtyDaysAgo] }
+                ]},
+                1,
+                0
+              ]
+            }
+          },
+        },
+      },
     ]);
+
+    const customerStatsResult = customerStats[0] || { total: 0, active: 0, previousActive: 0 };
+    const totalCustomers = customerStatsResult.total;
+    const activeCustomers = customerStatsResult.active;
+    const previousActive = customerStatsResult.previousActive;
+
+    // Get at-risk customers
+    const atRiskCustomers = await this.getAtRiskCustomers({ minRiskLevel: 'medium', limit: 1000 });
 
     // Calculate risk distribution
     const byRiskLevel = {
@@ -681,12 +714,8 @@ class ChurnService {
       low: atRiskCustomers.filter(c => c.riskLevel === 'low').length,
     };
 
-    // Calculate churn rate
-    const previousActive = await User.countDocuments({
-      role: 'customer',
-      updatedAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo },
-    });
-
+    // FIX #3: Churn rate = churned customers / total customers (including trial)
+    // Churned = customers who were active in previous period but not in current
     const churnRate = previousActive > 0
       ? ((previousActive - activeCustomers) / previousActive) * 100
       : 0;

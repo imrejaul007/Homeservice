@@ -661,17 +661,24 @@ export function ChatbotBuilderPage() {
   }
 
   return (
-    <AdminPageShell
-      wideLayout
-      title="Chatbot Builder"
-      subtitle="Create and manage IA agents for TOUT, Admin, Provider, Client, and Partner"
-      breadcrumbItems={[
-        { label: 'Admin', href: '/admin/dashboard' },
-        { label: 'Chatbot Builder', current: true },
-      ]}
-      headerActions={headerActions}
-    >
-      <div className="space-y-6">
+    <>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
+      <AdminPageShell
+        wideLayout
+        title="Chatbot Builder"
+        subtitle="Create and manage IA agents for TOUT, Admin, Provider, Client, and Partner"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Chatbot Builder', current: true },
+        ]}
+        headerActions={headerActions}
+      >
+        <div id="main-content" className="space-y-6">
         {/* Stats */}
         {stats && (
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -825,6 +832,7 @@ export function ChatbotBuilderPage() {
         />
       )}
     </AdminPageShell>
+    </>
   );
 }
 

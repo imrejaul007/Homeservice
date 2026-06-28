@@ -16,6 +16,9 @@ import {
   isValidRecoveryCodeFormat,
 } from '../services/auth/2fa.service';
 import { provideCsrfToken } from './csrf.middleware';
+import { authRateLimit as importedAuthRateLimit } from './rateLimiter';
+import { createRateLimiter } from './rateLimit.middleware';
+const createRateLimit = createRateLimiter;
 
 // Extend Express Request interface to include user
 declare global {
@@ -57,6 +60,26 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
 
     if (!token) {
       throw new ApiError(401, 'Access token is required for authentication');
+    }
+
+    // SECURITY FIX: Explicit algorithm validation to prevent algorithm confusion attacks
+    // Check the token header BEFORE verification to catch alg:none and alg switching attacks
+    const decodedHeader = jwt.decode(token, { complete: true });
+    if (!decodedHeader || typeof decodedHeader === 'string' || !decodedHeader.header) {
+      throw new ApiError(401, 'Invalid token format');
+    }
+
+    // SECURITY FIX: Validate expected algorithm matches actual algorithm in token header
+    // This prevents attacks where an attacker switches from RS256 to HS256 (key confusion)
+    const expectedAlg = 'HS256'; // user.model.ts uses HS256 for generateAuthToken()
+    if (decodedHeader.header.alg !== expectedAlg) {
+      logger.warn('Algorithm mismatch detected in token', {
+        action: 'TOKEN_ALGORITHM_MISMATCH',
+        expected: expectedAlg,
+        actual: decodedHeader.header.alg,
+        ip: req.ip,
+      });
+      throw new ApiError(401, 'Invalid token algorithm');
     }
 
     // Verify and decode the token using ACCESS token secret
@@ -433,16 +456,33 @@ export const optionalAuth = asyncHandler(async (req: Request, _res: Response, ne
   }
 });
 
+// SECURITY FIX: Enhanced role-based authorization with superadmin support
+// Type to include potential superadmin role
+type AdminRole = UserRole | 'superadmin';
+
 // Role-based authorization middleware
-export const requireRole = (allowedRoles: UserRole | UserRole[]) => {
+export const requireRole = (allowedRoles: AdminRole | AdminRole[]) => {
   return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
       throw new ApiError(401, 'Authentication required');
     }
 
     const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
-    
-    if (!roles.includes(req.user.role)) {
+
+    // SECURITY FIX: Support both 'admin' and 'superadmin' roles
+    // Superadmin has elevated privileges within admin operations
+    const userRole = req.user.role as AdminRole;
+    const isAuthorized = roles.includes(userRole) ||
+      (userRole === 'admin' && roles.includes('admin')) ||
+      (userRole === 'superadmin' && roles.includes('superadmin'));
+
+    if (!isAuthorized) {
+      logger.warn('Role authorization failed', {
+        action: 'ROLE_AUTHORIZATION_FAILED',
+        userId: req.user._id,
+        userRole: req.user.role,
+        requiredRoles: roles,
+      });
       throw new ApiError(403, `Access denied. Required roles: ${roles.join(', ')}`);
     }
 
@@ -458,6 +498,37 @@ export const requireEmailVerified = asyncHandler(async (req: Request, _res: Resp
 
   if (!req.user.isEmailVerified) {
     throw new ApiError(403, 'Email verification required to access this resource');
+  }
+
+  next();
+});
+
+// SECURITY FIX: Password reset token validation middleware
+// Validates that the reset token has not expired before allowing password change
+export const validateResetToken = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  const { token } = req.body;
+
+  if (!token) {
+    throw new ApiError(400, 'Reset token is required');
+  }
+
+  // Hash the token to compare with stored hash
+  const crypto = await import('crypto');
+  const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+  // Find user with this token that hasn't expired
+  const User = (await import('../models/user.model')).default;
+  const user = await User.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpire: { $gt: new Date() } // Ensure token hasn't expired
+  }).select('_id');
+
+  if (!user) {
+    logger.warn('Password reset token validation failed', {
+      action: 'INVALID_RESET_TOKEN',
+      ip: req.ip,
+    });
+    throw new ApiError(400, 'Password reset token is invalid or has expired');
   }
 
   next();
@@ -559,8 +630,9 @@ export const requireProvider = asyncHandler(async (req: Request, _res: Response,
   next();
 });
 
-// Rate limiting configurations
-export const createRateLimit = (windowMs: number, max: number, message?: string) => {
+// Rate limiting configurations - use centralized rateLimiter for authRateLimit
+// Local rate limiters for other auth-specific needs
+const createLocalRateLimit = (windowMs: number, max: number, message?: string) => {
   return rateLimit({
     windowMs,
     max,
@@ -573,21 +645,16 @@ export const createRateLimit = (windowMs: number, max: number, message?: string)
   });
 };
 
-// Specific rate limits for different endpoints
-// SECURITY FIX: Reduced from 10000 to 5 attempts per minute to prevent brute force attacks
-export const authRateLimit = createRateLimit(
-  1 * 60 * 1000, // 1 minute
-  5, // 5 attempts per minute - reasonable for login attempts
-  'Too many authentication attempts, please try again in 1 minute'
-);
+// Use centralized authRateLimit from rateLimiter.ts
+export { importedAuthRateLimit as authRateLimit };
 
-export const generalRateLimit = createRateLimit(
+export const generalRateLimit = createLocalRateLimit(
   15 * 60 * 1000, // 15 minutes
   100, // 100 requests per window
   'Too many requests from this IP, please try again in 15 minutes'
 );
 
-export const strictRateLimit = createRateLimit(
+export const strictRateLimit = createLocalRateLimit(
   60 * 60 * 1000, // 1 hour
   10, // 10 requests per hour
   'Rate limit exceeded for sensitive operations'
@@ -1349,7 +1416,7 @@ export default {
   requireOwnership,
   requireProvider,
   requireProviderAccount,
-  authRateLimit,
+  createRateLimit,
   generalRateLimit,
   strictRateLimit,
   checkSuspiciousActivity,
@@ -1373,4 +1440,6 @@ export default {
   require2FAForProfileChange,
   require2FAForWithdrawal,
   require2FAForProviderWithdrawal,
+  // SECURITY: Password reset token validation
+  validateResetToken,
 };

@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
 import mongoose, { PipelineStage } from 'mongoose';
 import Stripe from 'stripe';
+import Joi from 'joi';
 import ProviderProfile from '../models/providerProfile.model';
 import User, { IUser } from '../models/user.model';
 import Service from '../models/service.model';
 import Booking from '../models/booking.model';
 import ServiceCategory from '../models/serviceCategory.model';
+import Dispute from '../models/dispute.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
@@ -94,8 +96,10 @@ export const getPendingProviders = asyncHandler(async (req: Request, res: Respon
   }
   
   if (search && typeof search === 'string') {
+    // SECURITY: Escape regex special characters to prevent ReDoS attacks
+    const escapedSearch = escapeRegex(search);
     query.$or = [
-      { 'businessInfo.businessName': { $regex: search, $options: 'i' } }
+      { 'businessInfo.businessName': { $regex: escapedSearch, $options: 'i' } }
     ];
   }
 
@@ -228,7 +232,7 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
     }
 
     // IMPORTANT: Create Service documents for each provider service
-    // This makes them searchable in the Services collection
+    // OPTIMIZED: Batch query to avoid N+1, use insertMany for new services
     if (provider.services && provider.services.length > 0) {
       logger.info('Creating service documents for approved provider', {
         action: 'ADMIN_PROVIDER_APPROVAL',
@@ -237,104 +241,109 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
         serviceCount: provider.services.length
       });
 
-      for (const service of provider.services) {
-        // Check if service already exists (avoid duplicates) - within transaction
-        const existingService = await Service.findOne({
+      // OPTIMIZATION: Single query to get all existing service names
+      const serviceNames = provider.services.map(s => s.name);
+      const existingServices = await Service.find({
+        providerId: provider.userId,
+        name: { $in: serviceNames }
+      }).select('name').session(session);
+
+      const existingNames = new Set(existingServices.map(s => s.name));
+
+      // Filter services that don't exist yet
+      const newServices = provider.services
+        .filter(service => !existingNames.has(service.name))
+        .map(service => ({
           providerId: provider.userId,
-          name: service.name
-        }).session(session);
+          name: service.name,
+          category: service.category,
+          subcategory: service.subcategory,
+          description: service.description,
+          shortDescription: service.description?.substring(0, 100) || '',
 
-        if (!existingService) {
-          // Create new Service document with proper structure
-          const newService = new Service({
-            providerId: provider.userId,
-            name: service.name,
-            category: service.category,
-            subcategory: service.subcategory,
-            description: service.description,
-            shortDescription: service.description.substring(0, 100),
+          price: {
+            amount: service.price.amount,
+            currency: service.price.currency || 'AED',
+            type: service.price.type || 'fixed',
+            discounts: service.price.discounts || []
+          },
 
-            price: {
-              amount: service.price.amount,
-              currency: service.price.currency || 'AED',
-              type: service.price.type || 'fixed',
-              discounts: service.price.discounts || []
+          duration: service.duration,
+          images: service.images || [],
+          tags: service.tags || [],
+          requirements: service.requirements || [],
+          includedItems: service.includedItems || [],
+          addOns: service.addOns || [],
+
+          // Location from provider
+          location: {
+            address: {
+              street: provider.locationInfo.primaryAddress.street,
+              city: provider.locationInfo.primaryAddress.city,
+              state: provider.locationInfo.primaryAddress.state,
+              zipCode: provider.locationInfo.primaryAddress.zipCode,
+              country: provider.locationInfo.primaryAddress.country || 'US'
             },
-
-            duration: service.duration,
-            images: service.images || [],
-            tags: service.tags || [],
-            requirements: service.requirements || [],
-            includedItems: service.includedItems || [],
-            addOns: service.addOns || [],
-
-            // Location from provider
-            location: {
-              address: {
-                street: provider.locationInfo.primaryAddress.street,
-                city: provider.locationInfo.primaryAddress.city,
-                state: provider.locationInfo.primaryAddress.state,
-                zipCode: provider.locationInfo.primaryAddress.zipCode,
-                country: provider.locationInfo.primaryAddress.country || 'US'
-              },
-              coordinates: {
-                type: 'Point',
-                coordinates: [
-                  // GeoJSON format: [longitude, latitude]
-                  // Default to Dubai, UAE coordinates if not available
-                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[0] || 55.2708,
-                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[1] || 25.2048
-                ]
-              },
-              serviceArea: {
-                type: 'radius',
-                value: provider.businessInfo.serviceRadius || 25,
-                maxDistance: provider.businessInfo.serviceRadius || 25
-              },
-              travelFee: provider.locationInfo.travelFee || {
-                baseFee: 0,
-                perKmFee: 0
-              }
+            coordinates: {
+              type: 'Point',
+              coordinates: [
+                provider.locationInfo.primaryAddress.coordinates?.coordinates?.[0] || 55.2708,
+                provider.locationInfo.primaryAddress.coordinates?.coordinates?.[1] || 25.2048
+              ]
             },
-
-            // Availability from provider
-            availability: {
-              schedule: provider.availability?.schedule || {
-                monday: { isAvailable: true, timeSlots: [] },
-                tuesday: { isAvailable: true, timeSlots: [] },
-                wednesday: { isAvailable: true, timeSlots: [] },
-                thursday: { isAvailable: true, timeSlots: [] },
-                friday: { isAvailable: true, timeSlots: [] },
-                saturday: { isAvailable: true, timeSlots: [] },
-                sunday: { isAvailable: false, timeSlots: [] }
-              },
-              exceptions: [],
-              bufferTime: provider.availability?.bufferTime || 15,
-              instantBooking: provider.businessInfo.instantBooking || false,
-              advanceBookingDays: provider.businessInfo.advanceBookingDays || 30
+            serviceArea: {
+              type: 'radius',
+              value: provider.businessInfo.serviceRadius || 25,
+              maxDistance: provider.businessInfo.serviceRadius || 25
             },
+            travelFee: provider.locationInfo.travelFee || {
+              baseFee: 0,
+              perKmFee: 0
+            }
+          },
 
-            // Initial ratings
-            rating: {
-              average: 0,
-              count: 0,
-              distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+          // Availability from provider
+          availability: {
+            schedule: provider.availability?.schedule || {
+              monday: { isAvailable: true, timeSlots: [] },
+              tuesday: { isAvailable: true, timeSlots: [] },
+              wednesday: { isAvailable: true, timeSlots: [] },
+              thursday: { isAvailable: true, timeSlots: [] },
+              friday: { isAvailable: true, timeSlots: [] },
+              saturday: { isAvailable: true, timeSlots: [] },
+              sunday: { isAvailable: false, timeSlots: [] }
             },
+            exceptions: [],
+            bufferTime: provider.availability?.bufferTime || 15,
+            instantBooking: provider.businessInfo.instantBooking || false,
+            advanceBookingDays: provider.businessInfo.advanceBookingDays || 30
+          },
 
-            // Services from provider registration should go through moderation
-            // They are created as inactive/pending_review, not auto-approved
-            status: 'pending_review',
-            isActive: false,
-            isFeatured: false,
-            isPopular: false
-          });
+          // Initial ratings
+          rating: {
+            average: 0,
+            count: 0,
+            distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+          },
 
-          await newService.save({ session });
-          logger.debug('Service created within transaction', { serviceId: newService._id, serviceName: service.name });
-        } else {
-          logger.debug('Service already exists, skipping', { serviceName: service.name });
-        }
+          // Services from provider registration should go through moderation
+          status: 'pending_review',
+          isActive: false,
+          isFeatured: false,
+          isPopular: false
+        }));
+
+      // OPTIMIZATION: Use insertMany for batch insert instead of individual saves
+      if (newServices.length > 0) {
+        await Service.insertMany(newServices, { session });
+        logger.debug('Services bulk inserted within transaction', { count: newServices.length });
       }
+
+      logger.debug('Service creation complete', {
+        total: provider.services.length,
+        created: newServices.length,
+        skipped: existingNames.size
+      });
     }
 
     // Commit transaction only after ALL operations succeed
@@ -611,6 +620,15 @@ export const getVerificationStats = asyncHandler(async (req: Request, res: Respo
  * POST /api/admin/test/create-provider
  */
 export const createTestProvider = asyncHandler(async (req: Request, res: Response) => {
+  // SECURITY: This endpoint allows arbitrary user creation and must NEVER run in production
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      success: false,
+      error: 'Forbidden',
+      message: 'This endpoint is disabled in production environments'
+    });
+  }
+
   // Get custom data from request body or use defaults
   const {
     firstName = 'John',
@@ -750,7 +768,7 @@ export const createTestProvider = asyncHandler(async (req: Request, res: Respons
 
   await testProviderProfile.save();
 
-  res.json({
+  return res.json({
     success: true,
     message: 'Test provider created successfully',
     data: {
@@ -805,6 +823,9 @@ export const getAllServices = asyncHandler(async (req: Request, res: Response) =
   if (!tenantContext.isAdmin && tenantContext.tenantId) {
     query.tenantId = tenantContext.tenantId;
   }
+
+  // SECURITY FIX: Exclude soft-deleted records from results
+  query.isDeleted = { $ne: true };
 
   if (search && typeof search === 'string') {
     query.$or = [
@@ -1171,6 +1192,130 @@ export const getServiceStats = asyncHandler(async (req: Request, res: Response) 
     }
   });
 });
+
+// ========================================
+// Admin Service Search
+// ========================================
+
+/**
+ * Quick search for services - returns top matches
+ * GET /api/admin/services/search?q={query}&limit={limit}
+ *
+ * Searches by service name, category, and provider name.
+ * Returns lightweight response with id, name, provider, category, status.
+ */
+export const searchServices = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Parse query params
+  const query = (req.query.q as string || '').trim();
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 10));
+
+  // Require at least 2 characters for search
+  if (query.length < 2) {
+    res.json({
+      success: true,
+      data: {
+        services: [],
+        total: 0,
+        message: 'Search query must be at least 2 characters'
+      }
+    });
+    return;
+  }
+
+  // Build service query
+  const serviceQuery: any = {
+    isDeleted: { $ne: true }
+  };
+
+  // Tenant filter
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    serviceQuery.tenantId = tenantContext.tenantId;
+  }
+
+  // Search filter for service name, category, and description
+  const searchRegex = { $regex: escapeRegex(query), $options: 'i' };
+  serviceQuery.$or = [
+    { name: searchRegex },
+    { category: searchRegex },
+    { description: searchRegex },
+    { tags: { $in: [new RegExp(escapeRegex(query), 'i')] } }
+  ];
+
+  // First, find matching services
+  const services = await Service.find(serviceQuery)
+    .select('_id name category status providerId')
+    .limit(limit)
+    .lean();
+
+  // Get unique provider IDs
+  const providerIds = [...new Set(
+    services
+      .map(s => s.providerId?.toString())
+      .filter(Boolean) as string[]
+  )];
+
+  // Fetch provider names
+  const providers = await User.find({ _id: { $in: providerIds } })
+    .select('_id firstName lastName')
+    .lean();
+
+  // Also fetch their business info from ProviderProfile
+  const providerProfiles = await ProviderProfile.find({ userId: { $in: providerIds } })
+    .select('userId businessInfo.businessName')
+    .lean();
+
+  const providerProfileMap = new Map(
+    providerProfiles.map(p => [p.userId.toString(), p])
+  );
+
+  const providerMap = new Map(
+    providers.map(p => [p._id.toString(), p])
+  );
+
+  // Build response with provider info
+  const results = services.map(service => {
+    const provider = providerMap.get(service.providerId?.toString());
+    const providerProfile = providerProfileMap.get(service.providerId?.toString());
+    let providerName = 'Unknown Provider';
+
+    if (provider) {
+      if (providerProfile?.businessInfo?.businessName) {
+        providerName = providerProfile.businessInfo.businessName;
+      } else {
+        providerName = `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || provider.email;
+      }
+    }
+
+    return {
+      id: service._id,
+      name: service.name,
+      category: service.category,
+      status: service.status,
+      provider: {
+        id: service.providerId,
+        name: providerName
+      }
+    };
+  });
+
+  res.json({
+    success: true,
+    data: {
+      services: results,
+      total: results.length,
+      query
+    }
+  });
+});
+
+/**
+ * Escape special regex characters for safe search
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // ========================================
 // Admin User Management
@@ -1749,6 +1894,9 @@ export const getAllBookings = asyncHandler(async (req: Request, res: Response) =
     query.tenantId = tenantContext.tenantId;
   }
 
+  // SECURITY FIX: Exclude soft-deleted records from results
+  query.isDeleted = { $ne: true };
+
   if (search && typeof search === 'string') {
     query.$or = [
       { bookingNumber: { $regex: search, $options: 'i' } },
@@ -1809,6 +1957,141 @@ export const getAllBookings = asyncHandler(async (req: Request, res: Response) =
         hasNext: Number(page) * Number(limit) < total,
         hasPrev: Number(page) > 1
       }
+    }
+  });
+});
+
+/**
+ * Search bookings for admin quick lookup
+ * GET /api/admin/bookings/search?q={query}&limit={limit}
+ * Searches by bookingNumber, customer name, provider name
+ * Returns top matches with essential info for quick identification
+ */
+export const searchBookings = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  const query = (req.query.q as string || '').trim();
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 10));
+
+  if (!query || query.length < 1) {
+    throw new ApiError(400, 'Search query is required');
+  }
+
+  // Escape regex special characters for safety
+  const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedQuery = escapeRegex(query);
+
+  // Build base query with tenant isolation
+  const baseQuery: any = { isDeleted: { $ne: true } };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
+  // Search filter: match bookingNumber, customer name, or provider name
+  const searchOr: any[] = [
+    { bookingNumber: { $regex: escapedQuery, $options: 'i' } }
+  ];
+
+  // Fetch potential customer matches
+  const customerMatches = await User.find({
+    $or: [
+      { firstName: { $regex: escapedQuery, $options: 'i' } },
+      { lastName: { $regex: escapedQuery, $options: 'i' } },
+      { email: { $regex: escapedQuery, $options: 'i' } }
+    ],
+    role: 'customer'
+  }).select('_id').limit(50).lean();
+
+  const customerIds = customerMatches.map(c => c._id);
+
+  // Fetch potential provider matches
+  const providerMatches = await User.find({
+    $or: [
+      { firstName: { $regex: escapedQuery, $options: 'i' } },
+      { lastName: { $regex: escapedQuery, $options: 'i' } },
+      { email: { $regex: escapedQuery, $options: 'i' } }
+    ],
+    role: 'provider'
+  }).select('_id').limit(50).lean();
+
+  const providerIds = providerMatches.map(p => p._id);
+
+  // Add customer/provider name matches to search
+  if (customerIds.length > 0) {
+    searchOr.push({ customerId: { $in: customerIds } });
+  }
+  if (providerIds.length > 0) {
+    searchOr.push({ providerId: { $in: providerIds } });
+  }
+
+  // Also search in guest booking info
+  searchOr.push({ 'guestInfo.name': { $regex: escapedQuery, $options: 'i' } });
+  searchOr.push({ 'guestInfo.email': { $regex: escapedQuery, $options: 'i' } });
+
+  // Combine with base query
+  const fullQuery = {
+    ...baseQuery,
+    $or: searchOr
+  };
+
+  // Execute search with populated references
+  const bookings = await Booking.find(fullQuery)
+    .populate('customerId', 'firstName lastName email phone')
+    .populate('providerId', 'firstName lastName email')
+    .populate('serviceId', 'name')
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  // Format response with essential fields
+  const results = bookings.map(booking => {
+    // Get customer name
+    let customerName = 'Guest';
+    if (booking.customerId) {
+      const customer = booking.customerId as any;
+      customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email || 'Customer';
+    } else if (booking.guestInfo?.name) {
+      customerName = booking.guestInfo.name;
+    }
+
+    // Get provider name
+    let providerName = 'Unknown';
+    if (booking.providerId) {
+      const provider = booking.providerId as any;
+      providerName = `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || provider.email || 'Provider';
+    }
+
+    // Get service name
+    const serviceName = (booking.serviceId as any)?.name || 'Unknown Service';
+
+    return {
+      _id: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customer: {
+        _id: booking.customerId?._id,
+        name: customerName,
+        email: (booking.customerId as any)?.email || booking.guestInfo?.email,
+        phone: (booking.customerId as any)?.phone
+      },
+      provider: {
+        _id: booking.providerId?._id,
+        name: providerName
+      },
+      serviceName,
+      status: booking.status,
+      amount: booking.pricing?.totalAmount || 0,
+      currency: booking.pricing?.currency || 'AED',
+      scheduledDate: booking.scheduledDate,
+      createdAt: booking.createdAt
+    };
+  });
+
+  res.json({
+    success: true,
+    data: {
+      results,
+      query,
+      count: results.length
     }
   });
 });
@@ -2193,6 +2476,218 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
 // ========================================
 
 // ========================================
+// Admin Refund Analytics
+// ========================================
+
+/**
+ * Get refund analytics for the admin dashboard
+ * GET /api/admin/refunds/analytics
+ */
+export const getRefundAnalytics = asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+
+  const dateFilter: any = {};
+  if (startDate) dateFilter.$gte = new Date(startDate);
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    dateFilter.$lte = end;
+  }
+
+  const baseMatch: any = {
+    'payment.refundAmount': { $gt: 0 },
+    ...(Object.keys(dateFilter).length > 0 ? { 'payment.refundedAt': dateFilter } : {})
+  };
+
+  // Aggregate refund stats
+  const [refundAgg, statusBreakdown, totalBookingsCount] = await Promise.all([
+    Booking.aggregate([
+      { $match: baseMatch },
+      {
+        $group: {
+          _id: null,
+          totalRefunds: { $sum: 1 },
+          totalAmount: { $sum: '$payment.refundAmount' },
+          avgRefundAmount: { $avg: '$payment.refundAmount' },
+          highestRefund: { $max: '$payment.refundAmount' },
+          lowestRefund: { $min: '$payment.refundAmount' }
+        }
+      }
+    ]),
+    Booking.aggregate([
+      { $match: baseMatch },
+      {
+        $group: {
+          _id: '$payment.refundStatus',
+          count: { $sum: 1 },
+          amount: { $sum: '$payment.refundAmount' }
+        }
+      }
+    ]),
+    Booking.countDocuments({})
+  ]);
+
+  const totals = refundAgg[0] || {
+    totalRefunds: 0,
+    totalAmount: 0,
+    avgRefundAmount: 0,
+    highestRefund: 0,
+    lowestRefund: 0
+  };
+
+  const pendingCount = statusBreakdown.find((s: any) => s._id === 'pending')?.count || 0;
+
+  // Compute processing time for completed refunds
+  const processingTimeAgg = await Booking.aggregate([
+    {
+      $match: {
+        ...baseMatch,
+        'payment.refundStatus': 'processed',
+        'payment.refundedAt': { $exists: true },
+        cancelledAt: { $exists: true }
+      }
+    },
+    {
+      $project: {
+        processingTime: {
+          $divide: [
+            { $subtract: ['$payment.refundedAt', '$cancelledAt'] },
+            1000 * 60 * 60 // ms to hours
+          ]
+        }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        avgProcessingTime: { $avg: '$processingTime' }
+      }
+    }
+  ]);
+
+  const avgProcessingTime = processingTimeAgg[0]?.avgProcessingTime || 0;
+
+  // Refund rate vs total bookings
+  const refundRate = totalBookingsCount > 0
+    ? Number(((totals.totalRefunds / totalBookingsCount) * 100).toFixed(2))
+    : 0;
+
+  // Monthly trend (last 6 months)
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+  const monthlyTrend = await Booking.aggregate([
+    {
+      $match: {
+        'payment.refundAmount': { $gt: 0 },
+        'payment.refundedAt': { $gte: sixMonthsAgo }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          year: { $year: '$payment.refundedAt' },
+          month: { $month: '$payment.refundedAt' }
+        },
+        count: { $sum: 1 },
+        amount: { $sum: '$payment.refundAmount' }
+      }
+    },
+    { $sort: { '_id.year': 1, '_id.month': 1 } }
+  ]);
+
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const formattedMonthlyTrend = monthlyTrend.map((m: any) => ({
+    month: `${monthNames[m._id.month - 1]} ${m._id.year}`,
+    count: m.count,
+    amount: m.amount,
+    rate: totalBookingsCount > 0 ? Number(((m.count / totalBookingsCount) * 100).toFixed(2)) : 0
+  }));
+
+  // By status
+  const statusColors: Record<string, string> = {
+    pending: '#F59E0B',
+    processed: '#10B981',
+    failed: '#EF4444'
+  };
+  const statusLabels: Record<string, string> = {
+    pending: 'Pending',
+    processed: 'Completed',
+    failed: 'Rejected'
+  };
+  const byStatus = statusBreakdown.map((s: any) => ({
+    status: statusLabels[s._id] || s._id,
+    count: s.count,
+    color: statusColors[s._id] || '#6B7280'
+  }));
+
+  // Recent refund records (for the table view)
+  const recentRefunds = await Booking.find(baseMatch)
+    .sort({ 'payment.refundedAt': -1 })
+    .limit(50)
+    .populate('customerId', 'name email')
+    .populate('providerId', 'name email')
+    .populate('serviceId', 'name')
+    .lean();
+
+  const refunds = recentRefunds.map((b: any) => ({
+    id: b._id.toString(),
+    refundId: `REF-${b.bookingNumber || b._id.toString().slice(-6).toUpperCase()}`,
+    bookingId: b._id.toString(),
+    bookingNumber: b.bookingNumber,
+    customerId: b.customerId?._id?.toString() || '',
+    customerName: b.customerId?.name || 'Unknown',
+    providerId: b.providerId?._id?.toString() || '',
+    providerName: b.providerId?.name || 'Unknown',
+    serviceName: b.serviceId?.name || 'Unknown Service',
+    amount: b.pricing?.totalAmount || 0,
+    refundAmount: b.payment?.refundAmount || 0,
+    refundPercentage: b.pricing?.totalAmount
+      ? Math.round(((b.payment?.refundAmount || 0) / b.pricing.totalAmount) * 100)
+      : 0,
+    reason: b.cancellationReason || b.payment?.refundReason || 'No reason provided',
+    category: b.cancellationReason?.toLowerCase().includes('no show') ? 'no_show'
+      : b.cancellationReason?.toLowerCase().includes('provider') ? 'provider_cancellation'
+      : b.cancellationReason?.toLowerCase().includes('quality') ? 'quality_issue'
+      : 'customer_request',
+    status: b.payment?.refundStatus === 'processed' ? 'completed'
+      : b.payment?.refundStatus === 'failed' ? 'rejected'
+      : 'pending',
+    requestDate: b.cancelledAt || b.createdAt,
+    processedDate: b.payment?.refundedAt,
+    processingTime: b.payment?.refundedAt && b.cancelledAt
+      ? Math.round((new Date(b.payment.refundedAt).getTime() - new Date(b.cancelledAt).getTime()) / (1000 * 60 * 60))
+      : 0,
+    paymentMethod: b.payment?.method || 'Unknown'
+  }));
+
+  res.json({
+    success: true,
+    data: {
+      refunds,
+      stats: {
+        totalRefunds: totals.totalRefunds,
+        totalAmount: Math.round(totals.totalAmount),
+        pendingCount,
+        avgProcessingTime: Math.round(avgProcessingTime * 10) / 10,
+        refundRate,
+        approvalRate: totals.totalRefunds > 0
+          ? Number((((totals.totalRefunds - pendingCount) / totals.totalRefunds) * 100).toFixed(1))
+          : 0,
+        rejectionRate: 0,
+        monthlyTrend: formattedMonthlyTrend,
+        byCategory: [],
+        byStatus,
+        topReasons: [],
+        avgRefundAmount: Math.round(totals.avgRefundAmount || 0),
+        highestRefund: totals.highestRefund || 0,
+        lowestRefund: totals.lowestRefund || 0
+      }
+    }
+  });
+});
+
+// ========================================
 // Admin Dashboard Stats
 // ========================================
 
@@ -2232,8 +2727,13 @@ export const getAdminStats = asyncHandler(async (req: Request, res: Response) =>
       { $match: { ...baseQuery, role: { $ne: 'admin' } } },
       { $group: { _id: '$role', count: { $sum: 1 } } }
     ]),
-    // Active (approved) providers
-    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'approved' }),
+    // Active (approved + isActive) providers - canonical definition
+    ProviderProfile.countDocuments({
+      ...baseQuery,
+      isDeleted: false,
+      'verificationStatus.overall': 'approved',
+      isActive: true,
+    }),
     // Today's bookings (created today)
     Booking.countDocuments({
       ...baseQuery,
@@ -2866,11 +3366,12 @@ export const getPendingReviews = asyncHandler(async (req: Request, res: Response
 
   const { search } = req.query;
 
-  // Build query for pending reviews or high report count
+  // Build query for pending reviews, high report count, or auto-flagged
   const query: any = {
     $or: [
       { moderationStatus: 'pending' },
-      { reportCount: { $gte: 3 } }
+      { reportCount: { $gte: 3 } },
+      { autoFlagged: true }
     ]
   };
 
@@ -2885,7 +3386,7 @@ export const getPendingReviews = asyncHandler(async (req: Request, res: Response
     .populate('reviewerId', 'firstName lastName email avatar')
     .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
     .populate('bookingId', 'bookingNumber scheduledDate serviceId')
-    .sort({ reportCount: -1, createdAt: -1 })
+    .sort({ autoFlagged: -1, reportCount: -1, createdAt: -1 })  // Prioritize auto-flagged
     .skip((Number(page) - 1) * Number(limit))
     .limit(Number(limit));
 
@@ -2908,7 +3409,7 @@ export const getPendingReviews = asyncHandler(async (req: Request, res: Response
 });
 
 /**
- * Get reviews with reports/flags
+ * Get reviews with reports/flags (includes user-reported and auto-flagged reviews)
  * GET /api/admin/reviews/flagged
  */
 export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response) => {
@@ -2919,11 +3420,15 @@ export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
 
-  const { minReports, search } = req.query;
+  const { minReports, search, includeAutoFlagged } = req.query;
 
   // Build query for flagged reviews
+  // Filter: reportCount > 0 OR autoFlagged === true
   const query: any = {
-    reportCount: { $gt: 0 }
+    $or: [
+      { reportCount: { $gt: 0 } },
+      { autoFlagged: true }
+    ]
   };
 
   // FIX: Apply tenant isolation to prevent cross-tenant data leakage
@@ -2936,16 +3441,25 @@ export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response
   }
 
   if (search && typeof search === 'string') {
-    query.$or = [
-      { comment: { $regex: search, $options: 'i' } },
-      { title: { $regex: search, $options: 'i' } }
-    ];
+    query.$and = query.$and || [];
+    query.$and.push({
+      $or: [
+        { comment: { $regex: search, $options: 'i' } },
+        { title: { $regex: search, $options: 'i' } }
+      ]
+    });
+  }
+
+  // By default include auto-flagged, but allow filtering them out
+  if (includeAutoFlagged === 'false') {
+    query.autoFlagged = { $ne: true };
   }
 
   const reviews = await Review.find(query)
     .populate('reviewerId', 'firstName lastName email avatar')
     .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
-    .sort({ reportCount: -1, createdAt: -1 })
+    .populate('bookingId', 'serviceId bookingNumber')
+    .sort({ reportCount: -1, autoFlagged: -1, createdAt: -1 })
     .skip((Number(page) - 1) * Number(limit))
     .limit(Number(limit));
 
@@ -2953,14 +3467,24 @@ export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response
 
   // Get report breakdown stats
   const stats = await Review.aggregate([
-    { $match: { reportCount: { $gt: 0 }, ...(tenantContext?.tenantId ? { tenantId: tenantContext.tenantId } : {}) } },
+    {
+      $match: {
+        $or: [
+          { reportCount: { $gt: 0 } },
+          { autoFlagged: true }
+        ],
+        ...(tenantContext?.tenantId ? { tenantId: tenantContext.tenantId } : {})
+      }
+    },
     {
       $group: {
         _id: null,
         totalFlagged: { $sum: 1 },
         totalReports: { $sum: '$reportCount' },
         avgReports: { $avg: '$reportCount' },
-        highPriority: { $sum: { $cond: [{ $gte: ['$reportCount', 5] }, 1, 0] } }
+        highPriority: { $sum: { $cond: [{ $gte: ['$reportCount', 5] }, 1, 0] } },
+        userReported: { $sum: { $cond: [{ $gt: ['$reportCount', 0] }, 1, 0] } },
+        autoFlagged: { $sum: { $cond: ['$autoFlagged', 1, 0] } }
       }
     }
   ]);
@@ -2969,7 +3493,14 @@ export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response
     success: true,
     data: {
       reviews,
-      stats: stats[0] || { totalFlagged: 0, totalReports: 0, avgReports: 0, highPriority: 0 },
+      stats: stats[0] || {
+        totalFlagged: 0,
+        totalReports: 0,
+        avgReports: 0,
+        highPriority: 0,
+        userReported: 0,
+        autoFlagged: 0
+      },
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -3341,13 +3872,14 @@ export const getReviewStats = asyncHandler(async (req: Request, res: Response) =
     baseQuery.tenantId = tenantContext.tenantId;
   }
 
-  const [total, pending, approved, rejected, hidden, flagged] = await Promise.all([
+  const [total, pending, approved, rejected, hidden, flagged, autoFlagged] = await Promise.all([
     Review.countDocuments(baseQuery),
     Review.countDocuments({ ...baseQuery, moderationStatus: 'pending' }),
     Review.countDocuments({ ...baseQuery, moderationStatus: 'approved' }),
     Review.countDocuments({ ...baseQuery, moderationStatus: 'rejected' }),
     Review.countDocuments({ ...baseQuery, moderationStatus: 'hidden' }),
     Review.countDocuments({ ...baseQuery, reportCount: { $gt: 0 } }),
+    Review.countDocuments({ ...baseQuery, autoFlagged: true }),
   ]);
 
   // Get average rating stats
@@ -3390,6 +3922,7 @@ export const getReviewStats = asyncHandler(async (req: Request, res: Response) =
       rejected,
       hidden,
       flagged,
+      autoFlagged,
       rating: { average: averageRating, distribution },
       stats: {
         total,
@@ -3441,7 +3974,11 @@ export const getAllReviews = asyncHandler(async (req: Request, res: Response) =>
   // Filter by moderation status
   if (status && typeof status === 'string') {
     if (status === 'flagged') {
+      // User-reported flagged reviews
       query.reportCount = { $gt: 0 };
+    } else if (status === 'autoFlagged') {
+      // Auto-flagged by content moderation
+      query.autoFlagged = true;
     } else {
       query.moderationStatus = status;
     }
@@ -4429,6 +4966,11 @@ export const getChurnStats = asyncHandler(async (req: Request, res: Response) =>
   }
 });
 
+function pctChange(current: number, previous: number): number {
+  if (previous === 0) return current > 0 ? 100 : 0;
+  return parseFloat((((current - previous) / previous) * 100).toFixed(1));
+}
+
 /**
  * Get real-time metrics for admin dashboard
  * GET /api/admin/realtime-metrics
@@ -4436,114 +4978,257 @@ export const getChurnStats = asyncHandler(async (req: Request, res: Response) =>
 export const getRealtimeMetrics = asyncHandler(async (req: Request, res: Response) => {
   const tenantContext: TenantContext = getTenantContext(req);
 
-  // Build tenant-scoped base query
-  const baseQuery: any = {};
+  const baseQuery: Record<string, unknown> = {};
   if (!tenantContext.isAdmin && tenantContext.tenantId) {
     baseQuery.tenantId = tenantContext.tenantId;
   }
 
   const now = new Date();
   const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-  // Execute multiple queries in parallel for performance
   const [
     activeUsersCount,
+    yesterdayActiveUsers,
     todayBookingsCount,
+    yesterdayBookingsCount,
     pendingBookingsCount,
-    completedTodayCount,
-    weekBookingsCount,
-    monthRevenueResult,
+    yesterdayPendingBookings,
+    todayRevenueAgg,
+    yesterdayRevenueAgg,
+    activeProvidersCount,
+    yesterdayActiveProviders,
+    hourlyBookings,
+    hourlyRevenue,
+    hourlyUsers,
+    hourlyProviders,
+    reviewStats,
+    activeDisputesCount,
     pendingProvidersCount,
     pendingServicesCount,
-    activeDisputesCount,
   ] = await Promise.all([
-    // Active users in last hour
+    User.countDocuments({ ...baseQuery, lastActive: { $gte: oneHourAgo } }),
     User.countDocuments({
       ...baseQuery,
-      lastActive: { $gte: oneHourAgo }
+      lastActive: { $gte: yesterdayStart, $lt: yesterdayEnd },
     }),
-    // Today's bookings
+    Booking.countDocuments({ ...baseQuery, createdAt: { $gte: todayStart } }),
     Booking.countDocuments({
       ...baseQuery,
-      scheduledDate: { $gte: todayStart }
+      createdAt: { $gte: yesterdayStart, $lt: yesterdayEnd },
     }),
-    // Pending bookings
+    Booking.countDocuments({ ...baseQuery, status: 'pending' }),
     Booking.countDocuments({
       ...baseQuery,
-      status: 'pending'
+      status: 'pending',
+      updatedAt: { $gte: yesterdayStart, $lt: yesterdayEnd },
     }),
-    // Completed today
-    Booking.countDocuments({
-      ...baseQuery,
-      status: 'completed',
-      completedAt: { $gte: todayStart }
-    }),
-    // Week bookings
-    Booking.countDocuments({
-      ...baseQuery,
-      scheduledDate: { $gte: weekStart }
-    }),
-    // Monthly revenue
     Booking.aggregate([
       {
         $match: {
           ...baseQuery,
           status: 'completed',
-          completedAt: { $gte: monthStart }
-        }
+          completedAt: { $gte: todayStart },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$pricing.totalAmount' } } },
+    ]),
+    Booking.aggregate([
+      {
+        $match: {
+          ...baseQuery,
+          status: 'completed',
+          completedAt: { $gte: yesterdayStart, $lt: yesterdayEnd },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$pricing.totalAmount' } } },
+    ]),
+    ProviderProfile.countDocuments({
+      ...baseQuery,
+      'verificationStatus.overall': 'approved',
+      isActive: true,
+      isDeleted: { $ne: true },
+    }),
+    ProviderProfile.countDocuments({
+      ...baseQuery,
+      'verificationStatus.overall': 'approved',
+      isActive: true,
+      isDeleted: { $ne: true },
+      updatedAt: { $gte: yesterdayStart, $lt: yesterdayEnd },
+    }),
+    Booking.aggregate([
+      { $match: { ...baseQuery, createdAt: { $gte: twentyFourHoursAgo } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%dT%H:00:00.000Z', date: '$createdAt' },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    Booking.aggregate([
+      {
+        $match: {
+          ...baseQuery,
+          status: 'completed',
+          completedAt: { $gte: twentyFourHoursAgo },
+        },
       },
       {
         $group: {
-          _id: null,
-          totalRevenue: { $sum: '$pricing.totalAmount' },
-          avgBookingValue: { $avg: '$pricing.totalAmount' }
-        }
-      }
+          _id: {
+            $dateToString: { format: '%Y-%m-%dT%H:00:00.000Z', date: '$completedAt' },
+          },
+          total: { $sum: '$pricing.totalAmount' },
+        },
+      },
+      { $sort: { _id: 1 } },
     ]),
-    // Pending providers
+    User.aggregate([
+      { $match: { ...baseQuery, lastActive: { $gte: twentyFourHoursAgo } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%dT%H:00:00.000Z', date: '$lastActive' },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    ProviderProfile.aggregate([
+      {
+        $match: {
+          ...baseQuery,
+          'verificationStatus.overall': 'approved',
+          isActive: true,
+          updatedAt: { $gte: twentyFourHoursAgo },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%dT%H:00:00.000Z', date: '$updatedAt' },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    Review.aggregate([
+      { $match: { ...baseQuery, createdAt: { $gte: todayStart } } },
+      { $group: { _id: null, avg: { $avg: '$rating' }, count: { $sum: 1 } } },
+    ]),
+    Dispute.countDocuments({
+      ...baseQuery,
+      status: { $in: ['open', 'under_review'] },
+    }),
     ProviderProfile.countDocuments({
       ...baseQuery,
-      'verificationStatus.overall': { $in: ['pending', 'in_progress'] }
+      'verificationStatus.overall': { $in: ['pending', 'in_progress'] },
     }),
-    // Pending services
-    Service.countDocuments({
-      ...baseQuery,
-      status: 'pending_review'
-    }),
-    // Active disputes
-    mongoose.model('Dispute')?.countDocuments({
-      ...baseQuery,
-      status: { $in: ['open', 'under_review'] }
-    }) || Promise.resolve(0),
+    Service.countDocuments({ ...baseQuery, status: 'pending_review' }),
   ]);
 
-  const monthlyRevenue = monthRevenueResult[0]?.totalRevenue || 0;
+  const revenueToday = todayRevenueAgg[0]?.total || 0;
+  const revenueYesterday = yesterdayRevenueAgg[0]?.total || 0;
+  const averageRating = reviewStats[0]?.avg || 0;
+  const totalTodayViews = await User.countDocuments({ ...baseQuery, role: 'customer' });
+  const conversionRate =
+    totalTodayViews > 0
+      ? parseFloat(((todayBookingsCount / totalTodayViews) * 100).toFixed(1))
+      : 0;
+
+  const buildHourlyTrend = (
+    rows: Array<{ _id: string; count?: number; total?: number }>,
+    valueKey: 'count' | 'total'
+  ): number[] => {
+    const map = new Map(rows.map((r) => [r._id, valueKey === 'count' ? r.count || 0 : r.total || 0]));
+    const trend: number[] = [];
+    for (let i = 23; i >= 0; i -= 1) {
+      const bucket = new Date(now.getTime() - i * 60 * 60 * 1000);
+      bucket.setMinutes(0, 0, 0);
+      const key = bucket.toISOString();
+      trend.push(map.get(key) || 0);
+    }
+    return trend;
+  };
+
+  const bookingCountTrend = buildHourlyTrend(hourlyBookings, 'count');
+  const revenueTrend = buildHourlyTrend(hourlyRevenue, 'total');
+  const activeUsersTrend = buildHourlyTrend(hourlyUsers, 'count');
+  const activeProvidersTrend = buildHourlyTrend(hourlyProviders, 'count');
+
+  const historicalData = Array.from({ length: 24 }, (_, i) => {
+    const hourDate = new Date(now.getTime() - (23 - i) * 60 * 60 * 1000);
+    return {
+      time: `${hourDate.getHours().toString().padStart(2, '0')}:00`,
+      bookings: bookingCountTrend[i] || 0,
+      revenue: revenueTrend[i] || 0,
+      providers: activeProvidersTrend[i] || 0,
+      users: activeUsersTrend[i] || 0,
+    };
+  });
+
+  const alerts: Array<{ id: string; type: 'info' | 'warning' | 'error'; message: string; timestamp: string }> = [];
+  if (activeDisputesCount > 0) {
+    alerts.push({
+      id: 'disputes',
+      type: 'warning',
+      message: `${activeDisputesCount} active dispute${activeDisputesCount === 1 ? '' : 's'} need attention`,
+      timestamp: now.toISOString(),
+    });
+  }
+  if (pendingProvidersCount > 0) {
+    alerts.push({
+      id: 'providers',
+      type: 'info',
+      message: `${pendingProvidersCount} provider verification${pendingProvidersCount === 1 ? '' : 's'} pending`,
+      timestamp: now.toISOString(),
+    });
+  }
+  if (pendingServicesCount > 0) {
+    alerts.push({
+      id: 'services',
+      type: 'info',
+      message: `${pendingServicesCount} service${pendingServicesCount === 1 ? '' : 's'} awaiting review`,
+      timestamp: now.toISOString(),
+    });
+  }
 
   res.json({
     success: true,
     data: {
-      timestamp: now.toISOString(),
+      connectionStatus: 'connected',
+      lastUpdated: now.toISOString(),
+      activeProviders: activeProvidersCount,
+      activeProvidersChange: pctChange(activeProvidersCount, yesterdayActiveProviders),
+      activeProvidersTrend,
+      bookingCount: todayBookingsCount,
+      bookingCountChange: pctChange(todayBookingsCount, yesterdayBookingsCount),
+      bookingCountTrend,
+      revenueToday,
+      revenueTodayChange: pctChange(revenueToday, revenueYesterday),
+      revenueTrend,
+      queuedJobs: pendingBookingsCount,
+      queuedJobsChange: pctChange(pendingBookingsCount, yesterdayPendingBookings),
+      queuedJobsTrend: bookingCountTrend.map((v) => Math.max(0, Math.round(v * 0.15))),
       activeUsers: activeUsersCount,
-      bookings: {
-        today: todayBookingsCount,
-        pending: pendingBookingsCount,
-        completedToday: completedTodayCount,
-        weekTotal: weekBookingsCount,
-      },
-      revenue: {
-        monthly: monthlyRevenue,
-        averageBooking: monthRevenueResult[0]?.avgBookingValue || 0,
-      },
-      pending: {
-        providers: pendingProvidersCount,
-        services: pendingServicesCount,
-      },
-      alerts: {
-        disputes: activeDisputesCount,
-      },
+      activeUsersChange: pctChange(activeUsersCount, yesterdayActiveUsers),
+      activeUsersTrend,
+      conversionRate,
+      conversionRateChange: 0,
+      conversionRateTrend: bookingCountTrend.map(() => conversionRate),
+      averageRating: parseFloat(averageRating.toFixed(2)),
+      averageRatingChange: 0,
+      averageRatingTrend: bookingCountTrend.map(() => parseFloat(averageRating.toFixed(2))),
+      historicalData,
+      alerts,
     },
   });
 });
@@ -5165,7 +5850,211 @@ export const batchProviderAction = asyncHandler(async (req: Request, res: Respon
   });
 });
 
-// Default export
+// ========================================
+// Provider Bookings Management (Admin)
+// ========================================
+
+/**
+ * Validation schema for provider bookings query
+ */
+const providerBookingsQuerySchema = Joi.object({
+  page: Joi.number().min(1).default(1),
+  limit: Joi.number().min(1).max(100).default(20),
+  status: Joi.string()
+    .valid('pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show')
+    .optional()
+    .messages({
+      'any.only': 'Status must be one of: pending, confirmed, in_progress, completed, cancelled, no_show'
+    }),
+  startDate: Joi.string().isoDate().optional(),
+  endDate: Joi.string().isoDate().optional(),
+  sortBy: Joi.string().valid('createdAt', 'scheduledDate', 'status', 'pricing.totalAmount').default('createdAt'),
+  sortOrder: Joi.string().valid('asc', 'desc').default('desc'),
+}).options({ stripUnknown: true });
+
+/**
+ * Get all bookings for a specific provider (admin view)
+ * GET /api/admin/providers/:id/bookings
+ */
+export const getProviderBookings = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+
+  // Validate provider ID
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ApiError(400, 'Invalid provider ID format');
+  }
+
+  // Validate query parameters
+  const { error, value } = providerBookingsQuerySchema.validate(req.query);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  // Verify provider exists
+  const provider = await User.findOne({
+    _id: id,
+    role: 'provider'
+  });
+
+  if (!provider) {
+    throw new ApiError(404, 'Provider not found');
+  }
+
+  // Build query
+  const query: any = { providerId: id };
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  // Status filter
+  if (value.status) {
+    query.status = value.status;
+  }
+
+  // Date range filter
+  if (value.startDate || value.endDate) {
+    query.scheduledDate = {};
+    if (value.startDate) {
+      query.scheduledDate.$gte = new Date(value.startDate);
+    }
+    if (value.endDate) {
+      const endDate = new Date(value.endDate);
+      endDate.setHours(23, 59, 59, 999);
+      query.scheduledDate.$lte = endDate;
+    }
+  }
+
+  // Calculate pagination
+  const page = Number(value.page);
+  const limit = Math.min(Number(value.limit), 100);
+  const skip = (page - 1) * limit;
+
+  // Build sort options
+  const sortOptions: Record<string, 1 | -1> = {};
+  sortOptions[value.sortBy || 'createdAt'] = value.sortOrder === 'asc' ? 1 : -1;
+
+  // Execute query with pagination
+  const [bookings, total] = await Promise.all([
+    Booking.find(query)
+      .populate('customerId', 'firstName lastName email phone')
+      .populate('serviceId', 'name category duration images')
+      .populate('customerReview', 'rating comment createdAt')
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Booking.countDocuments(query)
+  ]);
+
+  // Transform bookings for response
+  const items = bookings.map(booking => ({
+    _id: booking._id,
+    bookingNumber: booking.bookingNumber,
+    status: booking.status,
+    scheduledDate: booking.scheduledDate,
+    scheduledTime: booking.scheduledTime,
+    duration: booking.duration,
+    location: booking.location,
+    pricing: {
+      basePrice: booking.pricing.basePrice,
+      addOns: booking.pricing.addOns,
+      discounts: booking.pricing.discounts,
+      couponDiscount: booking.pricing.couponDiscount,
+      subtotal: booking.pricing.subtotal,
+      tax: booking.pricing.tax,
+      totalAmount: booking.pricing.totalAmount,
+      currency: booking.pricing.currency,
+    },
+    customer: booking.customerId ? {
+      _id: (booking.customerId as any)._id,
+      firstName: (booking.customerId as any).firstName,
+      lastName: (booking.customerId as any).lastName,
+      email: (booking.customerId as any).email,
+      phone: (booking.customerId as any).phone,
+    } : null,
+    service: booking.serviceId ? {
+      _id: (booking.serviceId as any)._id,
+      name: (booking.serviceId as any).name,
+      category: (booking.serviceId as any).category,
+      duration: (booking.serviceId as any).duration,
+      image: (booking.serviceId as any).images?.[0] || null,
+    } : null,
+    customerInfo: booking.customerInfo,
+    isGuestBooking: booking.isGuestBooking,
+    guestInfo: booking.isGuestBooking ? booking.guestInfo : undefined,
+    providerResponse: booking.providerResponse,
+    payment: booking.payment,
+    cancellationDetails: booking.cancellationDetails,
+    hasReview: !!booking.customerReview,
+    review: booking.customerReview ? {
+      rating: (booking.customerReview as any).rating,
+      comment: (booking.customerReview as any).comment,
+      createdAt: (booking.customerReview as any).createdAt,
+    } : undefined,
+    createdAt: booking.createdAt,
+    updatedAt: booking.updatedAt,
+    completedAt: booking.completedAt,
+    cancelledAt: booking.cancelledAt,
+  }));
+
+  // Calculate pagination metadata
+  const totalPages = Math.ceil(total / limit);
+
+  // Get status breakdown for this provider
+  const statusBreakdown = await Booking.aggregate([
+    { $match: { providerId: new mongoose.Types.ObjectId(id) } },
+    { $group: { _id: '$status', count: { $sum: 1 } } }
+  ]);
+
+  const statusCounts = statusBreakdown.reduce((acc, item) => {
+    acc[item._id] = item.count;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Provider bookings accessed', {
+    action: 'ADMIN_GET_PROVIDER_BOOKINGS',
+    adminId: (req.user as IUser)?._id,
+    adminEmail: (req.user as IUser)?.email,
+    providerId: id,
+    providerEmail: provider.email,
+    filters: {
+      status: value.status,
+      startDate: value.startDate,
+      endDate: value.endDate,
+      page,
+      limit,
+    },
+    resultCount: bookings.length,
+    totalCount: total,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    data: {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+        nextPage: page < totalPages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+      },
+      statusBreakdown,
+    }
+  });
+});
+
+// Default export - functions batchRefund and getUserProviderRelationship are defined later in the file
+// and are referenced here via their hoisted declarations
 export default {
   // Provider Management
   getPendingProviders,
@@ -5184,6 +6073,7 @@ export default {
   updateServiceStatus,
   adminDeleteService,
   getServiceStats,
+  searchServices,
   getProviderServices,
   getProvidersWithServices,
   batchServiceAction,
@@ -5194,6 +6084,7 @@ export default {
   getUserStats,
   // Booking Management
   getAllBookings,
+  searchBookings,
   getBookingDetails,
   updateBookingStatus,
   getBookingStats,
@@ -5228,4 +6119,807 @@ export default {
   executeChurnRetentionAction,
   // Real-time metrics
   getRealtimeMetrics,
-};
+  // Provider Bookings Management
+  getProviderBookings,
+} as const;
+
+// ========================================
+// User-Provider Relationship Endpoint
+// ========================================
+
+/**
+ * Get comprehensive relationship data between a customer and provider
+ * GET /api/admin/relationships/user-provider?customerId=xxx&providerId=xxx
+ *
+ * Returns bookings, reviews, disputes, and calculated metrics
+ */
+export const getUserProviderRelationship = asyncHandler(async (req: Request, res: Response) => {
+  const { customerId, providerId } = req.query;
+
+  // Validate required parameters
+  if (!customerId || !providerId) {
+    throw new ApiError(400, 'Both customerId and providerId are required');
+  }
+
+  // Validate ObjectId formats
+  if (!mongoose.Types.ObjectId.isValid(customerId as string)) {
+    throw new ApiError(400, 'Invalid customerId format');
+  }
+  if (!mongoose.Types.ObjectId.isValid(providerId as string)) {
+    throw new ApiError(400, 'Invalid providerId format');
+  }
+
+  const customerObjectId = new mongoose.Types.ObjectId(customerId as string);
+  const providerObjectId = new mongoose.Types.ObjectId(providerId as string);
+
+  // Fetch data in parallel for performance
+  const [
+    // Bookings between customer and provider
+    bookings,
+    bookingStats,
+    // Reviews between customer and provider
+    reviews,
+    reviewStats,
+    // Disputes between customer and provider
+    disputes,
+    disputeStats,
+  ] = await Promise.all([
+    // Bookings - get all bookings between customer and provider
+    Booking.find({
+      customerId: customerObjectId,
+      providerId: providerObjectId,
+      isDeleted: { $ne: true }
+    })
+      .populate('serviceId', 'name category')
+      .sort({ createdAt: -1 })
+      .lean(),
+
+    // Booking aggregation stats
+    Booking.aggregate([
+      {
+        $match: {
+          customerId: customerObjectId,
+          providerId: providerObjectId,
+          isDeleted: { $ne: true }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          completed: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          },
+          cancelled: {
+            $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
+          },
+          totalSpend: {
+            $sum: {
+              $cond: [
+                { $eq: ['$status', 'completed'] },
+                { $ifNull: ['$pricing.totalAmount', 0] },
+                0
+              ]
+            }
+          },
+          firstBookingDate: { $min: '$createdAt' },
+          lastBookingDate: { $max: '$scheduledDate' }
+        }
+      }
+    ]),
+
+    // Reviews from customer to provider (customer reviewing provider)
+    Review.find({
+      reviewerId: customerObjectId,
+      revieweeId: providerObjectId
+    })
+      .populate('bookingId', 'bookingNumber')
+      .sort({ createdAt: -1 })
+      .lean(),
+
+    // Review aggregation stats (customer to provider)
+    Review.aggregate([
+      {
+        $match: {
+          reviewerId: customerObjectId,
+          revieweeId: providerObjectId,
+          isHidden: false
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          avgRating: { $avg: '$rating' }
+        }
+      }
+    ]),
+
+    // Disputes involving both customer and provider (either party)
+    Dispute.find({
+      isDeleted: false,
+      $or: [
+        // Customer is initiator
+        {
+          'initiator.userId': customerObjectId,
+          'respondent.userId': providerObjectId
+        },
+        // Provider is initiator
+        {
+          'initiator.userId': providerObjectId,
+          'respondent.userId': customerObjectId
+        }
+      ]
+    })
+      .sort({ createdAt: -1 })
+      .lean(),
+
+    // Dispute aggregation stats
+    Dispute.aggregate([
+      {
+        $match: {
+          isDeleted: false,
+          $or: [
+            {
+              'initiator.userId': customerObjectId,
+              'respondent.userId': providerObjectId
+            },
+            {
+              'initiator.userId': providerObjectId,
+              'respondent.userId': customerObjectId
+            }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          open: {
+            $sum: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] }
+          },
+          underReview: {
+            $sum: { $cond: [{ $eq: ['$status', 'under_review'] }, 1, 0] }
+          },
+          resolved: {
+            $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] }
+          },
+          escalated: {
+            $sum: { $cond: [{ $eq: ['$status', 'escalated'] }, 1, 0] }
+          },
+          closed: {
+            $sum: { $cond: [{ $eq: ['$status', 'closed'] }, 1, 0] }
+          }
+        }
+      }
+    ])
+  ]);
+
+  // Extract stats from aggregation results
+  const bookingMetrics = bookingStats[0] || {
+    total: 0,
+    completed: 0,
+    cancelled: 0,
+    totalSpend: 0,
+    firstBookingDate: null,
+    lastBookingDate: null
+  };
+
+  const reviewMetrics = reviewStats[0] || {
+    total: 0,
+    avgRating: 0
+  };
+
+  const disputeMetrics = disputeStats[0] || {
+    total: 0,
+    open: 0,
+    underReview: 0,
+    resolved: 0,
+    escalated: 0,
+    closed: 0
+  };
+
+  // Calculate derived metrics
+  const totalBookings = bookingMetrics.total;
+  const completedBookings = bookingMetrics.completed;
+  const repeatBookings = Math.max(0, completedBookings - 1); // First booking is not "repeat"
+
+  // Calculate repeat rate (completed bookings only)
+  const repeatRate = completedBookings > 0
+    ? Math.round((repeatBookings / completedBookings) * 100)
+    : 0;
+
+  // Calculate dispute rate (disputes / total bookings)
+  const disputeRate = totalBookings > 0
+    ? Math.round((disputeMetrics.total / totalBookings) * 100)
+    : 0;
+
+  // Return comprehensive relationship data
+  res.json({
+    success: true,
+    data: {
+      customerId: customerId as string,
+      providerId: providerId as string,
+      bookings: {
+        items: bookings,
+        total: bookingMetrics.total,
+        completed: bookingMetrics.completed,
+        cancelled: bookingMetrics.cancelled,
+        totalSpend: bookingMetrics.totalSpend
+      },
+      reviews: {
+        items: reviews,
+        total: reviewMetrics.total,
+        avgRating: reviewMetrics.avgRating ? Math.round(reviewMetrics.avgRating * 10) / 10 : 0
+      },
+      disputes: {
+        items: disputes,
+        total: disputeMetrics.total,
+        open: disputeMetrics.open + disputeMetrics.underReview + disputeMetrics.escalated,
+        resolved: disputeMetrics.resolved + disputeMetrics.closed
+      },
+      metrics: {
+        repeatRate,
+        disputeRate,
+        avgRating: reviewMetrics.avgRating ? Math.round(reviewMetrics.avgRating * 10) / 10 : 0,
+        totalSpend: bookingMetrics.totalSpend,
+        firstBookingDate: bookingMetrics.firstBookingDate,
+        lastBookingDate: bookingMetrics.lastBookingDate
+      }
+    }
+  });
+});
+
+// ============================================
+// BATCH REFUND ENDPOINT
+// ============================================
+
+/**
+ * Validation schema for batch refund
+ */
+const batchRefundSchema = Joi.object({
+  bookingIds: Joi.array().items(Joi.string().pattern(/^[0-9a-fA-F]{24}$/)).optional(),
+  providerId: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).optional(),
+  status: Joi.array().items(Joi.string().valid(
+    'pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'
+  )).optional(),
+  reason: Joi.string().required().min(5).max(500).messages({
+    'string.min': 'Refund reason must be at least 5 characters',
+    'string.max': 'Refund reason cannot exceed 500 characters',
+    'any.required': 'Refund reason is required'
+  }),
+  refundPolicy: Joi.string().valid('full', 'partial', 'no_refund').required().messages({
+    'any.only': 'Refund policy must be one of: full, partial, no_refund',
+    'any.required': 'Refund policy is required'
+  }),
+  partialPercentage: Joi.number().min(0).max(100).optional().when('refundPolicy', {
+    is: 'partial',
+    then: Joi.number().required().min(1).max(100).messages({
+      'any.required': 'Partial percentage is required when using partial refund policy'
+    })
+  }),
+  dryRun: Joi.boolean().default(false)
+});
+
+/**
+ * POST /api/admin/bookings/batch-refund
+ * Process batch refunds for multiple bookings
+ */
+export const batchRefund = asyncHandler(async (req: Request, res: Response) => {
+  const adminUser = (req as any).user;
+  const adminId = adminUser._id?.toString() || adminUser.id?.toString();
+
+  // Validate request body
+  const { error, value } = batchRefundSchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    throw ApiError.badRequest(
+      error.details.map(d => d.message).join('; '),
+      error.details.map(d => ({ field: d.path.join('.'), message: d.message }))
+    );
+  }
+
+  // Must specify either bookingIds or providerId
+  if (!value.bookingIds?.length && !value.providerId) {
+    throw ApiError.badRequest('Either bookingIds or providerId must be provided');
+  }
+
+  // Build query to find matching bookings
+  // Standardize on isDeleted pattern (matching the rest of the codebase)
+  const query: any = {
+    isDeleted: { $ne: true }
+  };
+
+  if (value.bookingIds?.length) {
+    query._id = { $in: value.bookingIds.map((id: string) => new mongoose.Types.ObjectId(id)) };
+  }
+
+  if (value.providerId) {
+    query.providerId = new mongoose.Types.ObjectId(value.providerId);
+  }
+
+  if (value.status?.length) {
+    query.status = { $in: value.status };
+  }
+
+  // Only process bookings with completed payments that haven't been fully refunded
+  query['payment.status'] = 'completed';
+
+  // FIX: Add hard limit to prevent unlimited batch processing
+  const MAX_BATCH_REFUND = 100;
+
+  // Fetch matching bookings with limit
+  const bookings = await Booking.find(query)
+    .limit(MAX_BATCH_REFUND)
+    .populate('customerId', 'firstName lastName email')
+    .populate('providerId', 'firstName lastName email')
+    .populate('serviceId', 'name')
+    .lean();
+
+  if (bookings.length === 0) {
+    res.json({
+      success: true,
+      message: 'No eligible bookings found for refund',
+      data: {
+        summary: {
+          totalFound: 0,
+          eligibleForRefund: 0,
+          skipped: 0,
+          processed: 0,
+          failed: 0,
+          totalRefundAmount: 0
+        },
+        results: []
+      }
+    });
+    return;
+  }
+
+  // Calculate refunds for each booking
+  const refundCalculations = bookings.map((booking: any) => {
+    const totalAmount = booking.pricing?.totalAmount || 0;
+    const alreadyRefunded = booking.payment?.totalRefunded || 0;
+    const maxRefundable = totalAmount - alreadyRefunded;
+
+    let refundAmount = 0;
+    let refundPercentage = 100;
+
+    switch (value.refundPolicy) {
+      case 'full':
+        refundAmount = maxRefundable;
+        refundPercentage = 100;
+        break;
+      case 'partial':
+        refundAmount = Math.round((maxRefundable * (value.partialPercentage || 50)) / 100 * 100) / 100;
+        refundPercentage = value.partialPercentage || 50;
+        break;
+      case 'no_refund':
+        refundAmount = 0;
+        refundPercentage = 0;
+        break;
+    }
+
+    return {
+      bookingId: booking._id.toString(),
+      bookingNumber: booking.bookingNumber,
+      status: booking.status,
+      customer: booking.customerId ? {
+        _id: booking.customerId._id?.toString(),
+        name: `${booking.customerId.firstName || ''} ${booking.customerId.lastName || ''}`.trim(),
+        email: booking.customerId.email
+      } : null,
+      provider: booking.providerId ? {
+        _id: booking.providerId._id?.toString(),
+        name: `${booking.providerId.firstName || ''} ${booking.providerId.lastName || ''}`.trim(),
+        email: booking.providerId.email
+      } : null,
+      service: booking.serviceId?.name || 'Unknown',
+      totalAmount,
+      alreadyRefunded,
+      maxRefundable,
+      refundAmount,
+      refundPercentage,
+      isEligible: maxRefundable > 0 && booking.payment?.transactionId
+    };
+  });
+
+  // If dry run, return calculations without processing
+  if (value.dryRun) {
+    const eligible = refundCalculations.filter(r => r.isEligible);
+    const dryRunTotalAmount = eligible.reduce((sum, r) => sum + r.refundAmount, 0);
+
+    res.json({
+      success: true,
+      message: 'Dry run complete - no refunds processed',
+      data: {
+        summary: {
+          totalFound: bookings.length,
+          eligibleForRefund: eligible.length,
+          skipped: bookings.length - eligible.length,
+          processed: 0,
+          failed: 0,
+          totalRefundAmount: dryRunTotalAmount
+        },
+        results: refundCalculations
+      }
+    });
+    return;
+  }
+
+  // Process refunds
+  const results: any[] = [];
+  let processed = 0;
+  let failed = 0;
+  let totalRefundAmount = 0;
+
+  const session = await mongoose.startSession();
+
+  try {
+    session.startTransaction();
+
+    for (const calc of refundCalculations) {
+      if (!calc.isEligible) {
+        results.push({
+          bookingId: calc.bookingId,
+          bookingNumber: calc.bookingNumber,
+          status: 'skipped',
+          reason: calc.maxRefundable <= 0 ? 'Already fully refunded or no payment' : 'No transaction ID',
+          refundAmount: 0
+        });
+        continue;
+      }
+
+      try {
+        // Get the booking with session
+        const booking = await Booking.findById(calc.bookingId).session(session);
+
+        if (!booking) {
+          results.push({
+            bookingId: calc.bookingId,
+            bookingNumber: calc.bookingNumber,
+            status: 'failed',
+            reason: 'Booking not found',
+            refundAmount: 0
+          });
+          failed++;
+          continue;
+        }
+
+        // Verify booking still qualifies
+        if (booking.payment?.status !== 'completed' || !booking.payment?.transactionId) {
+          results.push({
+            bookingId: calc.bookingId,
+            bookingNumber: calc.bookingNumber,
+            status: 'skipped',
+            reason: 'Payment status changed or no transaction ID',
+            refundAmount: 0
+          });
+          continue;
+        }
+
+        // Process Stripe refund if there's an amount to refund
+        let stripeRefundId: string | undefined;
+
+        if (calc.refundAmount > 0) {
+          try {
+            // Calculate amount in cents
+            const amountInCents = Math.round(calc.refundAmount * 100);
+
+            const stripeRefund = await stripe.refunds.create({
+              charge: booking.payment.transactionId,
+              amount: amountInCents,
+              reason: 'requested_by_customer',
+              metadata: {
+                adminRefund: 'true',
+                adminId: adminId,
+                refundReason: value.reason,
+                refundPolicy: value.refundPolicy,
+                bookingNumber: booking.bookingNumber
+              }
+            });
+
+            stripeRefundId = stripeRefund.id;
+          } catch (stripeError: any) {
+            logger.error('Stripe refund failed for batch operation', {
+              context: 'BatchRefund',
+              bookingId: calc.bookingId,
+              bookingNumber: calc.bookingNumber,
+              error: stripeError.message
+            });
+
+            results.push({
+              bookingId: calc.bookingId,
+              bookingNumber: calc.bookingNumber,
+              status: 'failed',
+              reason: `Stripe error: ${stripeError.message}`,
+              refundAmount: 0
+            });
+            failed++;
+            continue;
+          }
+        }
+
+        // Update booking with refund details
+        booking.payment = booking.payment || {};
+        booking.payment.refundedAt = new Date();
+        booking.payment.totalRefunded = (booking.payment.totalRefunded || 0) + calc.refundAmount;
+
+        // Check if fully refunded
+        if (booking.payment.totalRefunded >= booking.pricing?.totalAmount) {
+          booking.payment.status = 'refunded';
+        }
+
+        // Add cancellation/refund details
+        booking.cancellationDetails = {
+          cancelledBy: 'admin',
+          cancelledAt: new Date(),
+          reason: value.reason,
+          refundAmount: calc.refundAmount,
+          refundStatus: calc.refundAmount > 0 ? 'processed' : 'pending'
+        };
+
+        // Add to status history
+        booking.statusHistory.push({
+          status: 'refunded',
+          timestamp: new Date(),
+          reason: value.reason,
+          updatedBy: 'admin' as const,
+          notes: `Batch refund: ${value.refundPolicy} policy, ${calc.refundPercentage}% of ${calc.maxRefundable} ${booking.pricing?.currency || 'AED'}`
+        });
+
+        await booking.save({ session });
+
+        // Log audit trail
+        logger.info('Batch refund processed', {
+          context: 'BatchRefund',
+          action: 'BATCH_REFUND_PROCESSED',
+          adminId: adminId,
+          bookingId: calc.bookingId,
+          bookingNumber: calc.bookingNumber,
+          refundAmount: calc.refundAmount,
+          refundPolicy: value.refundPolicy,
+          reason: value.reason,
+          stripeRefundId
+        });
+
+        results.push({
+          bookingId: calc.bookingId,
+          bookingNumber: calc.bookingNumber,
+          status: 'success',
+          reason: value.reason,
+          refundAmount: calc.refundAmount,
+          refundPercentage: calc.refundPercentage,
+          stripeRefundId,
+          newPaymentStatus: booking.payment.status
+        });
+
+        processed++;
+        totalRefundAmount += calc.refundAmount;
+
+      } catch (error: any) {
+        logger.error('Batch refund processing error', {
+          context: 'BatchRefund',
+          bookingId: calc.bookingId,
+          error: error.message
+        });
+
+        results.push({
+          bookingId: calc.bookingId,
+          bookingNumber: calc.bookingNumber,
+          status: 'failed',
+          reason: error.message,
+          refundAmount: 0
+        });
+        failed++;
+      }
+    }
+
+    await session.commitTransaction();
+
+  } catch (error: any) {
+    await session.abortTransaction();
+
+    logger.error('Batch refund transaction failed', {
+      context: 'BatchRefund',
+      adminId: adminId,
+      error: error.message
+    });
+
+    throw error;
+  } finally {
+    session.endSession();
+  }
+
+  // Return summary
+  res.json({
+    success: true,
+    message: `Batch refund completed: ${processed} succeeded, ${failed} failed, ${bookings.length - processed - failed} skipped`,
+    data: {
+      summary: {
+        totalFound: bookings.length,
+        eligibleForRefund: results.filter(r => r.status !== 'skipped').length,
+        skipped: results.filter(r => r.status === 'skipped').length,
+        processed,
+        failed,
+        totalRefundAmount: Math.round(totalRefundAmount * 100) / 100,
+        refundPolicy: value.refundPolicy,
+        reason: value.reason
+      },
+      results
+    }
+  });
+});
+
+/**
+ * Admin Search Reindex Endpoint
+ * POST /api/admin/search/reindex
+ *
+ * Manually triggers search index rebuild for all content types
+ */
+export const reindexSearch = asyncHandler(async (req: Request, res: Response) => {
+  // Verify admin role
+  if (req.user?.role !== 'admin') {
+    throw ApiError.forbidden('Admin access required');
+  }
+
+  const adminUser = req.user as any;
+  const { indexType = 'all' } = req.body;
+
+  const validIndexTypes = ['all', 'services', 'providers', 'categories'];
+  if (!validIndexTypes.includes(indexType)) {
+    throw ApiError.badRequest(`Invalid index type. Must be one of: ${validIndexTypes.join(', ')}`);
+  }
+
+  logger.info('Search reindex triggered', {
+    context: 'AdminController',
+    action: 'SEARCH_REINDEX_STARTED',
+    adminId: adminUser._id.toString(),
+    indexType,
+  });
+
+  const startTime = Date.now();
+  const results: Record<string, any> = {};
+
+  try {
+    // Dynamically import meilisearch service to avoid circular deps
+    const { getMeiliClient, INDEXES } = await import('../config/meilisearch');
+    const meiliClient = await getMeiliClient();
+
+    if (!meiliClient) {
+      throw new ApiError(503, 'Meilisearch is not configured');
+    }
+
+    // Ensure indexes exist
+    if (indexType === 'all' || indexType === 'services') {
+      await meiliClient.createIndex(INDEXES.SERVICES, { primaryKey: 'id' }).catch(() => {
+        // Index may already exist, ignore error
+      });
+      results.services = { status: 'processing' };
+    }
+
+    if (indexType === 'all' || indexType === 'providers') {
+      await meiliClient.createIndex(INDEXES.PROVIDERS, { primaryKey: 'id' }).catch(() => {});
+      results.providers = { status: 'processing' };
+    }
+
+    if (indexType === 'all' || indexType === 'categories') {
+      await meiliClient.createIndex(INDEXES.CATEGORIES, { primaryKey: 'id' }).catch(() => {});
+      results.categories = { status: 'processing' };
+    }
+
+    // Reindex services
+    if (indexType === 'all' || indexType === 'services') {
+      const services = await Service.find({ isDeleted: false })
+        .populate('providerId', 'firstName lastName businessInfo trustScore')
+        .lean();
+
+      const serviceDocs = services.map(s => ({
+        id: s._id.toString(),
+        title: s.name,
+        description: s.description || '',
+        category: s.category || '',
+        subcategory: s.subcategory,
+        tags: s.tags || [],
+        pricing: s.price || { basePrice: 0, currency: 'AED' },
+        rating: s.rating || { average: 0, count: 0 },
+        provider: {
+          id: (s.providerId as any)?._id?.toString() || '',
+          name: (s.providerId as any)?.businessInfo?.businessName ||
+            `${(s.providerId as any)?.firstName || ''} ${(s.providerId as any)?.lastName || ''}`.trim() || 'Unknown',
+          trustScore: (s.providerId as any)?.trustScore || 0,
+        },
+        totalBookings: (s as any).analytics?.totalBookings || 0,
+        isActive: s.status === 'active',
+        createdAt: s.createdAt?.getTime() || Date.now(),
+        updatedAt: s.updatedAt?.getTime() || Date.now(),
+      }));
+
+      if (serviceDocs.length > 0) {
+        await meiliClient.index(INDEXES.SERVICES).addDocuments(serviceDocs);
+      }
+      results.services = { status: 'completed', count: serviceDocs.length };
+    }
+
+    // Reindex providers
+    if (indexType === 'all' || indexType === 'providers') {
+      const providers = await ProviderProfile.find({ isDeleted: false })
+        .populate('userId', 'firstName lastName email phone')
+        .lean();
+
+      const providerDocs = providers.map(p => ({
+        id: p._id.toString(),
+        firstName: (p.userId as any)?.firstName || '',
+        lastName: (p.userId as any)?.lastName || '',
+        businessName: p.businessInfo?.businessName,
+        email: (p.userId as any)?.email || '',
+        phone: (p.userId as any)?.phone || '',
+        city: p.locationInfo?.primaryAddress?.city || '',
+        state: p.locationInfo?.primaryAddress?.state || '',
+        trustScore: (p as any).trustScore || 0,
+        rating: p.reviewsData?.averageRating ? { average: p.reviewsData.averageRating, count: p.reviewsData.totalReviews || 0 } : { average: 0, count: 0 },
+        totalServices: (p as any).analytics?.serviceStats?.activeServices || 0,
+        totalBookings: p.analytics?.bookingStats?.totalBookings || 0,
+        isVerified: p.verificationStatus?.overall === 'verified',
+        isActive: (p as any).accountStatus === 'active',
+        createdAt: p.createdAt?.getTime() || Date.now(),
+      }));
+
+      if (providerDocs.length > 0) {
+        await meiliClient.index(INDEXES.PROVIDERS).addDocuments(providerDocs);
+      }
+      results.providers = { status: 'completed', count: providerDocs.length };
+    }
+
+    // Reindex categories
+    if (indexType === 'all' || indexType === 'categories') {
+      const categories = await ServiceCategory.find({ isActive: true }).lean();
+
+      const categoryDocs = categories.map(c => ({
+        id: c._id.toString(),
+        name: c.name,
+        description: c.description || '',
+        parentId: (c as any).parent?.toString(),
+        icon: c.icon,
+        serviceCount: (c as any).serviceCount || 0,
+        isActive: c.isActive,
+      }));
+
+      if (categoryDocs.length > 0) {
+        await meiliClient.index(INDEXES.CATEGORIES).addDocuments(categoryDocs);
+      }
+      results.categories = { status: 'completed', count: categoryDocs.length };
+    }
+
+    const duration = Date.now() - startTime;
+
+    logger.info('Search reindex completed', {
+      context: 'AdminController',
+      action: 'SEARCH_REINDEX_COMPLETED',
+      adminId: adminUser._id.toString(),
+      indexType,
+      durationMs: duration,
+      results,
+    });
+
+    res.json({
+      success: true,
+      message: `Search reindex completed for ${indexType}`,
+      data: {
+        indexType,
+        durationMs: duration,
+        results,
+        completedAt: new Date().toISOString(),
+      }
+    });
+
+  } catch (error: any) {
+    logger.error('Search reindex failed', {
+      context: 'AdminController',
+      action: 'SEARCH_REINDEX_ERROR',
+      adminId: adminUser._id.toString(),
+      indexType,
+      error: error.message,
+    });
+
+    throw new ApiError(500, `Reindex failed: ${error.message}`);
+  }
+});

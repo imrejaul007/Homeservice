@@ -44,6 +44,7 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 
 type WeatherCondition = 'sunny' | 'cloudy' | 'rainy' | 'stormy' | 'snowy' | 'windy';
 
@@ -277,10 +278,12 @@ export const WeatherImpact: React.FC<WeatherImpactProps> = ({
       if (response.data?.success) {
         setMetrics(response.data.data);
       } else {
-        setMetrics(generateWeatherData());
+        setMetrics(null);
+        setError('No weather impact data available from the server');
       }
-    } catch {
-      setMetrics(generateWeatherData());
+    } catch (err) {
+      setMetrics(null);
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

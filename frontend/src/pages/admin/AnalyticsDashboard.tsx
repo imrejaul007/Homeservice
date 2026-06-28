@@ -19,7 +19,7 @@ import type {
   RFMAnalysis,
   BusinessHealthScore,
 } from '../../services/analyticsApi';
-import PageLayout from '../../components/layout/PageLayout';
+import AdminPageShell from '../../components/admin/AdminPageShell';
 import ErrorBoundary from '../../components/common/ErrorBoundary';
 import {
   BarChart3,
@@ -81,7 +81,7 @@ interface MetricCardProps {
   change?: number;
   trend?: 'up' | 'down' | 'stable';
   icon: React.ReactNode;
-  color?: 'blue' | 'green' | 'purple' | 'orange';
+  color?: 'coral' | 'sage' | 'gold' | 'rose';
   subtitle?: string;
 }
 
@@ -91,14 +91,14 @@ const MetricCard: React.FC<MetricCardProps> = ({
   change,
   trend,
   icon,
-  color = 'blue',
+  color = 'coral',
   subtitle,
 }) => {
   const colorClasses = {
-    blue: 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400',
-    green: 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400',
-    purple: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-    orange: 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
+    coral: 'bg-nilin-coral/10 dark:bg-nilin-coral/20 text-nilin-coral dark:text-nilin-coral',
+    sage: 'bg-nilin-sage/10 dark:bg-nilin-sage/20 text-nilin-sage dark:text-nilin-sage',
+    gold: 'bg-nilin-gold/10 dark:bg-nilin-gold/20 text-nilin-gold dark:text-nilin-gold',
+    rose: 'bg-nilin-rose/10 dark:bg-nilin-rose/20 text-nilin-rose dark:text-nilin-rose',
   };
 
   return (
@@ -109,9 +109,9 @@ const MetricCard: React.FC<MetricCardProps> = ({
           <span
             className={`flex items-center gap-1 text-sm font-medium ${
               trend === 'up'
-                ? 'text-green-600 dark:text-green-400'
+                ? 'text-nilin-sage dark:text-nilin-sage'
                 : trend === 'down'
-                ? 'text-red-600 dark:text-red-400'
+                ? 'text-nilin-rose dark:text-nilin-rose'
                 : 'text-gray-500'
             }`}
           >
@@ -159,11 +159,11 @@ const CohortTable: React.FC<CohortTableProps> = ({ data, cohortType }) => {
   const sortedCohorts = Object.keys(cohortGroups).sort().reverse().slice(0, 6);
 
   const getColor = (rate: number): string => {
-    if (rate >= 80) return 'bg-green-500';
-    if (rate >= 60) return 'bg-green-400';
-    if (rate >= 40) return 'bg-yellow-400';
-    if (rate >= 20) return 'bg-orange-400';
-    return 'bg-red-400';
+    if (rate >= 80) return 'bg-nilin-sage';
+    if (rate >= 60) return 'bg-nilin-sage/70';
+    if (rate >= 40) return 'bg-nilin-gold';
+    if (rate >= 20) return 'bg-nilin-coral';
+    return 'bg-nilin-rose';
   };
 
   const cohortValues = Object.values(cohortGroups).map((g) => g.length);
@@ -265,7 +265,7 @@ const FunnelViz: React.FC<FunnelVizProps> = ({ data }) => {
               <div className="flex-1">
                 <div className="h-12 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden relative">
                   <div
-                    className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg transition-all duration-500 flex items-center justify-end pr-4"
+                    className="h-full bg-gradient-to-r from-nilin-coral to-nilin-rose rounded-lg transition-all duration-500 flex items-center justify-end pr-4"
                     style={{ width: `${width}%` }}
                   >
                     <span className="text-white font-bold text-sm">
@@ -308,18 +308,18 @@ interface RFMSegmentBadgeProps {
 
 const RFMSegmentBadge: React.FC<RFMSegmentBadgeProps> = ({ segment }) => {
   const rfmStyles: Record<RFMSegment, { bg: string; text: string }> = {
-    champions: { bg: 'bg-purple-100', text: 'text-purple-700' },
-    loyal: { bg: 'bg-blue-100', text: 'text-blue-700' },
-    potential: { bg: 'bg-green-100', text: 'text-green-700' },
-    at_risk: { bg: 'bg-orange-100', text: 'text-orange-700' },
-    lost: { bg: 'bg-red-100', text: 'text-red-700' },
+    champions: { bg: 'bg-nilin-rose/10', text: 'text-nilin-rose' },
+    loyal: { bg: 'bg-nilin-sage/10', text: 'text-nilin-sage' },
+    potential: { bg: 'bg-nilin-coral/10', text: 'text-nilin-coral' },
+    at_risk: { bg: 'bg-nilin-gold/10', text: 'text-nilin-gold' },
+    lost: { bg: 'bg-nilin-rose/20', text: 'text-nilin-rose' },
   };
 
   const customerStyles: Record<CustomerSegment, { bg: string; text: string }> = {
-    low: { bg: 'bg-gray-100', text: 'text-gray-700' },
-    medium: { bg: 'bg-yellow-100', text: 'text-yellow-700' },
-    high: { bg: 'bg-blue-100', text: 'text-blue-700' },
-    vip: { bg: 'bg-purple-100', text: 'text-purple-700' },
+    low: { bg: 'bg-nilin-blush/30', text: 'text-nilin-charcoal' },
+    medium: { bg: 'bg-nilin-gold/10', text: 'text-nilin-gold' },
+    high: { bg: 'bg-nilin-sage/10', text: 'text-nilin-sage' },
+    vip: { bg: 'bg-nilin-rose/10', text: 'text-nilin-rose' },
   };
 
   const rfmLabels: Record<RFMSegment, string> = {
@@ -346,7 +346,7 @@ const RFMSegmentBadge: React.FC<RFMSegmentBadgeProps> = ({ segment }) => {
     } else if (isCustomerSegment(segment)) {
       return customerStyles[segment];
     }
-    return { bg: 'bg-gray-100', text: 'text-gray-700' };
+    return { bg: 'bg-nilin-blush/30', text: 'text-nilin-charcoal' };
   };
 
   const getLabel = () => {
@@ -492,23 +492,54 @@ const AnalyticsDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <PageLayout title="Analytics Dashboard" backHref="/admin/dashboard">
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center">
-            <div className="w-12 h-12 border-4 border-nilin-coral border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="mt-4 text-gray-500 dark:text-gray-400">
-              Loading analytics...
-            </p>
+      <>
+        {/* Skip link for accessibility (WCAG 2.4.1) */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+        >
+          Skip to main content
+        </a>
+        <AdminPageShell
+          title="Analytics Dashboard"
+          subtitle="Deep dive into your marketplace performance"
+          breadcrumbItems={[
+            { label: 'Admin', href: '/admin/dashboard' },
+            { label: 'Analytics', current: true },
+          ]}
+          wideLayout
+        >
+          <div className="flex items-center justify-center h-96">
+            <div className="text-center">
+              <div className="w-12 h-12 border-4 border-nilin-coral border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="mt-4 text-gray-500 dark:text-gray-400">
+                Loading analytics...
+              </p>
+            </div>
           </div>
-        </div>
-      </PageLayout>
+        </AdminPageShell>
+      </>
     );
   }
 
   return (
     <ErrorBoundary>
-    <PageLayout title="Analytics Dashboard" backHref="/admin/dashboard">
-      <div className="space-y-6">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+      >
+        Skip to main content
+      </a>
+      <AdminPageShell
+        title="Analytics Dashboard"
+        subtitle="Deep dive into your marketplace performance"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Analytics', current: true },
+        ]}
+        wideLayout
+      >
+        <main id="main-content" className="space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -521,9 +552,11 @@ const AnalyticsDashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-3">
             <select
+              id="date-range"
               value={dateRange}
               onChange={(e) => setDateRange(e.target.value)}
-              className="px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              aria-label="Select date range"
+              className="px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-nilin-coral focus:border-nilin-coral"
             >
               <option value="week">Last 7 days</option>
               <option value="month">This month</option>
@@ -533,7 +566,7 @@ const AnalyticsDashboard: React.FC = () => {
             <button
               onClick={() => fetchAllData(true)}
               disabled={refreshing}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 disabled:opacity-50 transition-colors text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
             >
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
               Refresh
@@ -548,9 +581,9 @@ const AnalyticsDashboard: React.FC = () => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+                className={`flex items-center gap-2 px-4 py-3 min-h-11 text-sm font-medium border-b-2 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-t-lg flex-shrink-0 ${
                   activeTab === tab.id
-                    ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                    ? 'border-nilin-coral text-nilin-coral dark:text-nilin-coral'
                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}
               >
@@ -570,14 +603,14 @@ const AnalyticsDashboard: React.FC = () => {
                 title="Total Bookings"
                 value={metrics?.bookings.total || 0}
                 icon={<Calendar className="w-5 h-5" />}
-                color="blue"
+                color="coral"
                 subtitle={`${metrics?.bookings.completed || 0} completed`}
               />
               <MetricCard
                 title="Revenue"
                 value={formatCurrency(metrics?.revenue.total || 0)}
                 icon={<DollarSign className="w-5 h-5" />}
-                color="green"
+                color="sage"
                 change={metrics?.revenue.monthOverMonthGrowth}
                 trend={
                   (metrics?.revenue.monthOverMonthGrowth || 0) > 0
@@ -591,14 +624,14 @@ const AnalyticsDashboard: React.FC = () => {
                 title="Active Customers"
                 value={metrics?.customers.active || 0}
                 icon={<Users className="w-5 h-5" />}
-                color="purple"
+                color="rose"
                 subtitle={`${metrics?.customers.newThisMonth || 0} new`}
               />
               <MetricCard
                 title="Active Providers"
                 value={metrics?.providers.active || 0}
                 icon={<UserCheck className="w-5 h-5" />}
-                color="orange"
+                color="gold"
                 subtitle={`${metrics?.providers.pending || 0} pending`}
               />
             </div>
@@ -618,7 +651,7 @@ const AnalyticsDashboard: React.FC = () => {
                       className="flex-1 flex flex-col items-center gap-1 group"
                     >
                       <div
-                        className="w-full bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-lg transition-all hover:from-blue-500 hover:to-blue-300 cursor-pointer"
+                        className="w-full bg-gradient-to-t from-nilin-coral to-nilin-blush rounded-t-lg transition-all hover:from-nilin-coral/90 hover:to-nilin-blush/90 cursor-pointer"
                         style={{ height: `${Math.max(height, 2)}%` }}
                       />
                       <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-gray-900 dark:bg-gray-700 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
@@ -659,8 +692,8 @@ const AnalyticsDashboard: React.FC = () => {
                           <span
                             className={`flex items-center gap-1 ${
                               cat.growth >= 0
-                                ? 'text-green-600 dark:text-green-400'
-                                : 'text-red-600 dark:text-red-400'
+                                ? 'text-nilin-sage dark:text-nilin-sage'
+                                : 'text-nilin-rose dark:text-nilin-rose'
                             }`}
                           >
                             {cat.growth >= 0 ? (
@@ -674,7 +707,7 @@ const AnalyticsDashboard: React.FC = () => {
                       </div>
                       <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-blue-500 rounded-full"
+                          className="h-full bg-nilin-coral rounded-full"
                           style={{ width: `${cat.share}%` }}
                         />
                       </div>
@@ -694,10 +727,10 @@ const AnalyticsDashboard: React.FC = () => {
                   <div
                     className={`text-3xl font-bold ${
                       healthScore.overall >= 80
-                        ? 'text-green-600 dark:text-green-400'
+                        ? 'text-nilin-sage dark:text-nilin-sage'
                         : healthScore.overall >= 60
-                        ? 'text-yellow-600 dark:text-yellow-400'
-                        : 'text-red-600 dark:text-red-400'
+                        ? 'text-nilin-gold dark:text-nilin-gold'
+                        : 'text-nilin-rose dark:text-nilin-rose'
                     }`}
                   >
                     {healthScore.overall}
@@ -716,10 +749,10 @@ const AnalyticsDashboard: React.FC = () => {
                         <span
                           className={`text-sm font-bold ${
                             cat.score >= 80
-                              ? 'text-green-600'
+                              ? 'text-nilin-sage'
                               : cat.score >= 60
-                              ? 'text-yellow-600'
-                              : 'text-red-600'
+                              ? 'text-nilin-gold'
+                              : 'text-nilin-rose'
                           }`}
                         >
                           {cat.score}
@@ -729,10 +762,10 @@ const AnalyticsDashboard: React.FC = () => {
                         <div
                           className={`h-full rounded-full ${
                             cat.score >= 80
-                              ? 'bg-green-500'
+                              ? 'bg-nilin-sage'
                               : cat.score >= 60
-                              ? 'bg-yellow-500'
-                              : 'bg-red-500'
+                              ? 'bg-nilin-gold'
+                              : 'bg-nilin-rose'
                           }`}
                           style={{ width: `${cat.score}%` }}
                         />
@@ -751,10 +784,10 @@ const AnalyticsDashboard: React.FC = () => {
                           key={idx}
                           className={`p-3 rounded-lg text-sm ${
                             alert.severity === 'critical'
-                              ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                              ? 'bg-nilin-rose/10 dark:bg-nilin-rose/20 text-nilin-rose dark:text-nilin-rose'
                               : alert.severity === 'warning'
-                              ? 'bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
-                              : 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                              ? 'bg-nilin-gold/10 dark:bg-nilin-gold/20 text-nilin-gold dark:text-nilin-gold'
+                              : 'bg-nilin-coral/10 dark:bg-nilin-coral/20 text-nilin-coral dark:text-nilin-coral'
                           }`}
                         >
                           {alert.message}
@@ -778,9 +811,9 @@ const AnalyticsDashboard: React.FC = () => {
               <div className="flex gap-2">
                 <button
                   onClick={() => setCohortType('monthly')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                     cohortType === 'monthly'
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-nilin-coral text-white'
                       : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                   }`}
                 >
@@ -788,9 +821,9 @@ const AnalyticsDashboard: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setCohortType('weekly')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                     cohortType === 'weekly'
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-nilin-coral text-white'
                       : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                   }`}
                 >
@@ -816,7 +849,7 @@ const AnalyticsDashboard: React.FC = () => {
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     Retention Rate
                   </p>
-                  <p className="text-2xl font-bold text-green-600 dark:text-green-400 mt-1">
+                  <p className="text-2xl font-bold text-nilin-sage dark:text-nilin-sage mt-1">
                     {retentionMetrics.retentionRate.toFixed(1)}%
                   </p>
                 </div>
@@ -824,7 +857,7 @@ const AnalyticsDashboard: React.FC = () => {
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     Churn Rate
                   </p>
-                  <p className="text-2xl font-bold text-red-600 dark:text-red-400 mt-1">
+                  <p className="text-2xl font-bold text-nilin-rose dark:text-nilin-rose mt-1">
                     {retentionMetrics.churnRate.toFixed(1)}%
                   </p>
                 </div>
@@ -867,7 +900,7 @@ const AnalyticsDashboard: React.FC = () => {
                   className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 font-bold text-sm">
+                    <div className="w-8 h-8 rounded-full bg-nilin-coral/10 dark:bg-nilin-coral/20 flex items-center justify-center text-nilin-coral dark:text-nilin-coral font-bold text-sm">
                       {idx + 1}
                     </div>
                     <div>
@@ -883,7 +916,7 @@ const AnalyticsDashboard: React.FC = () => {
                     <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
                       <p className="text-xs text-gray-500 dark:text-gray-400">
                         Drop-off:{' '}
-                        <span className="font-medium text-red-600 dark:text-red-400">
+                        <span className="font-medium text-nilin-rose dark:text-nilin-rose">
                           {step.dropoffRate.toFixed(1)}%
                         </span>
                       </p>
@@ -907,7 +940,7 @@ const AnalyticsDashboard: React.FC = () => {
                 <div className="space-y-3">
                   {geoData.slice(0, 10).map((geo, idx) => (
                     <div key={geo.region} className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 font-medium text-sm">
+                      <div className="w-8 h-8 rounded-full bg-nilin-coral/10 dark:bg-nilin-coral/20 flex items-center justify-center text-nilin-coral dark:text-nilin-coral font-medium text-sm">
                         {idx + 1}
                       </div>
                       <div className="flex-1">
@@ -926,7 +959,7 @@ const AnalyticsDashboard: React.FC = () => {
                         </div>
                         <div className="mt-1 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-blue-500 rounded-full"
+                            className="h-full bg-nilin-coral rounded-full"
                             style={{ width: `${geo.percentage}%` }}
                           />
                         </div>
@@ -972,43 +1005,75 @@ const AnalyticsDashboard: React.FC = () => {
                 Customer Lifetime Value
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <div className="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                  <p className="text-sm text-purple-600 dark:text-purple-400">
+                <div className="p-4 bg-nilin-rose/10 dark:bg-nilin-rose/20 rounded-lg">
+                  <p className="text-sm text-nilin-rose dark:text-nilin-rose">
                     VIP Customers
                   </p>
-                  <p className="text-2xl font-bold text-purple-700 dark:text-purple-300">
+                  <p className="text-2xl font-bold text-nilin-rose dark:text-nilin-rose">
                     {customerLTV.filter((c) => c.segment === 'vip').length}
                   </p>
                 </div>
-                <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                  <p className="text-sm text-green-600 dark:text-green-400">
+                <div className="p-4 bg-nilin-sage/10 dark:bg-nilin-sage/20 rounded-lg">
+                  <p className="text-sm text-nilin-sage dark:text-nilin-sage">
                     High Value
                   </p>
-                  <p className="text-2xl font-bold text-green-700 dark:text-green-300">
+                  <p className="text-2xl font-bold text-nilin-sage dark:text-nilin-sage">
                     {customerLTV.filter((c) => c.segment === 'high').length}
                   </p>
                 </div>
-                <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                  <p className="text-sm text-blue-600 dark:text-blue-400">
+                <div className="p-4 bg-nilin-coral/10 dark:bg-nilin-coral/20 rounded-lg">
+                  <p className="text-sm text-nilin-coral dark:text-nilin-coral">
                     Medium Value
                   </p>
-                  <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                  <p className="text-2xl font-bold text-nilin-coral dark:text-nilin-coral">
                     {customerLTV.filter((c) => c.segment === 'medium').length}
                   </p>
                 </div>
-                <div className="p-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                <div className="p-4 bg-nilin-blush/30 dark:bg-nilin-warmGray/30 rounded-lg">
+                  <p className="text-sm text-nilin-charcoal dark:text-nilin-warmGray">
                     Low Value
                   </p>
-                  <p className="text-2xl font-bold text-gray-700 dark:text-gray-300">
+                  <p className="text-2xl font-bold text-nilin-charcoal dark:text-nilin-warmGray">
                     {customerLTV.filter((c) => c.segment === 'low').length}
                   </p>
                 </div>
               </div>
 
               {/* Top LTV Customers */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="md:hidden space-y-3 mb-4">
+                {customerLTV.slice(0, 10).map((customer) => (
+                  <div
+                    key={customer.customerId}
+                    className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <p className="font-medium text-gray-900 dark:text-white truncate">
+                        {customer.customerName}
+                      </p>
+                      <RFMSegmentBadge segment={customer.segment} />
+                    </div>
+                    <dl className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <dt className="text-xs text-gray-500">Bookings</dt>
+                        <dd className="text-gray-700 dark:text-gray-300">{customer.totalBookings}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-gray-500">Spent</dt>
+                        <dd className="font-medium text-gray-900 dark:text-white">
+                          {formatCurrency(customer.totalSpent)}
+                        </dd>
+                      </div>
+                      <div className="col-span-2">
+                        <dt className="text-xs text-gray-500">Predicted LTV</dt>
+                        <dd className="text-nilin-sage font-medium">{formatCurrency(customer.predictedLTV)}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm min-w-[640px]">
                   <thead>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
                       <th className="text-left py-3 px-4 font-medium text-gray-600 dark:text-gray-400">
@@ -1043,7 +1108,7 @@ const AnalyticsDashboard: React.FC = () => {
                         <td className="py-3 px-4 text-right font-medium text-gray-900 dark:text-white">
                           {formatCurrency(customer.totalSpent)}
                         </td>
-                        <td className="py-3 px-4 text-right text-green-600 dark:text-green-400 font-medium">
+                        <td className="py-3 px-4 text-right text-nilin-sage dark:text-nilin-sage font-medium">
                           {formatCurrency(customer.predictedLTV)}
                         </td>
                         <td className="py-3 px-4 text-center">
@@ -1061,7 +1126,7 @@ const AnalyticsDashboard: React.FC = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 RFM Analysis
               </h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 mb-6">
                 {(['champions', 'loyal', 'potential', 'at_risk', 'lost'] as const).map((segment) => {
                   const count = rfmData.filter((c) => c.segment === segment).length;
                   const percentage = rfmData.length > 0
@@ -1083,8 +1148,41 @@ const AnalyticsDashboard: React.FC = () => {
               </div>
 
               {/* RFM Distribution Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="md:hidden space-y-3">
+                {rfmData.slice(0, 10).map((customer) => (
+                  <div
+                    key={customer.customerId}
+                    className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
+                  >
+                    <p className="font-mono text-xs text-gray-600 dark:text-gray-400 mb-2">
+                      …{customer.customerId.slice(-8)}
+                    </p>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <RFMSegmentBadge segment={customer.segment} />
+                      <span className="font-bold text-gray-900 dark:text-white">
+                        Score {customer.rfmScore}
+                      </span>
+                    </div>
+                    <dl className="grid grid-cols-3 gap-2 text-xs text-center">
+                      <div>
+                        <dt className="text-gray-500">Recency</dt>
+                        <dd className="font-medium">{customer.recency}d</dd>
+                      </div>
+                      <div>
+                        <dt className="text-gray-500">Frequency</dt>
+                        <dd className="font-medium">{customer.frequency}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-gray-500">Monetary</dt>
+                        <dd className="font-medium">{formatCurrency(customer.monetary)}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm min-w-[640px]">
                   <thead>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
                       <th className="text-left py-3 px-4 font-medium text-gray-600 dark:text-gray-400">
@@ -1139,9 +1237,9 @@ const AnalyticsDashboard: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
-    </PageLayout>
-    </ErrorBoundary>
+      </main>
+    </AdminPageShell>
+  </ErrorBoundary>
   );
 };
 

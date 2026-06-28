@@ -447,12 +447,12 @@ const RecentActivity: React.FC<RecentActivityProps> = ({
     } else if (activity.type === 'review_submitted' || activity.type === 'review_received') {
       navigate('/customer/reviews');
     } else {
-      navigate('/customer/activity');
+      navigate('/customer/rewards');
     }
   };
 
   const handleViewAll = () => {
-    navigate('/customer/activity');
+    navigate('/customer/rewards');
   };
 
   const formatTimestamp = (timestamp: string): string => {

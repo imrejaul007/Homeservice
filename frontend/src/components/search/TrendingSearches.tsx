@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, TrendingUp } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
+import { searchApi } from '@/services/searchApi';
 import { cn } from '@/lib/utils';
 
 interface TrendingSearchesProps {
@@ -36,11 +37,33 @@ const TrendingSearches: React.FC<TrendingSearchesProps> = ({
   const navigate = useNavigate();
   const { addToSearchHistory, setFilters } = useSearchStore();
   const [isVisible, setIsVisible] = useState(false);
+  const [trendingItems, setTrendingItems] = useState(DEFAULT_TRENDING_SEARCHES);
 
   useEffect(() => {
     const timer = setTimeout(() => setIsVisible(true), 100);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    searchApi.getTrendingServices('7d', limit, abortController.signal)
+      .then((res) => {
+        if (res.success && res.data.services?.length) {
+          setTrendingItems(
+            res.data.services.slice(0, limit).map((service) => ({
+              term: service.name,
+              emoji: '✨',
+            }))
+          );
+        }
+      })
+      .catch(() => {
+        // Keep default fallback on error
+      });
+
+    return () => abortController.abort();
+  }, [limit]);
 
   const handleSearchClick = (term: string) => {
     if (onSearch) {
@@ -52,11 +75,9 @@ const TrendingSearches: React.FC<TrendingSearchesProps> = ({
     }
   };
 
-  const trendingItems = DEFAULT_TRENDING_SEARCHES.slice(0, limit);
-
   return (
-    <section className={cn('py-20 px-0 bg-nilin-cream/50', className)}>
-      <div className="max-w-7xl mx-auto px-2">
+    <section className={cn('py-12 sm:py-16 md:py-20 px-0 bg-nilin-cream/50', className)}>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6">
         {/* Header with glass effect */}
         <div className={cn(
           'mb-10 transition-all duration-700',
@@ -66,19 +87,19 @@ const TrendingSearches: React.FC<TrendingSearchesProps> = ({
             <TrendingUp className="w-5 h-5 text-nilin-coral" />
             <span className="text-sm font-semibold text-nilin-charcoal uppercase tracking-wide">Hot right now</span>
           </div>
-          <h2 className="text-4xl md:text-5xl font-bold text-nilin-charcoal">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-nilin-charcoal">
             {title}
           </h2>
         </div>
 
         {/* Trending Pills - Larger glassy layout */}
-        <div className="flex flex-wrap gap-4">
+        <div className="flex flex-wrap gap-3 sm:gap-4">
           {trendingItems.map((item, index) => (
             <button
-              key={`trending-${index}`}
+              key={`trending-${item.term}-${index}`}
               onClick={() => handleSearchClick(item.term)}
               className={cn(
-                'group flex items-center gap-4 pl-2 pr-6 py-3 rounded-2xl',
+                'group flex items-center gap-2 sm:gap-4 pl-2 pr-4 sm:pr-6 py-2.5 sm:py-3 min-h-11 rounded-2xl',
                 'bg-white/80 backdrop-blur-md',
                 'border border-white/80',
                 'shadow-md hover:shadow-xl',

@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Calendar,
@@ -64,27 +65,35 @@ const DESIGN = {
 
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
+import { OfflineBanner } from '../components/common/OfflineBanner';
 import CustomerHubNav from '../components/customer/CustomerHubNav';
+import CustomerHealthScore from '../components/customer/CustomerHealthScore';
 import ViewProModal from '../components/dashboard/ViewProModal';
 import OngoingBookings from '../components/dashboard/OngoingBookings';
 import DashboardUpcomingSection from '../components/dashboard/DashboardUpcomingSection';
 import { WriteReviewModal } from '../components/customer/WriteReviewModal';
 import { useAuthStore } from '../stores/authStore';
 import {
-  customerDashboardApi,
   type DashboardStats,
   type BookingSummary,
   type LoyaltyData,
   type StreakData,
 } from '../services/customerDashboardApi';
-import { bookingApi } from '../services/bookingApi';
 import { chatApi, type ChatRoomListItem } from '../services/chatApi';
+import { walletApi } from '../services/walletApi';
+import {
+  customerDashboardQueryKey,
+  customerWalletQueryKey,
+  fetchCustomerDashboardData,
+} from '../services/customerDashboardQueries';
 import type { Booking } from '../types/booking.types';
 import type { AuthUser } from '../services/AuthService';
 import type { BookingStatus } from '../types/booking.types';
 import { useSocketEvent } from '../hooks/useSocket';
 import { PriceDisplay } from '../components/common/PriceDisplay';
+import { escapeHtml } from '../lib/security';
 import toast from 'react-hot-toast';
+import { shouldShowThrottledToast } from '../utils/throttledToast';
 
 // ============================================
 // HELPERS
@@ -390,9 +399,9 @@ const NavCardSpotlight: React.FC<NavCardSpotlightProps> = ({
         <button
           type="button"
           onClick={handleClick}
-          title={`${title} — ${description}`}
+          aria-label={`${title} — ${description}`}
           className={cn(
-            'w-full h-full text-left flex flex-col gap-3 relative',
+            'w-full h-full text-left flex flex-col gap-3 relative active:scale-[0.97]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dash-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--dash-surface)]'
           )}
         >
@@ -436,6 +445,7 @@ interface BookingCard3DProps {
   onView: (id: string) => void;
   onWriteReview?: (bookingId: string) => void;
   delay?: number;
+  isRecentlyUpdated?: boolean;
 }
 
 const BookingCard3D: React.FC<BookingCard3DProps> = ({
@@ -443,6 +453,7 @@ const BookingCard3D: React.FC<BookingCard3DProps> = ({
   onView,
   onWriteReview,
   delay = 0,
+  isRecentlyUpdated = false,
 }) => {
   const status = statusConfig[booking.status] || statusConfig.pending;
   const formattedDate = new Date(booking.scheduledDate).toLocaleDateString('en-US', {
@@ -452,14 +463,14 @@ const BookingCard3D: React.FC<BookingCard3DProps> = ({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
+      initial={{ opacity: 0, y: 16, scale: 0.98, backgroundColor: isRecentlyUpdated ? 'rgba(34, 197, 94, 0.15)' : 'transparent' }}
+      animate={{ opacity: 1, y: 0, scale: 1, backgroundColor: isRecentlyUpdated ? 'rgba(34, 197, 94, 0)' : 'transparent' }}
       transition={{
         duration: 0.5,
         delay: getStaggerDelay(delay),
         ease: DESIGN.easing.spring,
       }}
-      className="group"
+      className={cn('group', isRecentlyUpdated && 'ring-2 ring-green-400 ring-opacity-50 rounded-lg')}
     >
       <button
         type="button"
@@ -605,21 +616,60 @@ const SpotlightOfferCard: React.FC<SpotlightOfferCardProps> = ({
 const CustomerDashboardEnhanced: React.FC = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const queryClient = useQueryClient();
 
-  // State
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [recentBookings, setRecentBookings] = useState<BookingSummary[]>([]);
-  const [upcomingBookings, setUpcomingBookings] = useState<BookingSummary[]>([]);
-  const [loyaltyPoints, setLoyaltyPoints] = useState<LoyaltyData | null>(null);
-  const [currentStreak, setCurrentStreak] = useState<StreakData | null>(null);
+  const dashboardQuery = useQuery({
+    queryKey: customerDashboardQueryKey,
+    queryFn: fetchCustomerDashboardData,
+  });
+
+  const walletQuery = useQuery({
+    queryKey: customerWalletQueryKey,
+    queryFn: async () => {
+      const response = await walletApi.getWallet();
+      return response.success && response.data ? response.data.balance || 0 : 0;
+    },
+  });
+
+  const stats = dashboardQuery.data?.stats ?? null;
+  const recentBookings = dashboardQuery.data?.recentBookings ?? [];
+  const upcomingBookings = dashboardQuery.data?.upcomingBookings ?? [];
+  const loyaltyPoints = dashboardQuery.data?.loyaltyPoints ?? null;
+  const currentStreak = dashboardQuery.data?.currentStreak ?? null;
+  const walletBalance = walletQuery.data ?? 0;
+  const isLoading = dashboardQuery.isLoading;
+  const isLoadingWallet = walletQuery.isLoading;
+  const error = dashboardQuery.isError ? 'Failed to load dashboard data. Please try again.' : null;
+
+  const refetchDashboardData = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: customerDashboardQueryKey });
+  }, [queryClient]);
+
+  const refetchWalletBalance = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: customerWalletQueryKey });
+  }, [queryClient]);
+
   const [recentConversations, setRecentConversations] = useState<ChatRoomListItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [showViewProModal, setShowViewProModal] = useState(false);
   const [showWriteReviewModal, setShowWriteReviewModal] = useState(false);
   const [writeReviewBookingId, setWriteReviewBookingId] = useState<string | undefined>();
+
+  // Track recently updated bookings for animation
+  const [recentlyUpdatedBookings, setRecentlyUpdatedBookings] = useState<Set<string>>(new Set());
+  const [statusAnnouncement, setStatusAnnouncement] = useState('');
+
+  const announceStatus = useCallback((message: string) => {
+    setStatusAnnouncement(message);
+    window.setTimeout(() => setStatusAnnouncement(''), 3000);
+  }, []);
+
+  useEffect(() => {
+    if (!isLoading && !error) {
+      announceStatus('Dashboard updated');
+    }
+  }, [isLoading, error, announceStatus]);
 
   const lastStatusToastRef = useRef<{ at: number; key: string } | null>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
@@ -640,73 +690,38 @@ const CustomerDashboardEnhanced: React.FC = () => {
     }
   }, []);
 
-  // Fetch dashboard data
-  const fetchDashboardData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      let statsData: DashboardStats | null = null;
-      let recent: BookingSummary[] = [];
-      let loyalty: LoyaltyData | null = null;
-      let streak: StreakData | null = null;
-
-      try {
-        const dashboard = await customerDashboardApi.getDashboard();
-        statsData = dashboard.stats;
-        recent = dashboard.recentBookings || [];
-        setUpcomingBookings(dashboard.upcomingBookings || []);
-        loyalty = dashboard.loyaltyPoints || null;
-        streak = dashboard.currentStreak || null;
-      } catch {
-        const [statsResult, bookingsResult] = await Promise.allSettled([
-          customerDashboardApi.getStats(),
-          bookingApi.getBookings({ limit: 5, sortBy: 'createdAt', sortOrder: 'desc' }),
-        ]);
-
-        if (statsResult.status === 'fulfilled') {
-          statsData = statsResult.value;
-        }
-        if (bookingsResult.status === 'fulfilled') {
-          recent = (bookingsResult.value.bookings || []).map(mapBookingToSummary);
-        }
-      }
-
-      const activeFromList = countActiveBookings(recent);
-      if (statsData && (statsData.activeBookings ?? 0) === 0 && activeFromList > 0) {
-        statsData = { ...statsData, activeBookings: activeFromList };
-      }
-
-      setStats(statsData);
-      setRecentBookings(recent);
-      setLoyaltyPoints(loyalty);
-      setCurrentStreak(streak);
-    } catch {
-      setError('Failed to load dashboard data. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   // Memoized socket event handlers
-  const handleBookingStatusChange = useCallback(() => {
-    fetchDashboardData();
-  }, [fetchDashboardData]);
+  const handleBookingStatusChange = useCallback((data?: { bookingId?: string }) => {
+    refetchDashboardData();
+    refetchWalletBalance();
+    announceStatus('Booking status updated');
+    // Highlight the updated booking with animation
+    if (data?.bookingId) {
+      setRecentlyUpdatedBookings(prev => new Set(prev).add(data.bookingId!));
+      // Remove highlight after animation completes
+      setTimeout(() => {
+        setRecentlyUpdatedBookings(prev => {
+          const next = new Set(prev);
+          next.delete(data.bookingId!);
+          return next;
+        });
+      }, 2000);
+    }
+  }, [refetchDashboardData, refetchWalletBalance, announceStatus]);
 
   const handleNewNotification = useCallback((data: { message?: string }) => {
-    const sanitizedMessage = (data.message || 'You have a new notification')
-      .replace(/<[^>]*>/g, '')
-      .trim();
-    toast(sanitizedMessage, {
+    const rawMessage = data.message || 'You have a new notification';
+    const safeMessage = escapeHtml(rawMessage.slice(0, 500));
+    if (!shouldShowThrottledToast(`notification:${safeMessage}`)) return;
+    toast(safeMessage, {
       icon: <Bell className="h-5 w-5 text-nilin-coral" />,
       duration: 4000,
     });
   }, []);
 
   useEffect(() => {
-    fetchDashboardData();
     fetchRecentConversations();
-  }, [fetchDashboardData, fetchRecentConversations]);
+  }, [fetchRecentConversations]);
 
   const updateProfileDropdownPosition = useCallback(() => {
     if (!profileTriggerRef.current) return;
@@ -838,9 +853,19 @@ const CustomerDashboardEnhanced: React.FC = () => {
 
   return (
     <div className="min-h-screen customer-dashboard flex flex-col">
+      {/* FIX UX: Offline detection banner */}
+      <OfflineBanner autoHideDelay={3000} />
       <NavigationHeader />
 
-      <main className="flex-1 w-full">
+      {/* Skip link for keyboard accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+      >
+        Skip to main content
+      </a>
+
+      <main id="main-content" className="flex-1 w-full">
         {/* Hero Section with premium gradient background */}
         <div className="border-b dash-divider relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-br from-[var(--dash-surface)] via-transparent to-[var(--dash-accent-wash)]/40 pointer-events-none" />
@@ -910,6 +935,7 @@ const CustomerDashboardEnhanced: React.FC = () => {
                     )}
                     aria-expanded={showProfileDropdown}
                     aria-haspopup="menu"
+                    aria-label="Profile menu"
                   >
                     {!showProfileDropdown && <ProfileAvatar user={user} size="sm" />}
                     <div className="hidden lg:flex min-w-0 flex-1 flex-col dash-profile-meta">
@@ -1015,6 +1041,10 @@ const CustomerDashboardEnhanced: React.FC = () => {
 
         <CustomerHubNav />
 
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {statusAnnouncement}
+        </div>
+
         <div className="max-w-[var(--dash-page-max-width)] mx-auto px-4 sm:px-6 lg:px-8 py-[var(--dash-spacing-24)] md:py-[var(--dash-spacing-32)]">
           {/* Error State */}
           <AnimatePresence>
@@ -1034,7 +1064,7 @@ const CustomerDashboardEnhanced: React.FC = () => {
                 </div>
                 <button
                   type="button"
-                  onClick={fetchDashboardData}
+                  onClick={refetchDashboardData}
                   className="flex-shrink-0 px-4 py-2 bg-[var(--dash-cta)] text-[var(--dash-cta-text)] text-[var(--dash-text-body-sm)] rounded-[var(--dash-radius-card)] hover:bg-[var(--dash-brand)] transition-colors"
                 >
                   Retry
@@ -1118,6 +1148,19 @@ const CustomerDashboardEnhanced: React.FC = () => {
                 </>
               )}
             </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              duration: 0.5,
+              delay: getStaggerDelay(1),
+              ease: DESIGN.easing.spring,
+            }}
+            className="mb-[var(--dash-spacing-32)]"
+          >
+            <CustomerHealthScore compact showDetails />
           </motion.div>
 
           <motion.div
@@ -1261,6 +1304,7 @@ const CustomerDashboardEnhanced: React.FC = () => {
                           setShowWriteReviewModal(true);
                         }}
                         delay={index}
+                        isRecentlyUpdated={recentlyUpdatedBookings.has(booking._id)}
                       />
                     ))}
                   </div>
@@ -1466,20 +1510,20 @@ const CustomerDashboardEnhanced: React.FC = () => {
                     </div>
                     <button
                       type="button"
-                      onClick={() => navigate('/customer/wallet')}
+                      onClick={() => navigate('/customer/rewards')}
                       className="rounded-[var(--dash-radius-input)] bg-gradient-to-br from-[var(--dash-accent-wash)] to-[var(--dash-accent-highlight)]/30 p-3.5 text-center border dash-divider hover:shadow-lg hover:shadow-[var(--dash-brand)]/10 hover:-translate-y-0.5 transition-all duration-200"
                     >
                       <div className="flex items-center justify-center gap-1 text-xl font-medium text-[var(--dash-text)]">
                         <Award className="w-4 h-4 text-[var(--dash-brand)]" />
-                        {loyaltyPoints?.points ?? 0}
+                        {loyaltyPoints?.coins ?? loyaltyPoints?.points ?? 0}
                       </div>
-                      <div className="text-[11px] text-[var(--dash-text-muted)] mt-0.5 capitalize">
-                        {(loyaltyPoints?.tier || 'bronze')} tier
+                      <div className="text-[11px] text-[var(--dash-text-muted)] mt-0.5">
+                        {(loyaltyPoints?.tier || 'bronze')} tier · coins
                       </div>
                     </button>
                     <button
                       type="button"
-                      onClick={() => navigate('/customer/wallet')}
+                      onClick={() => navigate('/customer/rewards')}
                       className="rounded-[var(--dash-radius-input)] bg-gradient-to-br from-[var(--dash-accent-highlight)]/50 to-[var(--dash-accent-wash)]/30 p-3.5 text-center border dash-divider hover:shadow-lg hover:shadow-[var(--dash-brand)]/10 hover:-translate-y-0.5 transition-all duration-200"
                     >
                       <div className="flex items-center justify-center gap-1 text-xl font-medium text-[var(--dash-text)]">
@@ -1487,6 +1531,23 @@ const CustomerDashboardEnhanced: React.FC = () => {
                         {currentStreak?.currentStreak ?? 0}
                       </div>
                       <div className="text-[11px] text-[var(--dash-text-muted)] mt-0.5">Day streak</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/customer/rewards')}
+                      className="col-span-2 rounded-[var(--dash-radius-input)] bg-gradient-to-br from-[var(--dash-cta)]/10 to-[var(--dash-brand)]/20 p-3.5 text-center border dash-divider hover:shadow-lg hover:shadow-[var(--dash-brand)]/10 hover:-translate-y-0.5 transition-all duration-200"
+                    >
+                      <div className="flex items-center justify-center gap-2 text-xl font-medium text-[var(--dash-text)]">
+                        <CreditCard className="w-4 h-4 text-[var(--dash-brand)]" />
+                        {isLoadingWallet ? (
+                          <span className="text-sm text-[var(--dash-text-muted)]">Loading...</span>
+                        ) : (
+                          <>
+                            <span>AED {walletBalance.toLocaleString()}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-[var(--dash-text-muted)] mt-0.5">Wallet Balance</div>
                     </button>
                   </div>
                   <button
@@ -1497,6 +1558,8 @@ const CustomerDashboardEnhanced: React.FC = () => {
                     Edit profile
                   </button>
               </motion.div>
+
+              <CustomerHealthScore showDetails compact className="dash-panel" />
 
               <motion.div
                 initial={{ opacity: 0, y: 20, scale: 0.98 }}
@@ -1586,7 +1649,7 @@ const CustomerDashboardEnhanced: React.FC = () => {
         }}
         preSelectedBookingId={writeReviewBookingId}
         onReviewSubmitted={() => {
-          fetchDashboardData();
+          refetchDashboardData();
         }}
       />
 

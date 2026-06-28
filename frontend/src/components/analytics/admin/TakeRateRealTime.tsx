@@ -10,8 +10,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { Percent, TrendingUp, Loader, DollarSign, PieChart as PieIcon } from 'lucide-react';
+import { Percent, TrendingUp, Loader, DollarSign, PieChart as PieIcon, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface TakeRateRealTimeProps {
   timeRange?: '7d' | '30d' | '90d' | '1y';
@@ -41,50 +42,42 @@ interface TakeRateStats {
   }>;
 }
 
-const MOCK_DATA: TakeRateData[] = [
-  { date: 'Mon', grossRevenue: 12500, netRevenue: 9375, platformRevenue: 3125, takeRate: 25.0, transactionCount: 85 },
-  { date: 'Tue', grossRevenue: 15200, netRevenue: 11400, platformRevenue: 3800, takeRate: 25.0, transactionCount: 102 },
-  { date: 'Wed', grossRevenue: 14800, netRevenue: 11100, platformRevenue: 3700, takeRate: 25.0, transactionCount: 95 },
-  { date: 'Thu', grossRevenue: 18200, netRevenue: 13650, platformRevenue: 4550, takeRate: 25.0, transactionCount: 124 },
-  { date: 'Fri', grossRevenue: 22500, netRevenue: 16875, platformRevenue: 5625, takeRate: 25.0, transactionCount: 156 },
-  { date: 'Sat', grossRevenue: 26800, netRevenue: 20100, platformRevenue: 6700, takeRate: 25.0, transactionCount: 182 },
-  { date: 'Sun', grossRevenue: 21000, netRevenue: 15750, platformRevenue: 5250, takeRate: 25.0, transactionCount: 145 },
-];
-
-const MOCK_STATS: TakeRateStats = {
-  currentTakeRate: 25.0,
-  targetTakeRate: 25.0,
-  grossRevenue: 131000,
-  platformRevenue: 32750,
-  totalTransactions: 889,
-  avgTransactionValue: 147.36,
-  takeRateTrend: 0.5,
-  byCategory: [
-    { category: 'Home Services', grossRevenue: 52000, takeRate: 25.0 },
-    { category: 'Beauty & Spa', grossRevenue: 35000, takeRate: 25.0 },
-    { category: 'HVAC & AC', grossRevenue: 22000, takeRate: 25.0 },
-    { category: 'Electrical', grossRevenue: 12000, takeRate: 25.0 },
-    { category: 'Plumbing', grossRevenue: 10000, takeRate: 25.0 },
-  ],
-};
-
 const CATEGORY_COLORS = ['#2563EB', '#7C3AED', '#10B981', '#F59E0B', '#EF4444'];
 
 export const TakeRateRealTime: React.FC<TakeRateRealTimeProps> = ({
   timeRange = '30d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<TakeRateData[]>(MOCK_DATA);
-  const [stats, setStats] = useState<TakeRateStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<TakeRateData[]>([]);
+  const [stats, setStats] = useState<TakeRateStats>({
+    currentTakeRate: 0,
+    targetTakeRate: 25,
+    grossRevenue: 0,
+    platformRevenue: 0,
+    totalTransactions: 0,
+    avgTransactionValue: 0,
+    takeRateTrend: 0,
+    byCategory: [],
+  });
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'rate' | 'revenue'>('revenue');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminTakeRate(selectedRange);
+        setData(apiData.timeSeries || []);
+        setStats(apiData.stats);
+      } catch (err) {
+        setData([]);
+        setError(err instanceof Error ? err.message : 'Failed to load take rate data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [selectedRange]);

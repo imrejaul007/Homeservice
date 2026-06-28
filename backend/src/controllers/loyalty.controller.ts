@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { creditWallet } from '../services/wallet.service';
+import { getStreak } from '../services/streak.service';
 
 // ============================================
 // Helper Functions
@@ -109,8 +111,13 @@ export const getLoyaltyStatus = asyncHandler(async (req: Request, res: Response)
   const nextThreshold = nextTier ? tierThresholds[nextTier as keyof typeof tierThresholds] : null;
 
   const progressToNext = nextThreshold
-    ? Math.round(((totalEarned - currentThreshold.min) / (nextThreshold.max - currentThreshold.min + 1)) * 100)
+    ? Math.round(((totalEarned - currentThreshold.min) / (nextThreshold.min - currentThreshold.min)) * 100)
     : 100;
+
+  const streakData = await getStreak(user._id.toString());
+  const pointsToNextTier = nextTier && nextThreshold
+    ? Math.max(0, nextThreshold.min - totalEarned)
+    : 0;
 
   // Tier benefits
   const tierBenefits = {
@@ -142,11 +149,11 @@ export const getLoyaltyStatus = asyncHandler(async (req: Request, res: Response)
     }
 
     const nextThresholdVal = thresholds[next];
-    const progress = Math.round(((earned - current.min) / (current.max - current.min + 1)) * 100);
+    const progress = Math.round(((earned - current.min) / (nextThresholdVal.min - current.min)) * 100);
 
     return {
       currentTierPoints: earned,
-      nextTierRequirement: nextThresholdVal.max,
+      nextTierRequirement: nextThresholdVal.min,
       nextTier: next,
       percentage: Math.min(100, Math.max(0, progress)),
     };
@@ -159,10 +166,13 @@ export const getLoyaltyStatus = asyncHandler(async (req: Request, res: Response)
       totalEarned,
       totalSpent: userDoc.loyaltySystem?.totalSpent || 0,
       tier: currentTier,
-      streakDays: userDoc.loyaltySystem?.streakDays || 0,
+      streakDays: streakData.currentStreak,
+      longestStreak: streakData.longestStreak,
+      lastCheckIn: streakData.lastCheckIn,
+      totalCheckIns: streakData.totalCheckIns,
       nextTier,
       progressToNext: Math.min(100, Math.max(0, progressToNext)),
-      pointsToNextTier: nextTier && nextThreshold ? nextThreshold.max - totalEarned : 0,
+      pointsToNextTier,
       benefits: tierBenefits[currentTier as keyof typeof tierBenefits] || [],
       referralCode: userDoc.loyaltySystem?.referralCode,
       tierProgress: calculateTierProgress(totalEarned, currentTier),
@@ -340,50 +350,84 @@ export const redeemPoints = asyncHandler(async (req: Request, res: Response) => 
     };
   }
 
-  // Check if user has enough points
-  const currentBalance = userDoc.loyaltySystem.coins || 0;
-  if (currentBalance < points) {
-    throw new ApiError(400, `Insufficient points. You have ${currentBalance} points but tried to redeem ${points} points.`);
-  }
-
-  // Calculate approximate AED value (100 points = 1 AED based on standard conversion)
-  const pointsConversionRate = 100; // 100 points = 1 AED
-  const approximateValue = Math.round(points / pointsConversionRate * 100) / 100;
-
-  // Generate coupon code if not provided
-  const generatedCouponCode = couponCode || `RDP${Date.now()}${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
-
-  // Deduct points from user's loyalty system
-  userDoc.loyaltySystem.coins -= points;
-  userDoc.loyaltySystem.totalSpent = (userDoc.loyaltySystem.totalSpent || 0) + points;
-
-  // Add transaction record to points history
-  const transactionRecord = {
-    amount: -points, // Negative for spending
+  // FIX: Use atomic update with balance check to prevent race conditions
+  const pointsConversionRate = 100;
+  const aedValue = Math.round(points / pointsConversionRate * 100) / 100;
+  const pointsHistoryEntry = {
+    amount: -points,
     type: 'spent' as const,
-    description: `Redeemed ${points} points for coupon code: ${generatedCouponCode}`,
+    description: `Redeemed ${points} coins for AED ${aedValue.toFixed(2)} wallet credit`,
     date: new Date(),
   };
-  userDoc.loyaltySystem.pointsHistory = userDoc.loyaltySystem.pointsHistory || [];
-  userDoc.loyaltySystem.pointsHistory.push(transactionRecord);
 
-  // Truncate history to prevent unbounded growth
-  truncatePointsHistory(userDoc.loyaltySystem);
+  // FIX: Wrap entire redemption in a transaction for full atomicity
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  let walletResult: any = null;
 
-  await userDoc.save();
+  try {
+    session.startTransaction();
 
-  // Calculate new balance
-  const newBalance = userDoc.loyaltySystem.coins;
+    // Atomic update: deduct points only if balance >= points (prevents race condition)
+    // This is now part of the transaction
+    const updateResult = await User.updateOne(
+      {
+        _id: user._id,
+        'loyaltySystem.coins': { $gte: points }
+      },
+      {
+        $inc: {
+          'loyaltySystem.coins': -points,
+          'loyaltySystem.totalSpent': points
+        },
+        $push: { 'loyaltySystem.pointsHistory': pointsHistoryEntry }
+      },
+      { session }
+    );
+
+    if (updateResult.matchedCount === 0) {
+      // Either user doesn't exist or insufficient balance - abort transaction
+      await session.abortTransaction();
+      const currentUser = await User.findById(user._id).select('loyaltySystem.coins');
+      const currentBalance = currentUser?.loyaltySystem?.coins || 0;
+      throw new ApiError(400, `Insufficient points. You have ${currentBalance} points but tried to redeem ${points} points.`);
+    }
+
+    // Truncate history within transaction
+    truncatePointsHistory((await User.findById(user._id).session(session))!.loyaltySystem);
+
+    // Credit wallet with session for transactional safety
+    walletResult = await creditWallet({
+      userId: user._id.toString(),
+      type: 'credit',
+      amount: aedValue,
+      description: `Coins redemption (${points.toLocaleString()} coins)`,
+      reference: `coins-redeem-${Date.now()}`,
+      referenceType: 'bonus',
+      metadata: { pointsRedeemed: points, conversionRate: pointsConversionRate },
+    }, req, undefined, session);
+
+    await session.commitTransaction();
+  } catch (walletError) {
+    // Abort any partial transaction
+    await session.abortTransaction().catch(() => {});
+    throw walletError;
+  } finally {
+    session.endSession();
+  }
+
+  const updatedUser = await User.findById(user._id);
+  const newBalance = updatedUser?.loyaltySystem.coins || 0;
 
   res.json({
     success: true,
-    message: 'Points redeemed successfully',
+    message: `${points} coins redeemed for AED ${aedValue.toFixed(2)} wallet credit`,
     data: {
       pointsRedeemed: points,
       newBalance,
-      approximateValue,
-      couponCode: generatedCouponCode,
-      totalPointsSpent: userDoc.loyaltySystem.totalSpent,
+      aedCredited: aedValue,
+      walletSuccess: walletResult.success,
+      newWalletBalance: walletResult.newBalance,
       tier: userDoc.loyaltySystem.tier,
     },
   });

@@ -307,33 +307,38 @@ async function seedServices() {
       });
     }
 
-    // Create services
-    const createdServices = [];
+    // Prepare all service data first
+    const CHUNK_SIZE = 100;
     const providerName = provider.businessInfo?.businessName || 'NILIN Provider';
     const providerTrustScore = (provider.reviewsData as any)?.averageRating || 4.5;
 
-    for (const serviceData of SAMPLE_SERVICES) {
-      const service = await Service.create({
-        ...serviceData,
-        providerId: provider._id,
-        providerName: providerName,
-        providerTrustScore: providerTrustScore,
-        rating: { average: 4.0 + Math.random() * 1, count: Math.floor(Math.random() * 50) + 5 },
-        searchMetadata: {
-          searchCount: Math.floor(Math.random() * 100),
-          clickCount: Math.floor(Math.random() * 50),
-          bookingCount: Math.floor(Math.random() * 30),
-          popularityScore: Math.random(),
-        },
-        status: 'active',
-        isActive: true,
-        isFeatured: Math.random() > 0.7,
-      });
-      createdServices.push(service);
+    const servicesToCreate = SAMPLE_SERVICES.map((serviceData) => ({
+      ...serviceData,
+      providerId: provider._id,
+      providerName: providerName,
+      providerTrustScore: providerTrustScore,
+      rating: { average: 4.0 + Math.random() * 1, count: Math.floor(Math.random() * 50) + 5 },
+      searchMetadata: {
+        searchCount: Math.floor(Math.random() * 100),
+        clickCount: Math.floor(Math.random() * 50),
+        bookingCount: Math.floor(Math.random() * 30),
+        popularityScore: Math.random(),
+      },
+      status: 'active',
+      isActive: true,
+      isFeatured: Math.random() > 0.7,
+    }));
+
+    // Insert services in chunks using insertMany
+    let createdCount = 0;
+    for (let i = 0; i < servicesToCreate.length; i += CHUNK_SIZE) {
+      const chunk = servicesToCreate.slice(i, i + CHUNK_SIZE);
+      const inserted = await Service.insertMany(chunk, { ordered: false });
+      createdCount += inserted.length;
     }
 
-    logger.info(`Services seeder: Created ${createdServices.length} services`);
-    return { success: true, count: createdServices.length };
+    logger.info(`Services seeder: Created ${createdCount} services`);
+    return { success: true, count: createdCount };
   } catch (error: any) {
     logger.error('Services seeder error:', error);
     throw error;

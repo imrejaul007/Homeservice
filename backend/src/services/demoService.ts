@@ -271,7 +271,7 @@ export class DemoService {
       paymentMethods: [
         {
           type: 'card' as const,
-          last4: '4242',
+          last4: '0000',
           brand: 'visa',
           expiryMonth: 12,
           expiryYear: 2027,
@@ -835,16 +835,15 @@ export class DemoService {
       demoExpiresAt: { $lt: new Date() },
     });
 
-    let cleanedCount = 0;
-    for (const user of expiredAccounts) {
-      await User.deleteOne({ _id: user._id });
-      await CustomerProfile.deleteOne({ userId: user._id });
-      await ProviderProfile.deleteOne({ userId: user._id });
-      await Booking.deleteMany({ isDemoBooking: true });
-      cleanedCount++;
-    }
+    const expiredAccountIds = expiredAccounts.map(user => user._id);
 
-    return cleanedCount;
+    // Bulk delete all expired demo accounts
+    await User.deleteMany({ _id: { $in: expiredAccountIds } });
+    await CustomerProfile.deleteMany({ userId: { $in: expiredAccountIds } });
+    await ProviderProfile.deleteMany({ userId: { $in: expiredAccountIds } });
+    await Booking.deleteMany({ isDemoBooking: true });
+
+    return expiredAccountIds.length;
   }
 
   // ========================================

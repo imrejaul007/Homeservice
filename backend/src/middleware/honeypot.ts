@@ -6,6 +6,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
+import logger from '../utils/logger';
 
 export interface HoneypotConfig {
   fieldName: string;
@@ -31,7 +32,8 @@ export const createHoneypotMiddleware = (config: HoneypotConfig) => {
     // If honeypot field has a value, it's likely a bot
     if (honeypotValue && honeypotValue.toString().trim() !== '') {
       // Log the attempt for monitoring
-      console.warn('[HONEYPOT] Bot detected via honeypot field', {
+      logger.warn('[HONEYPOT] Bot detected via honeypot field', {
+        context: 'Honeypot',
         ip: req.ip,
         path: req.path,
         fieldName,

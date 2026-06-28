@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle,
@@ -43,6 +44,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface AbuseCase {
   id: string;
@@ -153,181 +157,11 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
         setCases(response.data.data.cases || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setCases([
-          {
-            id: 'abuse-001',
-            providerId: 'prov-abuse-001',
-            providerName: 'Ahmed Electric',
-            providerEmail: 'ahmed.elec@email.com',
-            providerPhone: '+971501234567',
-            type: 'pricing_abuse',
-            severity: 'high',
-            status: 'investigating',
-            reportedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-            incidents: 3,
-            reports: 5,
-            affectedCustomers: 5,
-            totalPenalty: 0,
-            evidence: {
-              descriptions: [
-                'Charged 500 AED for a job quoted at 200 AED',
-                'Added unauthorized charges after completion',
-                'Refused to provide itemized invoice'
-              ],
-              customerIds: ['cust-001', 'cust-002', 'cust-003'],
-              dates: [new Date(Date.now() - 3600000 * 72).toISOString(), new Date(Date.now() - 3600000 * 48).toISOString()],
-              serviceIds: ['svc-001', 'svc-002']
-            },
-            actions: [],
-            notes: [
-              { text: 'Initial review started - collecting more evidence', author: 'investigator@nilin.com', createdAt: new Date(Date.now() - 3600000 * 12).toISOString() }
-            ],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 24).toISOString() },
-              { action: 'Assigned for investigation', by: 'investigator@nilin.com', at: new Date(Date.now() - 3600000 * 12).toISOString() }
-            ]
-          },
-          {
-            id: 'abuse-002',
-            providerId: 'prov-abuse-002',
-            providerName: 'Quick Clean Services',
-            providerEmail: 'quick.clean@email.com',
-            providerPhone: '+971552345678',
-            type: 'no_show',
-            severity: 'medium',
-            status: 'actioned',
-            reportedAt: new Date(Date.now() - 3600000 * 48).toISOString(),
-            incidents: 5,
-            reports: 8,
-            affectedCustomers: 8,
-            totalPenalty: 450,
-            evidence: {
-              descriptions: [
-                'Did not show up for scheduled appointment',
-                'Did not show up for scheduled appointment',
-                'Did not show up for scheduled appointment'
-              ],
-              customerIds: ['cust-010', 'cust-011', 'cust-012', 'cust-013', 'cust-014'],
-              dates: [new Date(Date.now() - 3600000 * 72).toISOString(), new Date(Date.now() - 3600000 * 96).toISOString()],
-              serviceIds: ['svc-clean-001', 'svc-clean-002']
-            },
-            actions: [
-              { type: 'warning', description: 'First warning issued for no-show pattern', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 36).toISOString() },
-              { type: 'penalty', description: 'AED 150 penalty applied for no-show incidents', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 36).toISOString() }
-            ],
-            notes: [],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 48).toISOString() },
-              { action: 'Warning issued', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 36).toISOString() },
-              { action: 'Penalty applied', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 36).toISOString() }
-            ]
-          },
-          {
-            id: 'abuse-003',
-            providerId: 'prov-abuse-003',
-            providerName: 'Professional Plumbing',
-            providerEmail: 'prof.plumb@email.com',
-            providerPhone: '+971504567890',
-            type: 'service_violation',
-            severity: 'critical',
-            status: 'escalated',
-            reportedAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-            incidents: 2,
-            reports: 4,
-            affectedCustomers: 4,
-            totalPenalty: 0,
-            evidence: {
-              descriptions: [
-                'Used substandard parts without disclosure',
-                'Damaged customer property during service',
-                'Left work incomplete'
-              ],
-              customerIds: ['cust-020', 'cust-021', 'cust-022'],
-              dates: [new Date(Date.now() - 3600000 * 24).toISOString()],
-              serviceIds: ['svc-plumb-001']
-            },
-            actions: [],
-            notes: [
-              { text: 'Critical case - property damage involved - escalating to senior management', author: 'admin@nilin.com', createdAt: new Date(Date.now() - 3600000 * 6).toISOString() }
-            ],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 12).toISOString() },
-              { action: 'Escalated to senior management', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 6).toISOString() }
-            ]
-          },
-          {
-            id: 'abuse-004',
-            providerId: 'prov-abuse-004',
-            providerName: 'Home Repairs Co',
-            providerEmail: 'homerepairs@email.com',
-            providerPhone: '+971556789012',
-            type: 'quality_issues',
-            severity: 'low',
-            status: 'resolved',
-            reportedAt: new Date(Date.now() - 3600000 * 96).toISOString(),
-            incidents: 1,
-            reports: 2,
-            affectedCustomers: 2,
-            totalPenalty: 100,
-            evidence: {
-              descriptions: [
-                'Service quality below standards',
-                'Customer requested rework'
-              ],
-              customerIds: ['cust-030', 'cust-031'],
-              dates: [new Date(Date.now() - 3600000 * 120).toISOString()],
-              serviceIds: ['svc-repair-001']
-            },
-            actions: [
-              { type: 'warning', description: 'Quality standards reminder sent', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 72).toISOString() }
-            ],
-            notes: [],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 96).toISOString() },
-              { action: 'Warning issued', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 72).toISOString() },
-              { action: 'Resolved - provider completed retraining', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ]
-          }
-        ]);
-        setStats({
-          totalCases: 89,
-          open: 12,
-          investigating: 23,
-          actioned: 18,
-          resolved: 32,
-          escalated: 4,
-          avgResolutionTime: 48,
-          repeatOffenders: 8,
-          totalPenaltyCollected: 4520,
-          byType: [
-            { type: 'Service Violation', count: 28, revenue: 0, color: '#EF4444' },
-            { type: 'Pricing Abuse', count: 22, revenue: 12400, color: '#F59E0B' },
-            { type: 'No Show', count: 18, revenue: 0, color: '#8B5CF6' },
-            { type: 'Quality Issues', count: 12, revenue: 0, color: '#EC4899' },
-            { type: 'Policy Breach', count: 6, revenue: 0, color: '#3B82F6' },
-            { type: 'Harassment', count: 3, revenue: 0, color: '#DC2626' }
-          ],
-          bySeverity: { low: 25, medium: 34, high: 22, critical: 8 },
-          trend: [
-            { date: 'Mon', cases: 12, resolved: 8 },
-            { date: 'Tue', cases: 15, resolved: 10 },
-            { date: 'Wed', cases: 10, resolved: 12 },
-            { date: 'Thu', cases: 18, resolved: 9 },
-            { date: 'Fri', cases: 14, resolved: 11 },
-            { date: 'Sat', cases: 8, resolved: 6 },
-            { date: 'Sun', cases: 12, resolved: 7 }
-          ],
-          topOffenders: [
-            { providerId: 'prov-abuse-001', providerName: 'Ahmed Electric', incidents: 12, penalty: 600 },
-            { providerId: 'prov-abuse-002', providerName: 'Quick Clean Services', incidents: 10, penalty: 450 },
-            { providerId: 'prov-abuse-005', providerName: 'Budget Handyman', incidents: 8, penalty: 350 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching provider abuse data:', err);
-      setError('Failed to load provider abuse data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -344,6 +178,7 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
   };
 
   const handleUpdateStatus = async (caseId: string, newStatus: AbuseCase['status']) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(caseId);
     try {
       await api.patch(`/admin/provider-abuse/${caseId}`, { status: newStatus });
@@ -360,6 +195,7 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
   };
 
   const handleTakeAction = async (caseId: string, actionType: string, description: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(caseId);
     try {
       await api.post(`/admin/provider-abuse/${caseId}/actions`, { type: actionType, description });
@@ -380,7 +216,7 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
   };
 
   const handleAddNote = async (caseId: string) => {
-    if (!newNote.trim()) return;
+    if (WIDGET_MUTATIONS_READ_ONLY || !newNote.trim()) return;
 
     setActionLoading(caseId);
     try {
@@ -671,7 +507,8 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
                       <>
                         <button
                           onClick={() => handleUpdateStatus(c.id, 'actioned')}
-                          disabled={actionLoading === c.id}
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                           className="px-3 py-1.5 rounded-lg bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors text-sm font-medium"
                         >
                           Take Action
@@ -679,7 +516,8 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
                         {c.status === 'open' && (
                           <button
                             onClick={() => handleUpdateStatus(c.id, 'investigating')}
-                            disabled={actionLoading === c.id}
+                            disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                             className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors text-sm font-medium"
                           >
                             Investigate
@@ -741,28 +579,32 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
                         <div className="flex flex-wrap gap-2">
                           <button
                             onClick={() => handleTakeAction(c.id, 'warning', 'Formal warning issued for policy violation')}
-                            disabled={actionLoading === c.id}
+                            disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                             className="px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors text-sm"
                           >
                             Issue Warning
                           </button>
                           <button
                             onClick={() => handleTakeAction(c.id, 'penalty', 'Monetary penalty applied')}
-                            disabled={actionLoading === c.id}
+                            disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                             className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm"
                           >
                             Apply Penalty
                           </button>
                           <button
                             onClick={() => handleTakeAction(c.id, 'suspension', 'Account suspended pending review')}
-                            disabled={actionLoading === c.id}
+                            disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                             className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors text-sm"
                           >
                             Suspend
                           </button>
                           <button
                             onClick={() => handleTakeAction(c.id, 'restriction', 'Service restrictions applied')}
-                            disabled={actionLoading === c.id}
+                            disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : undefined}
                             className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors text-sm"
                           >
                             Restrict
@@ -785,7 +627,8 @@ export const ProviderAbuseMonitor: React.FC<ProviderAbuseMonitorProps> = ({
                         />
                         <button
                           onClick={() => handleAddNote(c.id)}
-                          disabled={!newNote.trim() || actionLoading === c.id}
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || !newNote.trim() || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Add note'}
                           className="px-4 py-2 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors text-sm disabled:opacity-50"
                         >
                           <MessageSquare className="w-4 h-4" />

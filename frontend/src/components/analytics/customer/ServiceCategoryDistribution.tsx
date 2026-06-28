@@ -13,8 +13,9 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { PieChart as PieIcon, TrendingUp, Loader, ShoppingBag } from 'lucide-react';
+import { PieChart as PieIcon, TrendingUp, Loader, ShoppingBag, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface ServiceCategoryDistributionProps {
   customerId?: string;
@@ -52,29 +53,11 @@ const CATEGORY_COLORS = [
   '#84CC16', // Lime
 ];
 
-const MOCK_DATA: CategoryData[] = [
-  { name: 'Cleaning', value: 2450, percentage: 35, bookings: 12, color: CATEGORY_COLORS[0] },
-  { name: 'Plumbing', value: 1800, percentage: 26, bookings: 8, color: CATEGORY_COLORS[1] },
-  { name: 'Electrical', value: 1200, percentage: 17, bookings: 6, color: CATEGORY_COLORS[2] },
-  { name: 'Gardening', value: 850, percentage: 12, bookings: 4, color: CATEGORY_COLORS[3] },
-  { name: 'Handyman', value: 550, percentage: 8, bookings: 3, color: CATEGORY_COLORS[4] },
-  { name: 'Painting', value: 150, percentage: 2, bookings: 1, color: CATEGORY_COLORS[5] },
-];
-
-const MOCK_TREND_DATA: TrendData[] = [
-  { month: 'Jan', Cleaning: 180, Plumbing: 120, Electrical: 80, Gardening: 60 },
-  { month: 'Feb', Cleaning: 200, Plumbing: 140, Electrical: 90, Gardening: 70 },
-  { month: 'Mar', Cleaning: 220, Plumbing: 150, Electrical: 85, Gardening: 80 },
-  { month: 'Apr', Cleaning: 240, Plumbing: 160, Electrical: 100, Gardening: 90 },
-  { month: 'May', Cleaning: 260, Plumbing: 170, Electrical: 95, Gardening: 100 },
-  { month: 'Jun', Cleaning: 280, Plumbing: 180, Electrical: 110, Gardening: 110 },
-];
-
-const MOCK_STATS: CategoryStats = {
-  topCategory: 'Cleaning',
-  totalCategories: 6,
-  mostUsedCategory: 'Cleaning',
-  diversification: 72,
+const EMPTY_STATS: CategoryStats = {
+  topCategory: 'N/A',
+  totalCategories: 0,
+  mostUsedCategory: 'N/A',
+  diversification: 0,
 };
 
 export const ServiceCategoryDistribution: React.FC<ServiceCategoryDistributionProps> = ({
@@ -82,9 +65,10 @@ export const ServiceCategoryDistribution: React.FC<ServiceCategoryDistributionPr
   timeRange = '90d',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<CategoryData[]>(MOCK_DATA);
-  const [trendData, setTrendData] = useState<TrendData[]>(MOCK_TREND_DATA);
-  const [stats, setStats] = useState<CategoryStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<CategoryData[]>([]);
+  const [trendData, setTrendData] = useState<TrendData[]>([]);
+  const [stats, setStats] = useState<CategoryStats>(EMPTY_STATS);
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [chartType, setChartType] = useState<'pie' | 'bar'>('pie');
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -92,10 +76,35 @@ export const ServiceCategoryDistribution: React.FC<ServiceCategoryDistributionPr
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA);
-      setTrendData(MOCK_TREND_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getCustomerCategoryDistribution(selectedRange, customerId);
+        const categories = (apiData.categories || []).map((category, index) => ({
+          name: category.categoryName,
+          value: category.totalSpent,
+          percentage: Math.round(category.percentage),
+          bookings: category.bookingCount,
+          color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+        }));
+        const mostUsed = [...categories].sort((a, b) => b.bookings - a.bookings)[0];
+
+        setData(categories);
+        setTrendData((apiData.monthlyTrend || []) as TrendData[]);
+        setStats({
+          topCategory: apiData.topCategory || 'N/A',
+          totalCategories: categories.length,
+          mostUsedCategory: mostUsed?.name || 'N/A',
+          diversification: Math.round(apiData.diversification || 0),
+        });
+      } catch (err) {
+        setData([]);
+        setTrendData([]);
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load category distribution');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [customerId, selectedRange]);
@@ -147,6 +156,17 @@ export const ServiceCategoryDistribution: React.FC<ServiceCategoryDistributionPr
   const onPieLeave = () => {
     setActiveIndex(null);
   };
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="flex items-center gap-2 text-red-600">
+          <AlertCircle className="h-5 w-5" />
+          <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <motion.div
@@ -232,6 +252,10 @@ export const ServiceCategoryDistribution: React.FC<ServiceCategoryDistributionPr
       {loading ? (
         <div className="h-80 flex items-center justify-center">
           <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+        </div>
+      ) : data.length === 0 ? (
+        <div className="h-80 flex items-center justify-center text-gray-500">
+          No category spending data for this period.
         </div>
       ) : (
         <div className="flex flex-col lg:flex-row gap-6">
@@ -339,7 +363,7 @@ export const ServiceCategoryDistribution: React.FC<ServiceCategoryDistributionPr
             <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5" />
             <p className="text-gray-600">
               <span className="font-medium text-gray-900">{stats.topCategory}</span> is your most-used category,
-              accounting for {data[0]?.percentage}% of your total spending.
+              accounting for {data[0]?.percentage || 0}% of your total spending.
             </p>
           </div>
           <div className="flex items-start gap-2 text-sm">

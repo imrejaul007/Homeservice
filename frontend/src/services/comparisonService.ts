@@ -1,4 +1,5 @@
 import type { Service } from '../types/search';
+import { useLocationStore } from '../stores/locationStore';
 
 export interface ComparisonMetric {
   key: 'price' | 'rating' | 'duration' | 'distance';
@@ -56,6 +57,93 @@ function getRating(s: Service): number | null {
 }
 
 /**
+ * Calculate Haversine distance between two points
+ */
+function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Extract service coordinates from various possible locations in the service object
+ */
+function getServiceCoordinates(service: Service): { latitude: number; longitude: number } | null {
+  // Try different possible locations for coordinates
+  const locations = [
+    // Direct location field (GeoJSON format object)
+    (service as any).location?.coordinates,
+    // Direct location coordinates array
+    (service as any).location?.coordinates?.coordinates,
+    // Provider coordinates
+    (service as any).provider?.locationInfo?.primaryAddress?.coordinates,
+    (service as any).provider?.locationInfo?.primaryAddress?.coordinates?.coordinates,
+    // Provider profile coordinates
+    (service as any).providerProfile?.locationInfo?.primaryAddress?.coordinates,
+    (service as any).providerProfile?.locationInfo?.primaryAddress?.coordinates?.coordinates,
+    // Address coordinates
+    (service as any).address?.coordinates,
+  ];
+
+  for (const coords of locations) {
+    if (coords?.coordinates && Array.isArray(coords.coordinates) && coords.coordinates.length >= 2) {
+      // GeoJSON object: { type: 'Point', coordinates: [lng, lat] }
+      return {
+        longitude: coords.coordinates[0],
+        latitude: coords.coordinates[1]
+      };
+    }
+    if (coords && Array.isArray(coords) && coords.length >= 2) {
+      // GeoJSON format: [longitude, latitude]
+      return {
+        longitude: coords[0],
+        latitude: coords[1]
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get distance from user to service, calculating client-side if needed
+ */
+function getServiceDistance(service: Service): number | null {
+  // First check if distance is already calculated (from geo-search)
+  if (typeof (service as any).distance === 'number') {
+    return (service as any).distance;
+  }
+
+  // Try to calculate distance from user's current location
+  try {
+    const locationStore = useLocationStore.getState();
+    const userCoords = locationStore.currentLocation?.coordinates;
+
+    if (userCoords) {
+      const serviceCoords = getServiceCoordinates(service);
+      if (serviceCoords) {
+        return calculateDistance(
+          userCoords.latitude,
+          userCoords.longitude,
+          serviceCoords.latitude,
+          serviceCoords.longitude
+        );
+      }
+    }
+  } catch {
+    // Location store not available or no user location
+  }
+
+  return null;
+}
+
+/**
  * Build a comparison result with metrics and best-of badges
  */
 export function buildComparison(services: Service[]): ComparisonResult {
@@ -98,15 +186,11 @@ export function buildComparison(services: Service[]): ComparisonResult {
     {
       key: 'distance',
       label: 'Distance',
-      bestId: getBest(
-        services,
-        (s) => (typeof (s as any).distance === 'number' ? (s as any).distance : null),
-        'min'
-      ),
+      bestId: getBest(services, getServiceDistance, 'min'),
       format: (s) => {
-        const d = (s as any).distance;
-        if (typeof d !== 'number') return '—';
-        return `${d.toFixed(1)} km`;
+        const distance = getServiceDistance(s);
+        if (distance == null) return '—';
+        return `${distance.toFixed(1)} km`;
       },
     },
   ];

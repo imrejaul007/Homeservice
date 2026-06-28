@@ -67,6 +67,20 @@ export type {
  */
 class BookingService {
 
+  // Error helper to preserve Axios error structure
+  private handleServiceError(error: unknown, fallbackMessage: string): never {
+    console.error('[BookingService] Error:', error);
+    // If it's an Axios error with response data, preserve it for better error handling
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { data?: { message?: string; errors?: unknown[] }; status?: number }; message?: string };
+      if (axiosError.response?.data) {
+        // Re-throw with the original structure so components can handle it
+        throw error;
+      }
+    }
+    throw new Error(error instanceof Error ? error.message : fallbackMessage);
+  }
+
   // ==========================================
   // BOOKING CRUD OPERATIONS
   // ==========================================
@@ -76,14 +90,6 @@ class BookingService {
    */
   async createBooking(data: CreateBookingData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      console.log('[BookingService] POST /bookings', {
-        serviceId: data.serviceId,
-        providerId: data.providerId || '(auto-assign)',
-        scheduledDate: data.scheduledDate,
-        scheduledTime: data.scheduledTime,
-        couponCode: data.couponCode, // DEBUG: Check if coupon is being sent
-        hasMetadata: Boolean(data.metadata?.idempotencyKey),
-      });
       const response = await authService.post<any>('/bookings', data);
       // Transform the booking if it exists
       if (response?.data?.booking) {
@@ -94,8 +100,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking; isDuplicate?: boolean }>;
     } catch (error) {
-      console.error('[BookingService] createBooking failed', error);
-      throw new Error(error instanceof Error ? error.message : 'Failed to create booking');
+      return this.handleServiceError(error, 'Failed to create booking') as any;
     }
   }
 
@@ -111,7 +116,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to create guest booking');
+      return this.handleServiceError(error, 'Failed to create guest booking') as any;
     }
   }
 
@@ -127,17 +132,21 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get booking');
+      return this.handleServiceError(error, 'Failed to get booking') as any;
     }
   }
 
   /**
    * Track a booking by booking number (public endpoint, no auth required)
    */
-  async trackBooking(bookingNumber: string): Promise<BookingResponse<{ booking: BookingTrackingData }>> {
+  async trackBooking(
+    bookingNumber: string,
+    options?: { email?: string }
+  ): Promise<BookingResponse<{ booking: BookingTrackingData }>> {
     try {
       const baseUrl = import.meta.env.VITE_API_URL || '';
-      const response = await fetch(`${baseUrl}/bookings/track/${encodeURIComponent(bookingNumber)}`, {
+      const params = options?.email ? `?email=${encodeURIComponent(options.email)}` : '';
+      const response = await fetch(`${baseUrl}/bookings/track/${encodeURIComponent(bookingNumber)}${params}`, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -180,7 +189,7 @@ class BookingService {
       // Transform backend response to match frontend expectations
       return this.transformBookingResponse(response);
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get customer bookings');
+      return this.handleServiceError(error, 'Failed to get customer bookings') as any;
     }
   }
 
@@ -260,8 +269,8 @@ class BookingService {
       estimatedDuration: booking.duration || booking.estimatedDuration || 0,
       actualDuration: booking.actualDuration,
 
-      // Status
-      status: booking.status || 'pending',
+      // Status — normalize legacy 'accepted' to 'confirmed'
+      status: (booking.status === 'accepted' ? 'confirmed' : booking.status) || 'pending',
       statusHistory: (booking.statusHistory || []).map((h: any) => ({
         status: h.status,
         timestamp: toIsoString(h.timestamp) || h.timestamp,
@@ -383,6 +392,9 @@ class BookingService {
       // Issue #5: Extract paymentStatus from payment.status or use flat field
       paymentStatus: paymentStatus,
       paymentMethod: booking.paymentMethod || booking.payment?.method,
+      customerReview: booking.customerReview ? toStringId(booking.customerReview) : undefined,
+      providerReview: booking.providerReview ? toStringId(booking.providerReview) : undefined,
+      hasExperience: Boolean(booking.hasExperience),
 
       // New booking flow fields
       locationType: booking.locationType,
@@ -506,7 +518,7 @@ class BookingService {
       // Transform backend response to match frontend expectations
       return this.transformBookingResponse(response);
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get provider bookings');
+      return this.handleServiceError(error, 'Failed to get provider bookings') as any;
     }
   }
 
@@ -526,7 +538,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to accept booking');
+      return this.handleServiceError(error, 'Failed to accept booking') as any;
     }
   }
 
@@ -543,7 +555,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to reject booking');
+      return this.handleServiceError(error, 'Failed to reject booking') as any;
     }
   }
 
@@ -560,7 +572,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to decline booking');
+      return this.handleServiceError(error, 'Failed to decline booking') as any;
     }
   }
 
@@ -576,7 +588,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to start booking');
+      return this.handleServiceError(error, 'Failed to start booking') as any;
     }
   }
 
@@ -592,7 +604,25 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to complete booking');
+      return this.handleServiceError(error, 'Failed to complete booking') as any;
+    }
+  }
+
+  /**
+   * Mark booking payment as completed (provider cash/offline collection)
+   */
+  async markBookingPaymentCompleted(
+    bookingId: string,
+    data?: { transactionId?: string; notes?: string }
+  ): Promise<BookingResponse<{ booking: Booking }>> {
+    try {
+      const response = await authService.patch<any>(`/bookings/${bookingId}/payment/complete`, data || {});
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
+    } catch (error) {
+      return this.handleServiceError(error, 'Failed to mark payment as completed') as any;
     }
   }
 
@@ -608,7 +638,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to cancel booking');
+      return this.handleServiceError(error, 'Failed to cancel booking') as any;
     }
   }
 
@@ -624,7 +654,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to reschedule booking');
+      return this.handleServiceError(error, 'Failed to reschedule booking') as any;
     }
   }
 
@@ -644,7 +674,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to add message');
+      return this.handleServiceError(error, 'Failed to add message') as any;
     }
   }
 
@@ -660,7 +690,7 @@ class BookingService {
       }
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to mark messages as read');
+      return this.handleServiceError(error, 'Failed to mark messages as read') as any;
     }
   }
 
@@ -678,7 +708,7 @@ class BookingService {
       const response = await authService.get<BookingResponse<{ availability: ProviderAvailability }>>('/availability');
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get availability');
+      return this.handleServiceError(error, 'Failed to get availability') as any;
     }
   }
 
@@ -693,7 +723,7 @@ class BookingService {
       );
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to update schedule');
+      return this.handleServiceError(error, 'Failed to update schedule') as any;
     }
   }
 
@@ -714,7 +744,7 @@ class BookingService {
       );
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to add date override');
+      return this.handleServiceError(error, 'Failed to add date override') as any;
     }
   }
 
@@ -741,7 +771,7 @@ class BookingService {
         return response;
       }
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to remove date override');
+      return this.handleServiceError(error, 'Failed to remove date override') as any;
     }
   }
 
@@ -756,7 +786,7 @@ class BookingService {
       );
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to block time period');
+      return this.handleServiceError(error, 'Failed to block time period') as any;
     }
   }
 
@@ -771,7 +801,7 @@ class BookingService {
       );
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to update availability settings');
+      return this.handleServiceError(error, 'Failed to update availability settings') as any;
     }
   }
 
@@ -785,7 +815,7 @@ class BookingService {
       );
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to remove blocked period');
+      return this.handleServiceError(error, 'Failed to remove blocked period') as any;
     }
   }
 
@@ -833,7 +863,7 @@ class BookingService {
         }
       };
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get available slots');
+      return this.handleServiceError(error, 'Failed to get available slots') as any;
     }
   }
 
@@ -859,7 +889,7 @@ class BookingService {
       );
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to check slot availability');
+      return this.handleServiceError(error, 'Failed to check slot availability') as any;
     }
   }
 
@@ -887,7 +917,7 @@ class BookingService {
       const response = await authService.get<BookingResponse<any>>(url);
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get booking analytics');
+      return this.handleServiceError(error, 'Failed to get booking analytics') as any;
     }
   }
 
@@ -899,7 +929,7 @@ class BookingService {
       const response = await authService.get<BookingResponse<any>>('/availability/analytics');
       return response;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get availability analytics');
+      return this.handleServiceError(error, 'Failed to get availability analytics') as any;
     }
   }
 
@@ -932,7 +962,7 @@ class BookingService {
         data: { blockedPeriods },
       };
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Failed to get blocked periods');
+      return this.handleServiceError(error, 'Failed to get blocked periods') as any;
     }
   }
 
@@ -950,7 +980,8 @@ class BookingService {
   /**
    * Get booking status color
    */
-  getStatusColor(status: Booking['status']): string {
+  getStatusColor(status: Booking['status'] | 'accepted'): string {
+    const normalized = status === 'accepted' ? 'confirmed' : status;
     const colors: Record<Booking['status'], string> = {
       pending: 'text-yellow-600 bg-yellow-100',
       confirmed: 'text-blue-600 bg-blue-100',
@@ -961,13 +992,14 @@ class BookingService {
       refunded: 'text-teal-600 bg-teal-100',
       rejected: 'text-red-600 bg-red-100',
     };
-    return colors[status] || 'text-gray-600 bg-gray-100';
+    return colors[normalized as Booking['status']] || 'text-gray-600 bg-gray-100';
   }
 
   /**
    * Get booking status label
    */
-  getStatusLabel(status: Booking['status']): string {
+  getStatusLabel(status: Booking['status'] | 'accepted'): string {
+    const normalized = status === 'accepted' ? 'confirmed' : status;
     const labels: Record<Booking['status'], string> = {
       pending: 'Pending',
       confirmed: 'Confirmed',
@@ -978,7 +1010,7 @@ class BookingService {
       refunded: 'Refunded',
       rejected: 'Rejected',
     };
-    return labels[status] || status;
+    return labels[normalized as Booking['status']] || normalized;
   }
 
   /**
@@ -1028,6 +1060,54 @@ class BookingService {
 
     // Can reschedule if status allows and it's more than 24 hours before booking
     return ['pending', 'confirmed'].includes(booking.status) && hoursUntilBooking > 24;
+  }
+
+  /**
+   * Apply a coupon to a booking
+   */
+  async applyCoupon(bookingId: string, code: string): Promise<{ booking: Booking }> {
+    try {
+      const response = await authService.post<any>(`/bookings/${bookingId}/coupon`, { code });
+      const booking = response?.data?.booking ?? response?.booking;
+      if (booking) {
+        return { booking: this.transformBooking(booking) };
+      }
+      return response?.data ?? response;
+    } catch (error) {
+      return this.handleServiceError(error, 'Failed to apply coupon') as any;
+    }
+  }
+
+  /**
+   * Remove a coupon from a booking
+   */
+  async removeCoupon(bookingId: string): Promise<{ booking: Booking }> {
+    try {
+      const response = await authService.delete<any>(`/bookings/${bookingId}/coupon`);
+      const booking = response?.data?.booking ?? response?.booking;
+      if (booking) {
+        return { booking: this.transformBooking(booking) };
+      }
+      return response?.data ?? response;
+    } catch (error) {
+      return this.handleServiceError(error, 'Failed to remove coupon') as any;
+    }
+  }
+
+  /**
+   * Confirm payment after successful Stripe payment (local dev fallback)
+   */
+  async confirmPayment(bookingId: string, paymentIntentId: string): Promise<{ booking: Booking }> {
+    try {
+      const response = await authService.patch<any>(`/bookings/${bookingId}/payment/confirm`, { paymentIntentId });
+      const booking = response?.data?.booking ?? response?.booking;
+      if (booking) {
+        return { booking: this.transformBooking(booking) };
+      }
+      return response?.data ?? response;
+    } catch (error) {
+      return this.handleServiceError(error, 'Failed to confirm payment') as any;
+    }
   }
 
   /**

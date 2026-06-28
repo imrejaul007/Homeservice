@@ -10,15 +10,20 @@ import {
   rejectBooking,
   startBooking,
   completeBooking,
+  markBookingPaymentCompleted,
+  confirmCustomerPayment,
   addBookingMessage,
   markMessagesAsRead,
   createGuestBooking,
   trackBooking,
+  getBookingTracking,
   rateBooking,
   reportProviderNoShow,
   applyCouponToBooking,
   removeCouponFromBooking,
   getCustomerBookingCount,
+  getProviderBookingCount,
+  getBookingStats,
 } from '../controllers/booking.controller';
 
 import {
@@ -43,7 +48,11 @@ import {
   getServiceSchedule,
   updateServiceSchedule,
   getAllServiceSchedules,
-  copyGlobalToService
+  copyGlobalToService,
+  addBreakTime,
+  updateBreakTime,
+  deleteBreakTime,
+  getBreakTimes
 } from '../controllers/availability.controller';
 
 import {
@@ -52,6 +61,7 @@ import {
 
 import { authenticate } from '../middleware/auth.middleware';
 import { messageLimiter, perUserRateLimiter } from '../middleware/rateLimiter';
+import { publicBookingTrackRateLimit, guestBookingRateLimit } from '../middleware/rateLimit.middleware';
 import {
   validateBookingInput,
   validateGuestBooking,
@@ -70,8 +80,8 @@ const router = Router();
 // ===================================
 // PUBLIC BOOKING ROUTES (no auth required)
 // ===================================
-router.post('/bookings/guest', validateGuestBooking, createGuestBooking);
-router.get('/bookings/track/:bookingNumber', trackBooking);
+router.post('/bookings/guest', guestBookingRateLimit, validateGuestBooking, createGuestBooking);
+router.get('/bookings/track/:bookingNumber', publicBookingTrackRateLimit, trackBooking);
 
 // ===================================
 // BOOKING ROUTES
@@ -81,20 +91,31 @@ router.get('/bookings/track/:bookingNumber', trackBooking);
 router.post('/bookings', authenticate, validateBookingInput, createBooking);
 router.get('/bookings/customer', authenticate, getCustomerBookings);
 router.get('/bookings/count', authenticate, getCustomerBookingCount);
+router.get('/bookings/stats', authenticate, getBookingStats);
 
 // Provider Booking Operations
 router.get('/bookings/provider', authenticate, getProviderBookings);
+router.get('/bookings/provider/count', authenticate, getProviderBookingCount);
+
+// Booking analytics — must be registered before /bookings/:id
+router.get('/bookings/analytics', authenticate, getBookingAnalyticsHandler);
 
 // Specific booking operations (MUST come after /customer and /provider routes)
+router.get('/bookings/:id/tracking', authenticate, getBookingTracking);
 router.get('/bookings/:id', authenticate, getBookingDetails);
 router.patch('/bookings/:id/cancel', perUserRateLimiter, authenticate, validateBookingCancellation, cancelBooking);
 router.patch('/bookings/:id/reschedule', authenticate, rescheduleBooking);
 router.patch('/bookings/:id/accept', authenticate, validateBookingAcceptance, acceptBooking);
+router.post('/bookings/:id/accept', authenticate, validateBookingAcceptance, acceptBooking);
 router.patch('/bookings/:id/reject', authenticate, validateBookingRejection, rejectBooking);
 // Backward-compatible alias for clients still calling /decline
 router.post('/bookings/:id/decline', authenticate, validateBookingRejection, rejectBooking);
 router.patch('/bookings/:id/start', authenticate, validateBookingCompletion, startBooking);
+router.post('/bookings/:id/start', authenticate, validateBookingCompletion, startBooking);
+router.patch('/bookings/:id/payment/complete', authenticate, markBookingPaymentCompleted);
+router.patch('/bookings/:id/payment/confirm', authenticate, confirmCustomerPayment); // Customer confirms payment after Stripe
 router.patch('/bookings/:id/complete', authenticate, validateBookingCompletion, completeBooking);
+router.post('/bookings/:id/complete', authenticate, validateBookingCompletion, completeBooking);
 
 // Booking Communication - Rate limited to prevent message spam
 router.post('/bookings/:id/messages', messageLimiter, authenticate, addBookingMessage);
@@ -137,11 +158,14 @@ router.get('/availability/provider/:providerId/check', asyncHandler(checkTimeSlo
 // ANALYTICS ROUTES
 // ===================================
 
-// Booking Analytics (admin/provider)
-router.get('/bookings/analytics', authenticate, getBookingAnalyticsHandler);
-
 // Availability Analytics (provider)
 router.get('/availability/analytics', authenticate, getAvailabilityAnalytics);
+
+// Break Times Management
+router.get('/availability/breaks', authenticate, getBreakTimes);
+router.post('/availability/breaks', authenticate, addBreakTime);
+router.put('/availability/breaks/:breakId', authenticate, updateBreakTime);
+router.delete('/availability/breaks/:breakId', authenticate, deleteBreakTime);
 
 // ===================================
 // BATCH BOOKING OPERATIONS

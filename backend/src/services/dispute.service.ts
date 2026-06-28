@@ -1,4 +1,4 @@
-import mongoose, { ClientSession, Types } from 'mongoose';
+import mongoose, { ClientSession, Types, FlattenMaps } from 'mongoose';
 import Dispute, { IDispute, DisputeStatus, ResolutionType, UserRole } from '../models/dispute.model';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
@@ -6,6 +6,18 @@ import { ApiError } from '../utils/ApiError';
 import { eventBus, EVENT_TYPES } from '../event-bus';
 import { NotificationService } from './notification.service';
 import logger from '../utils/logger';
+import { escapeRegex } from '../utils/security';
+import { escapeHtml } from '../utils/security';
+
+/**
+ * Sanitize user-supplied text to prevent XSS attacks
+ * Uses HTML entity escaping to neutralize malicious scripts in timeline entries
+ */
+function sanitizeString(str: string | undefined | null): string {
+  if (!str) return str ?? '';
+  // Apply HTML escaping to prevent XSS
+  return escapeHtml(str.trim());
+}
 
 // ============================================
 // VALIDATION CONSTANTS
@@ -14,6 +26,7 @@ import logger from '../utils/logger';
 const MAX_MESSAGE_LENGTH = 5000;
 const MAX_ESCALATION_REASON_LENGTH = 1000;
 const MAX_ADMIN_NOTES_LENGTH = 5000;
+const APPEAL_DEADLINE_DAYS = 7;
 
 // ============================================
 // TYPES & INTERFACES
@@ -68,10 +81,27 @@ export interface DisputeFiltersDTO {
   search?: string;
   page?: number;
   limit?: number;
+  appealStatus?: 'pending' | 'approved' | 'rejected';
 }
 
+export interface SubmitAppealDTO {
+  disputeId: string;
+  reason: string;
+  submittedBy: string;
+}
+
+export interface ReviewAppealDTO {
+  disputeId: string;
+  action: 'approve' | 'reject';
+  reviewNotes?: string;
+  reviewedBy: string;
+}
+
+/** JSON-serializable dispute rows returned from paginated list endpoints */
+export type DisputeListItem = FlattenMaps<IDispute>;
+
 export interface PaginatedDisputesResult {
-  disputes: IDispute[];
+  disputes: DisputeListItem[];
   pagination: {
     page: number;
     limit: number;
@@ -79,6 +109,7 @@ export interface PaginatedDisputesResult {
     pages: number;
     hasMore: boolean;
   };
+  statusBreakdown?: Record<string, number>;
 }
 
 // ============================================
@@ -116,9 +147,10 @@ export class DisputeService {
         throw new ApiError(403, 'You are not authorized to create a dispute for this booking');
       }
 
-      // Check if dispute already exists for this booking
+      // FIX P1: Check if dispute already exists for this booking (including soft-deleted check)
       const existingDispute = await Dispute.findOne({
         bookingId: data.bookingId,
+        isDeleted: { $ne: true },
         status: { $nin: ['resolved', 'closed'] },
       }).session(session);
 
@@ -186,18 +218,9 @@ export class DisputeService {
       const dispute = new Dispute(disputeData);
       await dispute.save({ session });
 
-      // Commit transaction for dispute creation
-      await session.commitTransaction();
-
-      // Populate for response (outside transaction)
-      await dispute.populate([
-        { path: 'bookingId', select: 'bookingNumber pricing scheduledDate' },
-        { path: 'initiator.userId', select: 'firstName lastName email' },
-        { path: 'respondent.userId', select: 'firstName lastName email' },
-      ]);
-
-      // Emit event (outside transaction)
-      eventBus.publish(EVENT_TYPES.DISPUTE_CREATED, {
+      // FIX P1: Emit event inside transaction using commit callback
+      // Store event data for emission after commit
+      const eventData = {
         disputeId: dispute._id,
         disputeNumber: dispute.disputeNumber,
         bookingId: dispute.bookingId,
@@ -205,25 +228,41 @@ export class DisputeService {
         priority: dispute.priority,
         initiatedBy: userId,
         initiatorRole: userRole,
-      });
+      };
+
+      // Notification data for respondent
+      const notificationData = respondentUserId && respondentUser ? {
+        recipientId: respondentUserId.toString(),
+        type: 'dispute_received' as const,
+        title: 'New Dispute Filed',
+        message: `A dispute has been filed for booking #${booking.bookingNumber}. Reason: ${data.reason}`,
+        metadata: {
+          disputeId: dispute._id.toString(),
+          disputeNumber: dispute.disputeNumber,
+          bookingNumber: booking.bookingNumber,
+          reason: data.reason,
+        },
+      } : null;
+
+      // Use commit callback to emit event only after transaction commits
+      await session.commitTransaction();
+
+      // Emit event after successful commit
+      eventBus.publish(EVENT_TYPES.DISPUTE_CREATED, eventData);
+
+      // Populate for response
+      await dispute.populate([
+        { path: 'bookingId', select: 'bookingNumber pricing scheduledDate' },
+        { path: 'initiator.userId', select: 'firstName lastName email' },
+        { path: 'respondent.userId', select: 'firstName lastName email' },
+      ]);
 
       // Send notification to respondent (the other party in the dispute)
       // This ensures they know a dispute has been filed against them
-      if (respondentUserId && respondentUser) {
+      if (notificationData) {
         try {
           const notificationService = new NotificationService();
-          await notificationService.createNotification({
-            recipientId: respondentUserId.toString(),
-            type: 'dispute_received',
-            title: 'New Dispute Filed',
-            message: `A dispute has been filed for booking #${booking.bookingNumber}. Reason: ${data.reason}`,
-            metadata: {
-              disputeId: dispute._id.toString(),
-              disputeNumber: dispute.disputeNumber,
-              bookingNumber: booking.bookingNumber,
-              reason: data.reason,
-            },
-          });
+          await notificationService.createNotification(notificationData);
         } catch (notifError) {
           // Log but don't fail the dispute creation
           logger.error('Failed to send dispute notification to respondent', {
@@ -343,7 +382,7 @@ export class DisputeService {
     ]);
 
     return {
-      disputes: disputes as IDispute[],
+      disputes: disputes.map((d) => d.toObject() as DisputeListItem),
       pagination: {
         page,
         limit,
@@ -358,8 +397,9 @@ export class DisputeService {
   // Get User's Disputes
   // ========================================
 
-  async getUserDisputes(userId: string, filters?: { status?: DisputeStatus; page?: number; limit?: number }): Promise<PaginatedDisputesResult> {
+  async getUserDisputes(userId: string, filters?: { status?: DisputeStatus; category?: string; search?: string; page?: number; limit?: number }): Promise<PaginatedDisputesResult> {
     const query: any = {
+      isDeleted: { $ne: true },
       $or: [
         { 'initiator.userId': new Types.ObjectId(userId) },
         { 'respondent.userId': new Types.ObjectId(userId) },
@@ -370,21 +410,91 @@ export class DisputeService {
       query.status = filters.status;
     }
 
+    if (filters?.category && filters.category !== 'all') {
+      query.category = filters.category;
+    }
+
+    if (filters?.search) {
+      const escapedSearch = escapeRegex(filters.search);
+      query.$and = query.$and || [];
+      query.$and.push({
+        $or: [
+          { reason: { $regex: new RegExp(escapedSearch, 'i') } },
+          { description: { $regex: new RegExp(escapedSearch, 'i') } },
+          { disputeNumber: { $regex: new RegExp(escapedSearch, 'i') } },
+        ],
+      });
+    }
+
     const page = filters?.page || 1;
     const limit = Math.min(filters?.limit || 20, 100);
     const skip = (page - 1) * limit;
 
-    const [disputes, total] = await Promise.all([
+    const baseUserQuery = {
+      isDeleted: { $ne: true },
+      $or: [
+        { 'initiator.userId': new Types.ObjectId(userId) },
+        { 'respondent.userId': new Types.ObjectId(userId) },
+      ],
+    };
+
+    const [disputes, total, statusAgg] = await Promise.all([
       Dispute.find(query)
         .populate('bookingId', 'bookingNumber pricing scheduledDate')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
       Dispute.countDocuments(query),
+      Dispute.aggregate([
+        { $match: baseUserQuery },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
     ]);
 
+    const statusBreakdown: Record<string, number> = {
+      all: 0,
+      open: 0,
+      under_review: 0,
+      resolved: 0,
+      escalated: 0,
+      closed: 0,
+    };
+    statusAgg.forEach((row: { _id: string; count: number }) => {
+      if (row._id in statusBreakdown) {
+        statusBreakdown[row._id] = row.count;
+        statusBreakdown.all += row.count;
+      }
+    });
+
+    // Convert ObjectIds to strings for proper JSON serialization
+    const serializedDisputes = disputes.map((d) => {
+      const obj = d.toObject();
+      return {
+        ...obj,
+        _id: d._id.toString(),
+        bookingId:
+          typeof d.bookingId === 'object' && d.bookingId !== null && '_id' in d.bookingId
+            ? (d.bookingId as { _id: Types.ObjectId })._id.toString()
+            : d.bookingId,
+        initiator: {
+          ...obj.initiator,
+          userId:
+            typeof d.initiator?.userId === 'object'
+              ? d.initiator.userId.toString()
+              : d.initiator?.userId,
+        },
+        respondent: {
+          ...obj.respondent,
+          userId:
+            typeof d.respondent?.userId === 'object'
+              ? d.respondent.userId.toString()
+              : d.respondent?.userId,
+        },
+      };
+    }) as unknown as DisputeListItem[];
+
     return {
-      disputes: disputes as IDispute[],
+      disputes: serializedDisputes,
       pagination: {
         page,
         limit,
@@ -392,6 +502,7 @@ export class DisputeService {
         pages: Math.ceil(total / limit),
         hasMore: skip + disputes.length < total,
       },
+      statusBreakdown,
     };
   }
 
@@ -680,7 +791,7 @@ export class DisputeService {
       performedBy: new Types.ObjectId(userId),
       performedByRole: userRole,
       timestamp: new Date(),
-      details: reason,
+      details: sanitizeString(reason),
       previousStatus,
       newStatus: 'escalated',
     });
@@ -733,7 +844,7 @@ export class DisputeService {
       performedBy: new Types.ObjectId(adminId),
       performedByRole: 'admin',
       timestamp: new Date(),
-      details: reason,
+      details: sanitizeString(reason),
       previousStatus,
       newStatus,
     });
@@ -776,8 +887,17 @@ export class DisputeService {
       throw new ApiError(400, 'Refund amount is required for refund resolutions');
     }
 
-    if (data.amount && dispute.bookingReference?.totalAmount && data.amount > dispute.bookingReference.totalAmount) {
-      throw new ApiError(400, 'Refund amount cannot exceed booking total');
+    // FIX P0: Validate refund <= original payment amount
+    if (data.amount && ['refund', 'partial_refund'].includes(data.resolutionType)) {
+      // Query the booking to get the actual payment made
+      const Booking = mongoose.model('Booking');
+      const booking = await Booking.findById(dispute.bookingId).select('pricing.payment');
+
+      const originalPaymentAmount = booking?.pricing?.totalAmount || dispute.bookingReference?.totalAmount || 0;
+
+      if (data.amount > originalPaymentAmount) {
+        throw new ApiError(400, `Refund amount (${data.amount}) cannot exceed original payment amount (${originalPaymentAmount})`);
+      }
     }
 
     const previousStatus = dispute.status;
@@ -982,6 +1102,293 @@ export class DisputeService {
   }
 
   // ========================================
+  // Submit Appeal
+  // ========================================
+
+  async submitAppeal(data: SubmitAppealDTO): Promise<IDispute> {
+    if (!data.reason || data.reason.length < 20) {
+      throw new ApiError(400, 'Appeal reason must be at least 20 characters');
+    }
+
+    if (data.reason.length > 2000) {
+      throw new ApiError(400, 'Appeal reason cannot exceed 2000 characters');
+    }
+
+    const dispute = await Dispute.findById(data.disputeId);
+    if (!dispute) {
+      throw new ApiError(404, 'Dispute not found');
+    }
+
+    // Only resolved disputes can be appealed
+    if (dispute.status !== 'resolved') {
+      throw new ApiError(400, 'Only resolved disputes can be appealed');
+    }
+
+    // Check if appeal already exists
+    if (dispute.appeal && dispute.appeal.status !== 'none') {
+      throw new ApiError(400, 'An appeal has already been submitted for this dispute');
+    }
+
+    // Authorization check - only dispute parties can appeal
+    const isParty =
+      dispute.initiator.userId.toString() === data.submittedBy ||
+      dispute.respondent.userId.toString() === data.submittedBy;
+
+    if (!isParty) {
+      throw new ApiError(403, 'Only dispute parties can submit an appeal');
+    }
+
+    // Check if within appeal deadline
+    if (dispute.resolution?.resolvedAt) {
+      const daysSinceResolution = (Date.now() - dispute.resolution.resolvedAt.getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSinceResolution > APPEAL_DEADLINE_DAYS) {
+        throw new ApiError(400, `Appeal deadline has passed. Appeals must be submitted within ${APPEAL_DEADLINE_DAYS} days of resolution.`);
+      }
+    }
+
+    // Store original resolution before clearing
+    const originalResolution = dispute.resolution ? {
+      type: dispute.resolution.type,
+      amount: dispute.resolution.amount,
+      reason: dispute.resolution.reason,
+    } : undefined;
+
+    // Submit appeal
+    dispute.appeal = {
+      status: 'pending',
+      reason: data.reason,
+      submittedBy: new Types.ObjectId(data.submittedBy),
+      submittedAt: new Date(),
+      deadline: new Date(Date.now() + APPEAL_DEADLINE_DAYS * 24 * 60 * 60 * 1000),
+      originalResolution,
+    };
+
+    dispute.timeline.push({
+      action: 'appeal_submitted',
+      performedBy: new Types.ObjectId(data.submittedBy),
+      performedByRole: dispute.initiator.userId.toString() === data.submittedBy ? dispute.initiator.role : dispute.respondent.role,
+      timestamp: new Date(),
+      details: 'Appeal submitted against resolution',
+    });
+
+    await dispute.save();
+
+    // Emit event
+    eventBus.publish(EVENT_TYPES.DISPUTE_APPEAL_SUBMITTED, {
+      disputeId: dispute._id,
+      disputeNumber: dispute.disputeNumber,
+      submittedBy: data.submittedBy,
+    });
+
+    // Notify all admins about new appeal
+    try {
+      const notificationService = new NotificationService();
+
+      // FIX P0: Query all admin users and notify each
+      const adminUsers = await User.find({ role: 'admin' }).select('_id');
+
+      await Promise.all(
+        adminUsers.map((admin: any) =>
+          notificationService.createNotification({
+            recipientId: admin._id.toString(),
+            type: 'dispute_appeal_submitted',
+            title: 'New Dispute Appeal',
+            message: `An appeal has been submitted for dispute #${dispute.disputeNumber}`,
+            metadata: {
+              disputeId: dispute._id.toString(),
+              disputeNumber: dispute.disputeNumber,
+            },
+          })
+        )
+      );
+    } catch (notifError) {
+      logger.error('Failed to send appeal notification', {
+        context: 'DisputeService',
+        action: 'APPEAL_NOTIFICATION_ERROR',
+        disputeId: dispute._id.toString(),
+        error: notifError instanceof Error ? notifError.message : String(notifError),
+      });
+    }
+
+    return this.getDisputeById(data.disputeId);
+  }
+
+  // ========================================
+  // Review Appeal (Admin)
+  // ========================================
+
+  async reviewAppeal(data: ReviewAppealDTO): Promise<IDispute> {
+    if (!['approve', 'reject'].includes(data.action)) {
+      throw new ApiError(400, 'Action must be "approve" or "reject"');
+    }
+
+    const dispute = await Dispute.findById(data.disputeId);
+    if (!dispute) {
+      throw new ApiError(404, 'Dispute not found');
+    }
+
+    // Check if appeal exists and is pending
+    if (!dispute.appeal || dispute.appeal.status !== 'pending') {
+      throw new ApiError(400, 'No pending appeal found for this dispute');
+    }
+
+    // Update appeal
+    dispute.appeal.status = data.action === 'approve' ? 'approved' : 'rejected';
+    dispute.appeal.reviewedBy = new Types.ObjectId(data.reviewedBy);
+    dispute.appeal.reviewedAt = new Date();
+    dispute.appeal.reviewNotes = data.reviewNotes;
+
+    // If approved, reopen the dispute and clear the resolution
+    if (data.action === 'approve') {
+      const previousStatus = dispute.status;
+      const originalResolution = dispute.appeal?.originalResolution;
+
+      dispute.status = 'open';
+      dispute.resolution = undefined;
+      dispute.reopenedAt = new Date();
+      dispute.reopenedBy = new Types.ObjectId(data.reviewedBy);
+      dispute.reopenedReason = 'Appeal approved - dispute reopened for reassessment';
+
+      // Clear assignment so it goes back to queue
+      dispute.assignedTo = undefined;
+      dispute.assignedAt = undefined;
+
+      dispute.timeline.push({
+        action: 'appeal_approved',
+        performedBy: new Types.ObjectId(data.reviewedBy),
+        performedByRole: 'admin',
+        timestamp: new Date(),
+        details: sanitizeString(data.reviewNotes) || 'Appeal approved, dispute reopened',
+        previousStatus,
+        newStatus: 'open',
+      });
+
+      // FIX P0: Reverse settlement deduction when appeal is approved
+      // If the original resolution had a refund, we need to reverse the deduction
+      if (originalResolution && ['refund', 'partial_refund'].includes(originalResolution.type) && originalResolution.amount) {
+        const Settlement = mongoose.model('Settlement');
+
+        // Find settlement that includes this booking
+        const settlement = await Settlement.findOne({
+          'lineItems.bookingId': dispute.bookingId
+        });
+
+        if (settlement) {
+          // Find and remove the deduction for this dispute
+          const deductionIndex = settlement.deductions.findIndex(
+            (d: any) => d.reference === dispute._id.toString()
+          );
+
+          if (deductionIndex !== -1) {
+            const reversedAmount = settlement.deductions[deductionIndex].amount;
+            settlement.deductions.splice(deductionIndex, 1);
+
+            // Recalculate net amount
+            settlement.recalculateNetAmount();
+            await settlement.save();
+
+            logger.info('Settlement deduction reversed after appeal approval', {
+              action: 'DISPUTE_APPEAL_SETTLEMENT_REVERSAL',
+              disputeId: dispute._id.toString(),
+              disputeNumber: dispute.disputeNumber,
+              settlementId: settlement._id.toString(),
+              reversedAmount,
+            });
+          }
+        }
+      }
+
+      // Emit events
+      eventBus.publish(EVENT_TYPES.DISPUTE_APPEAL_APPROVED, {
+        disputeId: dispute._id,
+        disputeNumber: dispute.disputeNumber,
+        reviewedBy: data.reviewedBy,
+      });
+    } else {
+      dispute.timeline.push({
+        action: 'appeal_rejected',
+        performedBy: new Types.ObjectId(data.reviewedBy),
+        performedByRole: 'admin',
+        timestamp: new Date(),
+        details: sanitizeString(data.reviewNotes) || 'Appeal rejected',
+      });
+
+      // Emit events
+      eventBus.publish(EVENT_TYPES.DISPUTE_APPEAL_REJECTED, {
+        disputeId: dispute._id,
+        disputeNumber: dispute.disputeNumber,
+        reviewedBy: data.reviewedBy,
+      });
+    }
+
+    await dispute.save();
+
+    // Notify the appellant about the decision
+    try {
+      const notificationService = new NotificationService();
+      if (dispute.appeal.submittedBy) {
+        await notificationService.createNotification({
+          recipientId: dispute.appeal.submittedBy.toString(),
+          type: data.action === 'approve' ? 'dispute_appeal_approved' : 'dispute_appeal_rejected',
+          title: data.action === 'approve' ? 'Appeal Approved' : 'Appeal Rejected',
+          message: `Your appeal for dispute #${dispute.disputeNumber} has been ${data.action === 'approve' ? 'approved' : 'rejected'}. ${data.reviewNotes || ''}`,
+          metadata: {
+            disputeId: dispute._id.toString(),
+            disputeNumber: dispute.disputeNumber,
+            action: data.action,
+            reviewNotes: data.reviewNotes,
+          },
+        });
+      }
+    } catch (notifError) {
+      logger.error('Failed to send appeal review notification', {
+        context: 'DisputeService',
+        action: 'APPEAL_REVIEW_NOTIFICATION_ERROR',
+        disputeId: dispute._id.toString(),
+        error: notifError instanceof Error ? notifError.message : String(notifError),
+      });
+    }
+
+    return this.getDisputeById(data.disputeId, data.reviewedBy, 'admin');
+  }
+
+  // ========================================
+  // Get Pending Appeals
+  // ========================================
+
+  async getPendingAppeals(page: number = 1, limit: number = 20): Promise<PaginatedDisputesResult> {
+    const query = {
+      'appeal.status': 'pending',
+    };
+
+    const skip = (page - 1) * limit;
+
+    const [disputes, total] = await Promise.all([
+      Dispute.find(query)
+        .populate('bookingId', 'bookingNumber pricing scheduledDate')
+        .populate('initiator.userId', 'firstName lastName email')
+        .populate('respondent.userId', 'firstName lastName email')
+        .populate('assignedTo', 'firstName lastName')
+        .populate('appeal.submittedBy', 'firstName lastName email')
+        .sort({ 'appeal.submittedAt': -1 })
+        .skip(skip)
+        .limit(limit),
+      Dispute.countDocuments(query),
+    ]);
+
+    return {
+      disputes: disputes.map((d) => d.toObject() as DisputeListItem),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasMore: skip + disputes.length < total,
+      },
+    };
+  }
+
+  // ========================================
   // Reopen Dispute
   // ========================================
 
@@ -1049,7 +1456,7 @@ export class DisputeService {
       performedBy: new Types.ObjectId(userId),
       performedByRole: userRole,
       timestamp: new Date(),
-      details: reason,
+      details: sanitizeString(reason),
       previousStatus,
       newStatus: 'open',
     });
@@ -1312,6 +1719,65 @@ export class DisputeService {
     if (urgentPriorityCategories.includes(category)) return 'urgent';
     if (highPriorityCategories.includes(category)) return 'high';
     return 'medium';
+  }
+
+  // ========================================
+  // Search Disputes (for admin autocomplete/typeahead)
+  // ========================================
+
+  async searchDisputes(query: string, limit: number = 10): Promise<Array<{
+    _id: string;
+    disputeNumber: string;
+    parties: {
+      customer: { name: string; email: string };
+      provider: { name: string; email: string };
+    };
+    status: DisputeStatus;
+    priority: string;
+    createdAt: Date;
+  }>> {
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    const searchRegex = new RegExp(query.trim(), 'i');
+
+    const disputes = await Dispute.find({
+      $and: [
+        { isDeleted: { $ne: true } },
+        {
+          $or: [
+            { disputeNumber: searchRegex },
+            { 'initiator.name': searchRegex },
+            { 'initiator.email': searchRegex },
+            { 'respondent.name': searchRegex },
+            { 'respondent.email': searchRegex },
+          ],
+        },
+      ],
+    })
+      .select('_id disputeNumber initiator respondent status priority createdAt')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    return disputes.map((d: any) => ({
+      _id: d._id.toString(),
+      disputeNumber: d.disputeNumber,
+      parties: {
+        customer: {
+          name: d.initiator.role === 'customer' ? d.initiator.name : d.respondent.name,
+          email: d.initiator.role === 'customer' ? d.initiator.email : d.respondent.email,
+        },
+        provider: {
+          name: d.initiator.role === 'provider' ? d.initiator.name : d.respondent.name,
+          email: d.initiator.role === 'provider' ? d.initiator.email : d.respondent.email,
+        },
+      },
+      status: d.status,
+      priority: d.priority,
+      createdAt: d.createdAt,
+    }));
   }
 
   /**

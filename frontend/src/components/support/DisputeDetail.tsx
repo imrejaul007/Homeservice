@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Calendar,
   DollarSign,
+  Gavel,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import authService from '../../services/AuthService';
@@ -26,6 +27,7 @@ import type {
   DisputeEvidence,
   DisputeMessage,
   DisputeTimeline,
+  AppealStatus,
 } from './DisputeCenter';
 
 // ============================================
@@ -45,7 +47,7 @@ export interface DisputeDetailProps {
 const disputeApi = {
   async getDispute(disputeId: string): Promise<Dispute> {
     const response = await authService.get<{ success: boolean; data: Dispute }>(
-      `/disputes/my/${disputeId}`
+      `/disputes/my/detail/${disputeId}`
     );
     return response.data;
   },
@@ -126,6 +128,16 @@ const formatDate = (dateString: string): string => {
 
 const formatCurrency = (amount: number, currency: string = 'AED'): string => {
   return new Intl.NumberFormat('en-AE', { style: 'currency', currency }).format(amount);
+};
+
+const getAppealStatusConfig = (status: AppealStatus) => {
+  const configs: Record<AppealStatus, { color: string; bgColor: string; label: string }> = {
+    none: { color: 'text-gray-600', bgColor: 'bg-gray-100', label: 'No Appeal' },
+    pending: { color: 'text-yellow-600', bgColor: 'bg-yellow-100', label: 'Pending Review' },
+    approved: { color: 'text-green-600', bgColor: 'bg-green-100', label: 'Approved' },
+    rejected: { color: 'text-red-600', bgColor: 'bg-red-100', label: 'Rejected' },
+  };
+  return configs[status];
 };
 
 const formatRelativeTime = (dateString: string): string => {
@@ -617,6 +629,102 @@ export const DisputeDetail: React.FC<DisputeDetailProps> = ({
                 <p className="text-xs text-green-600 mt-2">
                   Resolved on {formatDateTime(dispute.resolution.resolvedAt)}
                 </p>
+              </div>
+            </CollapsibleSection>
+          </div>
+        )}
+
+        {/* Appeal Section */}
+        {dispute.status === 'resolved' && dispute.appeal && (
+          <div className="px-4 pb-4">
+            <CollapsibleSection title="Appeal" defaultOpen={true}>
+              <div className={`rounded-xl p-4 border ${
+                dispute.appeal.status === 'pending' ? 'bg-yellow-50 border-yellow-200' :
+                dispute.appeal.status === 'approved' ? 'bg-blue-50 border-blue-200' :
+                dispute.appeal.status === 'rejected' ? 'bg-gray-50 border-gray-200' :
+                'bg-gray-50 border-gray-200'
+              }`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                    dispute.appeal.status === 'pending' ? 'bg-yellow-100' :
+                    dispute.appeal.status === 'approved' ? 'bg-blue-100' :
+                    'bg-gray-100'
+                  }`}>
+                    <Gavel className={`h-5 w-5 ${
+                      dispute.appeal.status === 'pending' ? 'text-yellow-600' :
+                      dispute.appeal.status === 'approved' ? 'text-blue-600' :
+                      'text-gray-600'
+                    }`} />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-medium text-nilin-charcoal">Appeal Status</p>
+                    <span className={cn(
+                      'text-xs px-2 py-0.5 rounded-full',
+                      getAppealStatusConfig(dispute.appeal.status).bgColor,
+                      getAppealStatusConfig(dispute.appeal.status).color
+                    )}>
+                      {getAppealStatusConfig(dispute.appeal.status).label}
+                    </span>
+                  </div>
+                </div>
+
+                {dispute.appeal.status === 'pending' && (
+                  <>
+                    <div className="mb-3">
+                      <p className="text-sm text-yellow-800">
+                        An appeal has been submitted and is awaiting review.
+                      </p>
+                    </div>
+                    <div className="bg-white/80 rounded-lg p-3 mb-3">
+                      <p className="text-xs text-yellow-700 font-medium mb-1">Your Appeal Reason:</p>
+                      <p className="text-sm text-yellow-900">{dispute.appeal.reason}</p>
+                    </div>
+                    <p className="text-xs text-yellow-600">
+                      Submitted on {formatDateTime(dispute.appeal.submittedAt)}
+                    </p>
+                  </>
+                )}
+
+                {dispute.appeal.status === 'approved' && (
+                  <>
+                    <p className="text-sm text-blue-700 mb-2">
+                      Your appeal was approved. The dispute has been reopened for reassessment.
+                    </p>
+                    {dispute.appeal.reviewNotes && (
+                      <div className="bg-white/80 rounded-lg p-3">
+                        <p className="text-xs text-blue-700 font-medium mb-1">Review Notes:</p>
+                        <p className="text-sm text-blue-900">{dispute.appeal.reviewNotes}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {dispute.appeal.status === 'rejected' && (
+                  <>
+                    <p className="text-sm text-gray-700 mb-2">
+                      Your appeal was rejected.
+                    </p>
+                    {dispute.appeal.reviewNotes && (
+                      <div className="bg-white/80 rounded-lg p-3">
+                        <p className="text-xs text-gray-700 font-medium mb-1">Review Notes:</p>
+                        <p className="text-sm text-gray-900">{dispute.appeal.reviewNotes}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {dispute.appeal.originalResolution && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <p className="text-xs text-gray-500 mb-1">Original Resolution:</p>
+                    <p className="text-sm text-gray-600">
+                      {getResolutionConfig(dispute.appeal.originalResolution.type).icon}{' '}
+                      {getResolutionConfig(dispute.appeal.originalResolution.type).label}
+                      {dispute.appeal.originalResolution.amount && (
+                        ` (${formatCurrency(dispute.appeal.originalResolution.amount)})`
+                      )}
+                    </p>
+                  </div>
+                )}
               </div>
             </CollapsibleSection>
           </div>

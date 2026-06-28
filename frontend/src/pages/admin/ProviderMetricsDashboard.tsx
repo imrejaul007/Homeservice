@@ -44,6 +44,31 @@ interface ProviderDistribution {
   percentage: number;
 }
 
+interface ScoreDistributionBucket {
+  count: number;
+  percentage: number;
+}
+
+interface ScoreDistributions {
+  quality: {
+    excellent: ScoreDistributionBucket;
+    good: ScoreDistributionBucket;
+    needsImprovement: ScoreDistributionBucket;
+  };
+  reliability: {
+    excellent: ScoreDistributionBucket;
+    good: ScoreDistributionBucket;
+    needsImprovement: ScoreDistributionBucket;
+  };
+  rating: {
+    5: number;
+    4: number;
+    3: number;
+    2: number;
+    1: number;
+  };
+}
+
 const MetricCard: React.FC<{
   title: string;
   value: string | number;
@@ -97,6 +122,8 @@ export const ProviderMetricsDashboard: React.FC = () => {
   const [fraudStats, setFraudStats] = useState<FraudStats | null>(null);
   const [slaStats, setSlaStats] = useState<SLAStats | null>(null);
   const [providerDistribution, setProviderDistribution] = useState<ProviderDistribution[]>([]);
+  const [scoreDistributions, setScoreDistributions] = useState<ScoreDistributions | null>(null);
+  const [hasData, setHasData] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
@@ -132,6 +159,8 @@ export const ProviderMetricsDashboard: React.FC = () => {
       });
       setFraudStats(fraudRes.data);
       setSlaStats(data.sla);
+      setScoreDistributions(data.distributions ?? null);
+      setHasData(Boolean(data.hasData));
       setLastUpdated(new Date());
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
@@ -212,21 +241,17 @@ export const ProviderMetricsDashboard: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <MetricCard
                 title="Avg Quality Score"
-                value={metrics?.avgQualityScore || 0}
+                value={metrics?.avgQualityScore ? metrics.avgQualityScore : '—'}
                 subtitle="out of 100"
                 icon={<Star className="w-5 h-5 text-amber-500" />}
-                trend={metrics?.qualityTrend}
-                trendValue={metrics?.qualityTrend === 'up' ? '+2.5%' : metrics?.qualityTrend === 'down' ? '-1.2%' : 'Stable'}
                 iconBg="bg-amber-50"
                 iconColor="text-amber-500"
               />
               <MetricCard
                 title="Avg Reliability Score"
-                value={metrics?.avgReliabilityScore || 0}
+                value={metrics?.avgReliabilityScore ? metrics.avgReliabilityScore : '—'}
                 subtitle="out of 100"
                 icon={<ShieldCheck className="w-5 h-5 text-emerald-500" />}
-                trend={metrics?.reliabilityTrend}
-                trendValue={metrics?.reliabilityTrend === 'up' ? '+1.8%' : metrics?.reliabilityTrend === 'down' ? '-0.5%' : 'Stable'}
                 iconBg="bg-emerald-50"
                 iconColor="text-emerald-500"
               />
@@ -235,18 +260,14 @@ export const ProviderMetricsDashboard: React.FC = () => {
                 value={metrics?.totalBookings?.toLocaleString() || 0}
                 subtitle="across all providers"
                 icon={<Activity className="w-5 h-5 text-blue-500" />}
-                trend="up"
-                trendValue="+12.3%"
                 iconBg="bg-blue-50"
                 iconColor="text-blue-500"
               />
               <MetricCard
                 title="Avg Rating"
-                value={metrics?.avgRating?.toFixed(1) || '0.0'}
+                value={metrics?.avgRating ? metrics.avgRating.toFixed(1) : '—'}
                 subtitle="out of 5.0"
                 icon={<TrendingUp className="w-5 h-5 text-purple-500" />}
-                trend={metrics?.ratingTrend}
-                trendValue={metrics?.ratingTrend === 'up' ? '+0.2' : metrics?.ratingTrend === 'down' ? '-0.1' : 'Stable'}
                 iconBg="bg-purple-50"
                 iconColor="text-purple-500"
               />
@@ -328,22 +349,32 @@ export const ProviderMetricsDashboard: React.FC = () => {
                   {/* SLA Stats */}
                   <div className="space-y-4">
                     <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">SLA Compliance</h4>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle className="w-4 h-4 text-emerald-600" />
-                          <span className="text-sm text-emerald-700">Compliant</span>
-                        </div>
-                        <span className="font-bold text-emerald-700">{slaStats?.compliantProviders || 0}</span>
+                    {!hasData ? (
+                      <div className="flex flex-col items-center justify-center py-6 text-center">
+                        <Clock className="w-7 h-7 text-gray-300 mb-2" aria-hidden="true" />
+                        <p className="text-sm font-medium text-gray-700">Data not available</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          SLA compliance is calculated from completed bookings.
+                        </p>
                       </div>
-                      <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <XCircle className="w-4 h-4 text-red-600" />
-                          <span className="text-sm text-red-700">Violations</span>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-emerald-600" />
+                            <span className="text-sm text-emerald-700">Compliant</span>
+                          </div>
+                          <span className="font-bold text-emerald-700">{slaStats?.compliantProviders || 0}</span>
                         </div>
-                        <span className="font-bold text-red-700">{slaStats?.violationsCount || 0}</span>
+                        <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <XCircle className="w-4 h-4 text-red-600" />
+                            <span className="text-sm text-red-700">Violations</span>
+                          </div>
+                          <span className="font-bold text-red-700">{slaStats?.violationsCount || 0}</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -356,126 +387,168 @@ export const ProviderMetricsDashboard: React.FC = () => {
                 Performance Overview
               </h3>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                {/* Quality Score Distribution */}
-                <div className="space-y-4">
-                  <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Quality Score</h4>
-                  <div className="relative pt-1">
-                    <ProgressBar
-                      label="Excellent (80-100)"
-                      value={Math.round((totalProviders * 0.35))}
-                      max={totalProviders}
-                      color="bg-emerald-500"
-                      percentage={35}
-                    />
-                    <div className="mt-3">
-                      <ProgressBar
-                        label="Good (60-79)"
-                        value={Math.round((totalProviders * 0.45))}
-                        max={totalProviders}
-                        color="bg-sky-500"
-                        percentage={45}
-                      />
-                    </div>
-                    <div className="mt-3">
-                      <ProgressBar
-                        label="Needs Improvement (<60)"
-                        value={Math.round((totalProviders * 0.2))}
-                        max={totalProviders}
-                        color="bg-amber-500"
-                        percentage={20}
-                      />
-                    </div>
-                  </div>
+              {!hasData || !scoreDistributions ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <BarChart3 className="w-10 h-10 text-gray-300 mb-3" aria-hidden="true" />
+                  <p className="text-sm font-medium text-gray-700">Data not available</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Score distributions will appear once provider performance metrics are recorded.
+                  </p>
                 </div>
-
-                {/* Reliability Score Distribution */}
-                <div className="space-y-4">
-                  <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Reliability Score</h4>
-                  <div className="space-y-3">
-                    <ProgressBar
-                      label="Excellent (80-100)"
-                      value={Math.round((totalProviders * 0.4))}
-                      max={totalProviders}
-                      color="bg-emerald-500"
-                      percentage={40}
-                    />
-                    <div className="mt-3">
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  {/* Quality Score Distribution */}
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Quality Score</h4>
+                    <div className="relative pt-1">
                       <ProgressBar
-                        label="Good (60-79)"
-                        value={Math.round((totalProviders * 0.4))}
+                        label="Excellent (80-100)"
+                        value={scoreDistributions.quality.excellent.count}
                         max={totalProviders}
-                        color="bg-sky-500"
-                        percentage={40}
+                        color="bg-emerald-500"
+                        percentage={scoreDistributions.quality.excellent.percentage}
                       />
-                    </div>
-                    <div className="mt-3">
-                      <ProgressBar
-                        label="Needs Improvement (<60)"
-                        value={Math.round((totalProviders * 0.2))}
-                        max={totalProviders}
-                        color="bg-amber-500"
-                        percentage={20}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Rating Distribution */}
-                <div className="space-y-4">
-                  <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Rating Distribution</h4>
-                  <div className="space-y-3">
-                    {[5, 4, 3, 2, 1].map((star) => (
-                      <div key={star} className="flex items-center gap-2">
-                        <span className="text-sm text-gray-600 w-8">{star} star</span>
-                        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${
-                              star >= 4 ? 'bg-amber-500' : star >= 3 ? 'bg-sky-500' : 'bg-gray-400'
-                            }`}
-                            style={{ width: `${star >= 4 ? 60 - (star - 4) * 15 : 20 + (3 - star) * 10}%` }}
-                          />
-                        </div>
-                        <span className="text-sm text-gray-400 w-10">{star >= 4 ? 60 - (star - 4) * 15 : 20 + (3 - star) * 10}%</span>
+                      <div className="mt-3">
+                        <ProgressBar
+                          label="Good (60-79)"
+                          value={scoreDistributions.quality.good.count}
+                          max={totalProviders}
+                          color="bg-sky-500"
+                          percentage={scoreDistributions.quality.good.percentage}
+                        />
                       </div>
-                    ))}
+                      <div className="mt-3">
+                        <ProgressBar
+                          label="Needs Improvement (<60)"
+                          value={scoreDistributions.quality.needsImprovement.count}
+                          max={totalProviders}
+                          color="bg-amber-500"
+                          percentage={scoreDistributions.quality.needsImprovement.percentage}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reliability Score Distribution */}
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Reliability Score</h4>
+                    <div className="space-y-3">
+                      <ProgressBar
+                        label="Excellent (80-100)"
+                        value={scoreDistributions.reliability.excellent.count}
+                        max={totalProviders}
+                        color="bg-emerald-500"
+                        percentage={scoreDistributions.reliability.excellent.percentage}
+                      />
+                      <div className="mt-3">
+                        <ProgressBar
+                          label="Good (60-79)"
+                          value={scoreDistributions.reliability.good.count}
+                          max={totalProviders}
+                          color="bg-sky-500"
+                          percentage={scoreDistributions.reliability.good.percentage}
+                        />
+                      </div>
+                      <div className="mt-3">
+                        <ProgressBar
+                          label="Needs Improvement (<60)"
+                          value={scoreDistributions.reliability.needsImprovement.count}
+                          max={totalProviders}
+                          color="bg-amber-500"
+                          percentage={scoreDistributions.reliability.needsImprovement.percentage}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Rating Distribution */}
+                  {(() => {
+                    const totalRatings =
+                      scoreDistributions.rating[5] +
+                      scoreDistributions.rating[4] +
+                      scoreDistributions.rating[3] +
+                      scoreDistributions.rating[2] +
+                      scoreDistributions.rating[1];
+
+                    if (totalRatings === 0) {
+                      return (
+                        <div className="space-y-4">
+                          <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Rating Distribution</h4>
+                          <div className="flex flex-col items-center justify-center py-8 text-center">
+                            <Star className="w-8 h-8 text-gray-300 mb-2" aria-hidden="true" />
+                            <p className="text-sm font-medium text-gray-700">Data not available</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Rating distribution will appear once customer reviews are submitted.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-4">
+                        <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Rating Distribution</h4>
+                        <div className="space-y-3">
+                          {[5, 4, 3, 2, 1].map((star) => {
+                            const count = scoreDistributions.rating[star as 1 | 2 | 3 | 4 | 5];
+                            const pctValue = Math.round((count / totalRatings) * 100);
+                            return (
+                              <div key={star} className="flex items-center gap-2">
+                                <span className="text-sm text-gray-600 w-8">{star} star</span>
+                                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      star >= 4 ? 'bg-amber-500' : star >= 3 ? 'bg-sky-500' : 'bg-gray-400'
+                                    }`}
+                                    style={{ width: `${pctValue}%` }}
+                                  />
+                                </div>
+                                <span className="text-sm text-gray-400 w-14 text-right">{pctValue}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* Quick Stats — driven by real backend distribution data */}
+            {scoreDistributions && hasData && (
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-nilin-coral" />
+                    Quick Stats
+                  </h3>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-4 bg-emerald-50 rounded-xl text-center">
+                    <p className="text-3xl font-bold text-emerald-600">{scoreDistributions.quality.excellent.count}</p>
+                    <p className="text-sm text-emerald-700 mt-1">Top Performers</p>
+                    <p className="text-xs text-emerald-500">Quality Score 80+</p>
+                  </div>
+                  <div className="p-4 bg-sky-50 rounded-xl text-center">
+                    <p className="text-3xl font-bold text-sky-600">{scoreDistributions.quality.good.count}</p>
+                    <p className="text-sm text-sky-700 mt-1">Good Performers</p>
+                    <p className="text-xs text-sky-500">Quality Score 60-79</p>
+                  </div>
+                  <div className="p-4 bg-amber-50 rounded-xl text-center">
+                    <p className="text-3xl font-bold text-amber-600">{scoreDistributions.reliability.needsImprovement.count}</p>
+                    <p className="text-sm text-amber-700 mt-1">Needs Attention</p>
+                    <p className="text-xs text-amber-500">Reliability Score &lt;60</p>
+                  </div>
+                  <div className="p-4 bg-red-50 rounded-xl text-center">
+                    <p className="text-3xl font-bold text-red-600">{slaStats?.violationsCount || 0}</p>
+                    <p className="text-sm text-red-700 mt-1">SLA Violations</p>
+                    <p className="text-xs text-red-500">Providers below SLA targets</p>
                   </div>
                 </div>
               </div>
-            </div>
-
-            {/* Top Performers Summary */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-nilin-coral" />
-                  Quick Stats
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-emerald-50 rounded-xl text-center">
-                  <p className="text-3xl font-bold text-emerald-600">{Math.round(totalProviders * 0.35)}</p>
-                  <p className="text-sm text-emerald-700 mt-1">Top Performers</p>
-                  <p className="text-xs text-emerald-500">Quality Score 80+</p>
-                </div>
-                <div className="p-4 bg-sky-50 rounded-xl text-center">
-                  <p className="text-3xl font-bold text-sky-600">{Math.round(totalProviders * 0.45)}</p>
-                  <p className="text-sm text-sky-700 mt-1">Good Performers</p>
-                  <p className="text-xs text-sky-500">Quality Score 60-79</p>
-                </div>
-                <div className="p-4 bg-amber-50 rounded-xl text-center">
-                  <p className="text-3xl font-bold text-amber-600">{Math.round(totalProviders * 0.15)}</p>
-                  <p className="text-sm text-amber-700 mt-1">Needs Attention</p>
-                  <p className="text-xs text-amber-500">Quality Score 40-59</p>
-                </div>
-                <div className="p-4 bg-red-50 rounded-xl text-center">
-                  <p className="text-3xl font-bold text-red-600">{Math.round(totalProviders * 0.05)}</p>
-                  <p className="text-sm text-red-700 mt-1">At Risk</p>
-                  <p className="text-xs text-red-500">Quality Score &lt;40</p>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         )}
       </AdminPageShell>

@@ -1,7 +1,5 @@
-import axios from 'axios';
-import { getApiUrl } from '../lib/getApiUrl';
-
-const API_URL = getApiUrl();
+import { api } from './api';
+import type { SupportedCity } from '@/types/location.types';
 
 export interface MaintenanceStatus {
   maintenanceMode: boolean;
@@ -25,37 +23,45 @@ export interface PlatformPublicConfig {
   instantBookingEnabled: boolean;
 }
 
-const DEFAULT_CONFIG: PlatformPublicConfig = {
-  platformName: 'Homeservice',
+export const DEFAULT_PLATFORM_CONFIG: PlatformPublicConfig = {
+  platformName: 'Nilin',
   platformLogo: '',
   favicon: '',
-  primaryColor: '#E8B4A8',
-  secondaryColor: '#D4A89A',
-  currency: 'AED',
-  dateFormat: 'DD/MM/YYYY',
+  primaryColor: '#E85D4C',
+  secondaryColor: '#2D2A26',
+  currency: 'USD',
+  dateFormat: 'MM/DD/YYYY',
   language: 'en',
-  supportEmail: 'support@homeservice.com',
+  supportEmail: '',
   supportPhone: '',
   enableFAQ: true,
-  instantBookingEnabled: false,
+  instantBookingEnabled: true,
 };
 
-/** Public — no auth required */
-export async function fetchMaintenanceStatus(): Promise<MaintenanceStatus> {
-  const response = await axios.get(`${API_URL}/platform/maintenance`, {
-    timeout: 10000,
-  });
-  return response.data.data as MaintenanceStatus;
+export async function fetchMaintenanceStatus(signal?: AbortSignal): Promise<MaintenanceStatus> {
+  const response = await api.get<{ success: boolean; data: MaintenanceStatus }>(
+    '/platform/maintenance',
+    { signal }
+  );
+  return response.data.data;
 }
 
-/** Public branding, locale, and feature flags */
-export async function fetchPlatformConfig(): Promise<PlatformPublicConfig> {
-  try {
-    const response = await axios.get(`${API_URL}/platform/config`, { timeout: 10000 });
-    return { ...DEFAULT_CONFIG, ...(response.data.data as Partial<PlatformPublicConfig>) };
-  } catch {
-    return DEFAULT_CONFIG;
-  }
+export async function fetchPlatformConfig(signal?: AbortSignal): Promise<PlatformPublicConfig> {
+  const response = await api.get<{ success: boolean; data: PlatformPublicConfig }>(
+    '/platform/config',
+    { signal }
+  );
+  return response.data.data;
 }
 
-export { DEFAULT_CONFIG as DEFAULT_PLATFORM_CONFIG };
+export const platformApi = {
+  async getSupportedCities(signal?: AbortSignal): Promise<SupportedCity[]> {
+    const response = await api.get<{ success: boolean; data: { cities: SupportedCity[] } }>(
+      '/platform/cities',
+      { signal }
+    );
+    return response.data.data.cities;
+  },
+};
+
+export default platformApi;

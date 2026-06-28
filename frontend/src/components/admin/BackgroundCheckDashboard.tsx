@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Shield,
@@ -45,6 +46,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface BackgroundCheck {
   id: string;
@@ -142,153 +146,11 @@ export const BackgroundCheckDashboard: React.FC<BackgroundCheckDashboardProps> =
         setChecks(response.data.data.checks || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setChecks([
-          {
-            id: 'bc-001',
-            providerId: 'prov-001',
-            providerName: 'Ahmed Al-Rashid',
-            providerEmail: 'ahmed.rashid@email.com',
-            providerPhone: '+971501234567',
-            type: 'identity',
-            status: 'pending',
-            priority: 'high',
-            requestDate: new Date(Date.now() - 86400000 * 2).toISOString(),
-            retryCount: 0,
-            notes: 'Initial identity verification required',
-            expiryDate: new Date(Date.now() + 86400000 * 30).toISOString()
-          },
-          {
-            id: 'bc-002',
-            providerId: 'prov-002',
-            providerName: 'Fatima Hassan',
-            providerEmail: 'fatima.h@email.com',
-            providerPhone: '+971552345678',
-            type: 'criminal',
-            status: 'in_progress',
-            priority: 'urgent',
-            requestDate: new Date(Date.now() - 86400000 * 1).toISOString(),
-            retryCount: 0,
-            notes: 'Criminal background check initiated',
-            assignedTo: 'verifier@nilin.com'
-          },
-          {
-            id: 'bc-003',
-            providerId: 'prov-003',
-            providerName: 'Omar Malik',
-            providerEmail: 'omar.malik@email.com',
-            providerPhone: '+971504567890',
-            type: 'address',
-            status: 'completed',
-            priority: 'medium',
-            requestDate: new Date(Date.now() - 86400000 * 5).toISOString(),
-            completedDate: new Date(Date.now() - 86400000 * 2).toISOString(),
-            retryCount: 1,
-            lastRetryDate: new Date(Date.now() - 86400000 * 3).toISOString(),
-            result: {
-              verified: true,
-              score: 95,
-              details: 'Address verified through utility bill and landlord confirmation',
-              documents: [
-                { type: 'utility_bill', url: '/docs/utility-bill-001.pdf', verified: true },
-                { type: 'landlord_letter', url: '/docs/landlord-letter-001.pdf', verified: true }
-              ]
-            },
-            notes: 'Address successfully verified'
-          },
-          {
-            id: 'bc-004',
-            providerId: 'prov-004',
-            providerName: 'Sara Khan',
-            providerEmail: 'sara.khan@email.com',
-            providerPhone: '+971556789012',
-            type: 'financial',
-            status: 'failed',
-            priority: 'high',
-            requestDate: new Date(Date.now() - 86400000 * 3).toISOString(),
-            completedDate: new Date(Date.now() - 86400000 * 1).toISOString(),
-            retryCount: 0,
-            result: {
-              verified: false,
-              score: 35,
-              details: 'Bank statement verification failed - insufficient transaction history',
-              documents: [
-                { type: 'bank_statement', url: '/docs/bank-001.pdf', verified: false }
-              ]
-            },
-            notes: 'Requires additional financial documentation'
-          },
-          {
-            id: 'bc-005',
-            providerId: 'prov-005',
-            providerName: 'Youssef Ibrahim',
-            providerEmail: 'y.ibrahim@email.com',
-            providerPhone: '+971501234999',
-            type: 'employment',
-            status: 'needs_review',
-            priority: 'medium',
-            requestDate: new Date(Date.now() - 86400000 * 4).toISOString(),
-            retryCount: 2,
-            lastRetryDate: new Date(Date.now() - 86400000 * 1).toISOString(),
-            result: {
-              verified: false,
-              score: 60,
-              details: 'Employment history partially verified - previous employer not responding'
-            },
-            notes: 'Manual follow-up with employer required'
-          },
-          {
-            id: 'bc-006',
-            providerId: 'prov-006',
-            providerName: 'Layla Al-Mansour',
-            providerEmail: 'layla.m@email.com',
-            providerPhone: '+971554321000',
-            type: 'education',
-            status: 'completed',
-            priority: 'low',
-            requestDate: new Date(Date.now() - 86400000 * 7).toISOString(),
-            completedDate: new Date(Date.now() - 86400000 * 4).toISOString(),
-            retryCount: 0,
-            result: {
-              verified: true,
-              score: 100,
-              details: 'University degree verified with registrar'
-            },
-            notes: 'Education credentials confirmed'
-          }
-        ]);
-        setStats({
-          total: 156,
-          pending: 23,
-          inProgress: 34,
-          completed: 87,
-          failed: 8,
-          needsReview: 4,
-          avgCompletionTime: 2.5,
-          passRate: 91.5,
-          byType: [
-            { type: 'Identity', count: 45, color: '#3B82F6' },
-            { type: 'Criminal', count: 38, color: '#EF4444' },
-            { type: 'Address', count: 32, color: '#8B5CF6' },
-            { type: 'Employment', count: 22, color: '#10B981' },
-            { type: 'Education', count: 12, color: '#F59E0B' },
-            { type: 'Financial', count: 7, color: '#EC4899' }
-          ],
-          trend: [
-            { date: 'Mon', requested: 12, completed: 8, failed: 1 },
-            { date: 'Tue', requested: 15, completed: 12, failed: 0 },
-            { date: 'Wed', requested: 18, completed: 14, failed: 2 },
-            { date: 'Thu', requested: 14, completed: 16, failed: 1 },
-            { date: 'Fri', requested: 20, completed: 18, failed: 3 },
-            { date: 'Sat', requested: 8, completed: 10, failed: 0 },
-            { date: 'Sun', requested: 6, completed: 9, failed: 1 }
-          ],
-          urgentCount: 5
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching background check data:', err);
-      setError('Failed to load background check data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -305,6 +167,7 @@ export const BackgroundCheckDashboard: React.FC<BackgroundCheckDashboardProps> =
   };
 
   const handleRetryCheck = async (checkId: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(checkId);
     try {
       await api.post(`/admin/background-checks/${checkId}/retry`);
@@ -321,6 +184,7 @@ export const BackgroundCheckDashboard: React.FC<BackgroundCheckDashboardProps> =
   };
 
   const handleUpdateStatus = async (checkId: string, newStatus: BackgroundCheck['status']) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(checkId);
     try {
       await api.patch(`/admin/background-checks/${checkId}`, { status: newStatus });
@@ -635,9 +499,9 @@ export const BackgroundCheckDashboard: React.FC<BackgroundCheckDashboardProps> =
                     {check.status === 'failed' && check.retryCount < 3 && (
                       <button
                         onClick={() => handleRetryCheck(check.id)}
-                        disabled={actionLoading === check.id}
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === check.id}
                         className="px-3 py-1.5 rounded-lg bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors text-sm font-medium"
-                        title="Retry Check"
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Retry Check'}
                       >
                         {actionLoading === check.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
                       </button>
@@ -645,7 +509,8 @@ export const BackgroundCheckDashboard: React.FC<BackgroundCheckDashboardProps> =
                     {check.status === 'pending' && (
                       <button
                         onClick={() => handleUpdateStatus(check.id, 'in_progress')}
-                        disabled={actionLoading === check.id}
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === check.id}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Start check'}
                         className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors text-sm font-medium"
                       >
                         Start
@@ -654,7 +519,8 @@ export const BackgroundCheckDashboard: React.FC<BackgroundCheckDashboardProps> =
                     {check.status === 'in_progress' && (
                       <button
                         onClick={() => handleUpdateStatus(check.id, 'completed')}
-                        disabled={actionLoading === check.id}
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === check.id}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Mark completed'}
                         className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium"
                       >
                         Complete

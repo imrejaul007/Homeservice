@@ -11,6 +11,7 @@ import useWriteExperience from '../hooks/useWriteExperience';
 import { useAuthStore } from '../stores/authStore';
 import type { Experience } from '../types/experience';
 import { cn } from '@/lib/utils';
+import { showDeduplicatedError } from '@/utils/toastUtils';
 
 const ExperiencesPage: React.FC = () => {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -51,9 +52,9 @@ const ExperiencesPage: React.FC = () => {
           averageRating: response.data.stats?.averageRating || 0,
         });
       }
-    } catch (err: any) {
-      console.error('Error fetching experiences:', err);
+    } catch (err) {
       setError('Failed to load experiences. Please try again.');
+      showDeduplicatedError('Failed to load experiences');
     } finally {
       setIsLoading(false);
     }

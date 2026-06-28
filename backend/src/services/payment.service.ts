@@ -116,32 +116,87 @@ const IDEMPOTENCY_TTL = 24 * 60 * 60;
 // Maximum reasonable amount in cents for a single refund (1 million = $10,000)
 const MAX_REFUND_AMOUNT_CENTS = 1000000;
 
+// Currencies that use 0 decimal places
+const ZERO_DECIMAL_CURRENCIES = ['BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'];
+
+// Currencies that use 3 decimal places
+const THREE_DECIMAL_CURRENCIES = ['BHD', 'KWD', 'OMR'];
+
+/**
+ * Get decimal places for a currency
+ */
+const getCurrencyDecimalPlaces = (currency: string): number => {
+  const upperCurrency = currency.toUpperCase();
+  if (ZERO_DECIMAL_CURRENCIES.includes(upperCurrency)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.includes(upperCurrency)) return 3;
+  return 2; // Default to 2 decimal places (AED, USD, EUR, etc.)
+};
+
 /**
  * Validate that a refund amount is in the correct unit (dollars, not cents).
  * Prevents over-refund attacks where amounts are accidentally sent in cents.
+ *
+ * FIX: Use explicit parameter or detect based on currency decimal places
+ * instead of the flawed heuristic that rejects legitimate 1000+ AED refunds.
  */
 const validateRefundAmount = (
   refundAmount: number,
   maxRefundable: number,
-  currency: string = 'AED'
+  currency: string = 'AED',
+  options?: { amountIsInCents?: boolean; explicitUnit?: 'cents' | 'dollars' }
 ): { valid: boolean; error?: string; sanitizedAmount?: number } => {
   // Check for obviously invalid amounts
   if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
     return { valid: false, error: 'Refund amount must be a positive finite number' };
   }
 
-  // Check if amount is suspiciously large (likely in cents)
-  // If refund amount >= 1000 and max refundable is < 1000, it's likely in wrong unit
-  const isAmountLikelyInCents =
-    refundAmount >= 1000 &&
-    refundAmount / 100 > maxRefundable * 1.1; // 10% tolerance
+  const decimalPlaces = getCurrencyDecimalPlaces(currency);
+  const smallestUnit = Math.pow(10, decimalPlaces);
 
-  if (isAmountLikelyInCents) {
+  // If caller explicitly specifies the unit, trust it
+  if (options?.explicitUnit === 'cents' || options?.amountIsInCents === true) {
+    // Convert from cents to decimal
+    const sanitizedAmount = refundAmount / smallestUnit;
+    if (sanitizedAmount > maxRefundable) {
+      return {
+        valid: false,
+        error: `Refund amount ${sanitizedAmount.toFixed(decimalPlaces)} exceeds maximum refundable ${maxRefundable.toFixed(decimalPlaces)} ${currency}`,
+      };
+    }
+    return { valid: true, sanitizedAmount };
+  }
+
+  if (options?.explicitUnit === 'dollars') {
+    // Already in correct unit, validate against max
+    if (refundAmount > maxRefundable) {
+      return {
+        valid: false,
+        error: `Refund amount ${refundAmount.toFixed(decimalPlaces)} exceeds maximum refundable ${maxRefundable.toFixed(decimalPlaces)} ${currency}`,
+      };
+    }
+    return { valid: true, sanitizedAmount: refundAmount };
+  }
+
+  // FIX: Intelligent detection based on currency and value characteristics
+  // Instead of rejecting any 1000+ value, check if the value looks like it's in cents
+  // by verifying if dividing by smallestUnit gives a reasonable decimal value
+
+  const centsEquivalent = refundAmount / smallestUnit;
+
+  // Only flag as suspicious if:
+  // 1. The value looks like it could be cents (integer or near-integer when divided)
+  // 2. AND the converted value exceeds max refundable
+  // 3. AND the value is a whole number (indicating it was likely meant as cents)
+  const looksLikeCents = Number.isInteger(refundAmount) && !Number.isInteger(centsEquivalent);
+  const exceedsWhenConverted = centsEquivalent > maxRefundable * 1.1;
+  const isSuspiciouslyLarge = refundAmount > maxRefundable * 10;
+
+  if (looksLikeCents && exceedsWhenConverted && isSuspiciouslyLarge) {
     return {
       valid: false,
-      error: `Refund amount ${refundAmount} appears to be in cents instead of dollars. ` +
-        `Maximum refundable: ${maxRefundable.toFixed(2)} ${currency}. ` +
-        `If you intended to refund ${(refundAmount / 100).toFixed(2)} ${currency}, please use that value instead.`,
+      error: `Refund amount ${refundAmount} appears to be in cents instead of ${currency}. ` +
+        `Maximum refundable: ${maxRefundable.toFixed(decimalPlaces)} ${currency}. ` +
+        `If you intended to refund ${centsEquivalent.toFixed(decimalPlaces)} ${currency}, please use that value instead.`,
     };
   }
 
@@ -149,7 +204,7 @@ const validateRefundAmount = (
   if (refundAmount > maxRefundable) {
     return {
       valid: false,
-      error: `Refund amount ${refundAmount.toFixed(2)} exceeds maximum refundable amount ${maxRefundable.toFixed(2)} ${currency}`,
+      error: `Refund amount ${refundAmount.toFixed(decimalPlaces)} exceeds maximum refundable ${maxRefundable.toFixed(decimalPlaces)} ${currency}`,
     };
   }
 
@@ -274,22 +329,34 @@ const tryAcquireWebhookLock = async (eventId: string): Promise<boolean> => {
   // Fallback: If Redis unavailable, use MongoDB atomic operation
   try {
     if (mongoose.connection.readyState === 1) {
-      // Use findOneAndUpdate with upsert as atomic "check and set"
+      // Try to acquire lock atomically by finding an unprocessed/unlocked document
+      // and updating it to "processing" state
+      const LOCK_TIMEOUT = 60000; // 60 seconds - matches Redis lock TTL
       const existing = await ProcessedWebhook.findOneAndUpdate(
-        { eventId },
         {
-          $setOnInsert: {
-            eventId,
+          eventId,
+          $or: [
+            { processedAt: { $exists: false } },
+            { processedAt: { $lt: new Date(Date.now() - LOCK_TIMEOUT) } }
+          ]
+        },
+        {
+          $set: {
             processedAt: new Date(),
             expiresAt: new Date(Date.now() + 86400000) // 24 hours
           }
         },
-        { upsert: true, returnDocument: 'after' }
+        { new: true }
       );
 
-      // If the document was just created (upserted), we got the lock
-      // If it already existed, someone else has the lock
-      return !existing?.processedAt || (existing.processedAt.getTime() > Date.now() - 1000);
+      // If we got a document back, we acquired the lock
+      // If null, the document either doesn't exist or is already locked by another process
+      if (existing) {
+        return true;
+      }
+
+      // Document exists but is locked by another process (recent processedAt)
+      return false;
     }
   } catch (error) {
     logger.error('MongoDB lock acquisition failed', {
@@ -345,10 +412,26 @@ const markWebhookProcessed = async (eventId: string, eventType: string): Promise
   }
 };
 
-// Use the Stripe API version from the package
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-  timeout: 30000, // 30 second timeout
-  maxNetworkRetries: 3, // Retry on network errors
+// Lazy Stripe client - initialized on first use so dotenv has already loaded by then
+let _stripeClient: Stripe | null = null;
+export function getStripe(): Stripe {
+  if (!_stripeClient) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      throw new ApiError(502, 'Payment service is not configured. Please contact support.', [], ERROR_CODES.EXTERNAL_SERVICE_ERROR);
+    }
+    _stripeClient = new Stripe(key, {
+      timeout: 30000,
+      maxNetworkRetries: 3,
+    });
+  }
+  return _stripeClient;
+}
+// Proxy so existing `stripe.xxx` call sites work without changes
+const stripe = new Proxy({} as Stripe, {
+  get(_target, prop) {
+    return (getStripe() as any)[prop];
+  },
 });
 
 // Payment timeout in milliseconds
@@ -1131,100 +1214,110 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
           if (booking.payment.totalRefunded >= booking.pricing.totalAmount) {
             booking.payment.status = 'refunded';
 
-            // FIX: On full refund, handle coupon rollback
-            // If coupon was reserved but not yet marked as used, clear reservation
-            if (booking.couponReservation && !booking.couponReservation.usedAt) {
-              booking.couponReservation = undefined;
-              logger.info('Coupon reservation cleared on refund (unused)', {
-                bookingId: booking._id,
-                refundAmount: refundedAmount,
-                sagaStep: 'coupon_reservation_cleared_on_refund',
-              });
-            } else if (booking.couponReservation?.usedAt) {
-              // FIX: Coupon was already used — rollback the usage so the offer can be re-claimed/reused
-              // This prevents customers from getting both a refund AND keeping the coupon redemption
-              const { offerService } = await import('../services/offer.service');
-              const couponCode = booking.couponReservation.couponCode;
-              const userId = booking.customerId?.toString() || '';
-              const rolledBack = await offerService.rollbackCouponUsage(
-                couponCode,
-                userId,
-                booking._id.toString(),
-                'refund'
-              );
-              couponRolledBack = rolledBack;
+            // FIX: Wrap coupon rollback in transaction to ensure atomicity with booking update
+            const session = await mongoose.startSession();
+            try {
+              session.startTransaction();
 
-              // Clear coupon reservation after rollback
-              booking.couponReservation = undefined;
+              // FIX: On full refund, handle coupon rollback
+              // If coupon was reserved but not yet marked as used, clear reservation
+              if (booking.couponReservation && !booking.couponReservation.usedAt) {
+                booking.couponReservation = undefined;
+                logger.info('Coupon reservation cleared on refund (unused)', {
+                  bookingId: booking._id,
+                  refundAmount: refundedAmount,
+                  sagaStep: 'coupon_reservation_cleared_on_refund',
+                });
+              } else if (booking.couponReservation?.usedAt) {
+                // FIX: Coupon was already used — rollback the usage so the offer can be re-claimed/reused
+                // This prevents customers from getting both a refund AND keeping the coupon redemption
+                const { offerService } = await import('../services/offer.service');
+                const couponCode = booking.couponReservation.couponCode;
+                const userId = booking.customerId?.toString() || '';
+                // FIX: Use atomic rollback method with session for transactional integrity
+                const rolledBack = await offerService.rollbackCouponUsageAtomic(
+                  couponCode,
+                  userId,
+                  booking._id.toString(),
+                  'refund',
+                  session
+                );
+                couponRolledBack = rolledBack;
 
-              logger.info('Coupon usage rolled back on full refund', {
+                // Clear coupon reservation after rollback
+                booking.couponReservation = undefined;
+
+                logger.info('Coupon usage rolled back on full refund', {
+                  bookingId: booking._id,
+                  couponCode,
+                  refundAmount: refundedAmount,
+                  rolledBack,
+                  sagaStep: 'coupon_usage_rolled_back_on_refund',
+                });
+              }
+
+              // FIX: Clear stale coupon discount from pricing after refund
+              if (booking.pricing.couponDiscount > 0) {
+                // Recalculate pricing without the coupon discount
+                const addOnsTotal = booking.pricing.addOns?.reduce(
+                  (sum: number, addon: { price: number }) => sum + addon.price, 0
+                ) || 0;
+                const baseTotal = booking.pricing.basePrice + addOnsTotal;
+
+                // FIX: Calculate tax rate dynamically from original booking data or use tax service
+                // Calculate original tax rate from stored tax and base total (before coupon discount)
+                const originalSubtotal = booking.pricing.subtotal + booking.pricing.couponDiscount;
+                const taxRate = originalSubtotal > 0 ? booking.pricing.tax / originalSubtotal : 0.05;
+                const newTax = Math.round(baseTotal * taxRate * 100) / 100;
+                const newTotal = Math.round((baseTotal + newTax) * 100) / 100;
+
+                // Remove coupon discount from discounts array
+                const discounts = (booking.pricing.discounts || []).filter(
+                  (d: { type: string }) => d.type !== 'coupon'
+                );
+
+                booking.pricing = {
+                  ...booking.pricing,
+                  couponDiscount: 0,
+                  subtotal: Math.round(baseTotal * 100) / 100,
+                  tax: newTax,
+                  totalAmount: newTotal,
+                  discounts,
+                };
+
+                logger.info('Pricing recalculated after full refund', {
+                  bookingId: booking._id,
+                  previousCouponDiscount: booking.pricing.couponDiscount,
+                  newTotal,
+                  sagaStep: 'pricing_recalculated_on_refund',
+                });
+              }
+
+              booking.payment.refundedAt = new Date();
+              await booking.save({ session });
+
+              // Commit transaction after successful booking save
+              await session.commitTransaction();
+
+              logger.info('Webhook: Refund processed', {
                 bookingId: booking._id,
-                couponCode,
-                refundAmount: refundedAmount,
-                rolledBack,
-                sagaStep: 'coupon_usage_rolled_back_on_refund',
+                chargeId: charge.id,
+                refundedAmount,
+                totalRefunded: booking.payment.totalRefunded,
+                couponRolledBack,
               });
+
+              // Mark using payment intent idempotency key (outside transaction - idempotency is redundant anyway)
+              if (paymentIntentId) {
+                await markPaymentIntentProcessed(paymentIntentId, refundIdempotencyKey, 'refunded');
+              }
+            } catch (txError) {
+              // Abort transaction on any error
+              await session.abortTransaction();
+              throw txError;
+            } finally {
+              session.endSession();
             }
-
-            // FIX: Clear stale coupon discount from pricing after refund
-            if (booking.pricing.couponDiscount > 0) {
-              // Recalculate pricing without the coupon discount
-              const addOnsTotal = booking.pricing.addOns?.reduce(
-                (sum: number, addon: { price: number }) => sum + addon.price, 0
-              ) || 0;
-              const baseTotal = booking.pricing.basePrice + addOnsTotal;
-              const taxRate = 0.05; // 5% VAT
-              const newTax = Math.round(baseTotal * taxRate * 100) / 100;
-              const newTotal = Math.round((baseTotal + newTax) * 100) / 100;
-
-              // Remove coupon discount from discounts array
-              const discounts = (booking.pricing.discounts || []).filter(
-                (d: { type: string }) => d.type !== 'coupon'
-              );
-
-              booking.pricing = {
-                ...booking.pricing,
-                couponDiscount: 0,
-                subtotal: Math.round(baseTotal * 100) / 100,
-                tax: newTax,
-                totalAmount: newTotal,
-                discounts,
-              };
-
-              logger.info('Pricing recalculated after full refund', {
-                bookingId: booking._id,
-                previousCouponDiscount: booking.pricing.couponDiscount,
-                newTotal,
-                sagaStep: 'pricing_recalculated_on_refund',
-              });
-            }
-          } else if (refundedAmount > 0) {
-            // FIX: Partial refund — record the partial refund for audit purposes
-            // Partial refunds don't affect coupon usage (coupon is tied to booking, not amount)
-            // In a future enhancement, you could implement partial coupon value rollback
-            logger.info('Partial refund processed (coupon usage unchanged)', {
-              bookingId: booking._id,
-              refundedAmount,
-              totalRefunded: booking.payment.totalRefunded,
-              originalTotal: booking.pricing.totalAmount,
-              couponCode: booking.couponReservation?.couponCode || 'none',
-              sagaStep: 'partial_refund_processed',
-            });
-          }
-          booking.payment.refundedAt = new Date();
-          await booking.save();
-
-          logger.info('Webhook: Refund processed', {
-            bookingId: booking._id,
-            chargeId: charge.id,
-            refundedAmount,
-            totalRefunded: booking.payment.totalRefunded,
-            couponRolledBack,
-          });
-
-          // Mark using payment intent idempotency key
-          if (paymentIntentId) {
-            await markPaymentIntentProcessed(paymentIntentId, refundIdempotencyKey, 'refunded');
           }
         }
         // Mark event as processed (Redis with MongoDB backup)
@@ -1542,7 +1635,8 @@ const allowSimulatedWalletTopUp = (): boolean => {
 export const createWalletTopUpIntent = async (
   userId: string,
   amount: number,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  amountInSmallestUnit?: boolean
 ): Promise<WalletTopUpIntentResult> => {
   if (amount <= 0) {
     throw new ApiError(400, 'Amount must be positive');
@@ -1564,29 +1658,51 @@ export const createWalletTopUpIntent = async (
     };
   }
 
-  const amountMoney = Money.fromDecimal(amount, currency as any);
-  const amountInCents = amountMoney.amount;
+  // FIX: Prevent double conversion - check if amount is already in smallest unit (cents/fils)
+  // If amountInSmallestUnit is true, use directly; otherwise convert from decimal
+  const amountInCents = amountInSmallestUnit
+    ? Math.round(amount)
+    : Money.fromDecimal(amount, currency as any).amount;
 
-  const paymentIntent = await stripe.paymentIntents.create(
-    {
-      amount: amountInCents,
-      currency: currency.toLowerCase() as any,
-      metadata: {
-        type: 'wallet_topup',
-        userId,
-        idempotencyKey: effectiveIdempotencyKey,
+  try {
+    const paymentIntent = await stripe.paymentIntents.create(
+      {
+        amount: amountInCents,
+        currency: currency.toLowerCase() as any,
+        // Required by Stripe API – lets Stripe show all eligible payment methods
+        automatic_payment_methods: { enabled: true },
+        metadata: {
+          type: 'wallet_topup',
+          userId,
+          idempotencyKey: effectiveIdempotencyKey,
+        },
+        description: 'Wallet top-up',
       },
-      description: 'Wallet top-up',
-    },
-    { idempotencyKey: `wallet-topup-${effectiveIdempotencyKey}` }
-  );
+      { idempotencyKey: `wallet-topup-${effectiveIdempotencyKey}` }
+    );
 
-  return {
-    clientSecret: paymentIntent.client_secret!,
-    paymentIntentId: paymentIntent.id,
-    amount,
-    currency,
-  };
+    return {
+      clientSecret: paymentIntent.client_secret!,
+      paymentIntentId: paymentIntent.id,
+      amount,
+      currency,
+    };
+  } catch (stripeErr: unknown) {
+    // Do NOT return 401 here: frontend treats 401 as auth/session expiry and logs user out.
+    // Stripe credential/config issues are upstream provider failures, not user auth failures.
+    const stripeError = stripeErr as { type?: string; message?: string; statusCode?: number; code?: string };
+    const message = stripeError.message || 'Payment provider error';
+    const isProviderAuthFailure =
+      stripeError.type === 'StripeAuthenticationError' ||
+      String(stripeError.code || '').toLowerCase().includes('api_key') ||
+      message.toLowerCase().includes('invalid api key');
+
+    const httpStatus = isProviderAuthFailure ? 502 : (stripeError.statusCode || 502);
+    throw new ApiError(
+      httpStatus >= 400 && httpStatus < 600 ? httpStatus : 502,
+      `Payment provider error: ${message}`
+    );
+  }
 };
 
 /**
@@ -1639,6 +1755,71 @@ export const verifyWalletTopUpPayment = async (
   }
 };
 
+export interface SetupIntentResult {
+  clientSecret: string;
+  setupIntentId: string;
+  simulated?: boolean;
+}
+
+/**
+ * Create a Stripe SetupIntent so customers can save payment methods
+ */
+export const createSetupIntent = async (userId: string): Promise<SetupIntentResult> => {
+  if (!isStripeConfigured()) {
+    if (process.env.NODE_ENV !== 'production') {
+      const simulatedId = `sim_setup_${crypto.randomUUID()}`;
+      return {
+        clientSecret: `${simulatedId}_secret`,
+        setupIntentId: simulatedId,
+        simulated: true,
+      };
+    }
+    throw new ApiError(503, 'Payment service is not configured');
+  }
+
+  const CustomerProfileModel = (await import('../models/customerProfile.model')).default;
+  const UserSubscription = (await import('../models/userSubscription.model')).default;
+
+  let customerProfile = await CustomerProfileModel.findOne({ userId });
+  let stripeCustomerId = customerProfile?.stripeCustomerId;
+
+  if (!stripeCustomerId) {
+    const subscription = await UserSubscription.findByUserId(userId);
+    stripeCustomerId = subscription?.stripeCustomerId;
+  }
+
+  if (!stripeCustomerId) {
+    const user = await (await import('../models/user.model')).default.findById(userId).lean();
+    const customer = await stripe.customers.create({
+      email: user?.email,
+      metadata: { userId: userId.toString() },
+    });
+    stripeCustomerId = customer.id;
+
+    if (customerProfile) {
+      customerProfile.stripeCustomerId = stripeCustomerId;
+      await customerProfile.save();
+    } else {
+      await CustomerProfileModel.create({ userId, stripeCustomerId });
+    }
+  }
+
+  const setupIntent = await stripe.setupIntents.create({
+    customer: stripeCustomerId,
+    payment_method_types: ['card'],
+    metadata: { userId: userId.toString(), type: 'save_payment_method' },
+  });
+
+  if (!setupIntent.client_secret) {
+    throw new ApiError(500, 'Failed to create setup intent');
+  }
+
+  return {
+    clientSecret: setupIntent.client_secret,
+    setupIntentId: setupIntent.id,
+  };
+};
+
 export default {
   createPaymentIntent,
   confirmPayment,
@@ -1651,4 +1832,6 @@ export default {
   triggerRefundOnBookingFailure,
   createWalletTopUpIntent,
   verifyWalletTopUpPayment,
+  createSetupIntent,
+  getStripe,
 };

@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Clock,
@@ -106,68 +107,11 @@ export const PeakHoursAnalysis: React.FC<PeakHoursAnalysisProps> = ({
         setHourlyData(response.data.data.hourly || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        const hourly = Array.from({ length: 24 }, (_, i) => ({
-          hour: i,
-          hourLabel: `${i.toString().padStart(2, '0')}:00`,
-          demand: i >= 6 && i <= 21 ? Math.round(50 + Math.sin((i - 6) * Math.PI / 7.5) * 80 + Math.random() * 20) : Math.round(10 + Math.random() * 10),
-          supply: i >= 8 && i <= 22 ? Math.round(40 + Math.cos((i - 10) * Math.PI / 6) * 30 + Math.random() * 15) : Math.round(15 + Math.random() * 10),
-          bookings: i >= 6 && i <= 21 ? Math.round(30 + Math.sin((i - 6) * Math.PI / 7.5) * 50 + Math.random() * 15) : Math.round(5 + Math.random() * 5),
-          revenue: i >= 6 && i <= 21 ? Math.round(500 + Math.sin((i - 6) * Math.PI / 7.5) * 800 + Math.random() * 200) : Math.round(100 + Math.random() * 50),
-          avgWaitTime: i >= 16 && i <= 20 ? Math.round(45 + Math.random() * 20) : Math.round(15 + Math.random() * 15),
-          utilization: i >= 6 && i <= 21 ? Math.round(60 + Math.sin((i - 6) * Math.PI / 7.5) * 35 + Math.random() * 10) : Math.round(20 + Math.random() * 10)
-        }));
-
-        setHourlyData(hourly);
-        setStats({
-          overallPeakHour: 18,
-          weekdayPeakHour: 19,
-          weekendPeakHour: 14,
-          highestDemand: 245,
-          lowestDemand: 12,
-          avgDemandGap: 0.68,
-          supplyDemandRatio: 0.75,
-          peakHours: hourly.filter(h => h.hour >= 16 && h.hour <= 20).map(h => ({
-            hour: h.hour,
-            demand: h.demand,
-            supply: h.supply,
-            ratio: h.supply / h.demand
-          })),
-          dailyPattern: [
-            { day: 'Monday', demand: 1820, bookings: 1456, revenue: 456780 },
-            { day: 'Tuesday', demand: 1650, bookings: 1320, revenue: 412340 },
-            { day: 'Wednesday', demand: 1780, bookings: 1424, revenue: 445120 },
-            { day: 'Thursday', demand: 1890, bookings: 1512, revenue: 473280 },
-            { day: 'Friday', demand: 2340, bookings: 1872, revenue: 585600 },
-            { day: 'Saturday', demand: 2560, bookings: 2048, revenue: 640800 },
-            { day: 'Sunday', demand: 2100, bookings: 1680, revenue: 525000 }
-          ],
-          weeklyPattern: [
-            { day: 'Monday', isWeekend: false, totalDemand: 1820, totalBookings: 1456, peakHour: 18, avgRevenue: 456780 },
-            { day: 'Tuesday', isWeekend: false, totalDemand: 1650, totalBookings: 1320, peakHour: 19, avgRevenue: 412340 },
-            { day: 'Wednesday', isWeekend: false, totalDemand: 1780, totalBookings: 1424, peakHour: 18, avgRevenue: 445120 },
-            { day: 'Thursday', isWeekend: false, totalDemand: 1890, totalBookings: 1512, peakHour: 19, avgRevenue: 473280 },
-            { day: 'Friday', isWeekend: true, totalDemand: 2340, totalBookings: 1872, peakHour: 14, avgRevenue: 585600 },
-            { day: 'Saturday', isWeekend: true, totalDemand: 2560, totalBookings: 2048, peakHour: 14, avgRevenue: 640800 },
-            { day: 'Sunday', isWeekend: true, totalDemand: 2100, totalBookings: 1680, peakHour: 15, avgRevenue: 525000 }
-          ],
-          categoryPatterns: [
-            { category: 'Cleaning', peakHour: 9, demand: 156 },
-            { category: 'Beauty', peakHour: 14, demand: 134 },
-            { category: 'Maintenance', peakHour: 18, demand: 189 },
-            { category: 'Moving', peakHour: 10, demand: 98 }
-          ],
-          recommendations: [
-            'Incentivize providers to work during evening peak hours (18:00-20:00)',
-            'Consider dynamic pricing during high-demand periods to balance supply',
-            'Weekend demand is 35% higher - ensure adequate provider coverage',
-            'Morning slots (9:00-11:00) have undersupply - offer bonuses'
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching peak hours data:', err);
-      setError('Failed to load peak hours data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

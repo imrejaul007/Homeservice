@@ -1,4 +1,34 @@
 import logger from './logger';
+import mongoose from 'mongoose';
+
+// ============================================
+// Dead Letter Queue MongoDB Schema (Persistence)
+// ============================================
+
+const DLQEntrySchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  originalFunction: { type: String, required: true },
+  error: {
+    message: { type: String, required: true },
+    name: { type: String, default: 'Error' },
+    stack: { type: String }
+  },
+  attempts: { type: Number, required: true },
+  lastAttempt: { type: Date, required: true },
+  timestamp: { type: Date, required: true },
+  metadata: { type: mongoose.Schema.Types.Mixed },
+  processed: { type: Boolean, default: false },
+  reprocessedAt: { type: Date }
+}, {
+  timestamps: true,
+  expireAfterSeconds: 30 * 24 * 60 * 60 // 30 days TTL
+});
+
+const DLQEntry = mongoose.models.DLQEntry || mongoose.model('DLQEntry', DLQEntrySchema);
+
+// In-memory dead letter queue for fallback (non-persistent operations)
+const inMemoryDLQ: DeadLetterEntry[] = [];
+const MAX_IN_MEMORY_ENTRIES = 100;
 
 export interface RetryOptions {
   maxAttempts: number;
@@ -152,17 +182,13 @@ export interface DeadLetterEntry {
   metadata?: Record<string, any>;
 }
 
-// In-memory dead letter queue for tracking failed operations
-const deadLetterQueue: DeadLetterEntry[] = [];
-const MAX_DEAD_LETTER_ENTRIES = 1000;
-
-// Add entry to dead letter queue
-export const addToDeadLetterQueue = (
+// Add entry to dead letter queue (persisted to MongoDB)
+export const addToDeadLetterQueue = async (
   originalFunction: string,
   error: Error,
   attempts: number,
   metadata?: Record<string, any>
-): void => {
+): Promise<void> => {
   const entry: DeadLetterEntry = {
     id: `dlq-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     originalFunction,
@@ -173,11 +199,33 @@ export const addToDeadLetterQueue = (
     metadata
   };
 
-  deadLetterQueue.unshift(entry);
+  // Also keep in-memory for quick access (bounded)
+  inMemoryDLQ.unshift(entry);
+  while (inMemoryDLQ.length > MAX_IN_MEMORY_ENTRIES) {
+    inMemoryDLQ.pop();
+  }
 
-  // Keep queue size bounded
-  while (deadLetterQueue.length > MAX_DEAD_LETTER_ENTRIES) {
-    deadLetterQueue.pop();
+  // Persist to MongoDB if connected
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await DLQEntry.create({
+        id: entry.id,
+        originalFunction: entry.originalFunction,
+        error: {
+          message: entry.error.message,
+          name: entry.error.name,
+          stack: entry.error.stack
+        },
+        attempts: entry.attempts,
+        lastAttempt: entry.lastAttempt,
+        timestamp: entry.timestamp,
+        metadata: entry.metadata
+      });
+    } catch (err) {
+      logger.warn('[DeadLetterQueue] Failed to persist to MongoDB, using memory only', {
+        error: (err as Error).message
+      });
+    }
   }
 
   logger.warn(`[DeadLetterQueue] Added entry for ${originalFunction}`, {
@@ -186,40 +234,108 @@ export const addToDeadLetterQueue = (
   });
 };
 
-// Get all dead letter queue entries
-export const getDeadLetterQueue = (): DeadLetterEntry[] => {
-  return [...deadLetterQueue];
+// Get all dead letter queue entries (from memory first, then MongoDB)
+export const getDeadLetterQueue = async (): Promise<DeadLetterEntry[]> => {
+  // Return in-memory entries for quick access
+  if (inMemoryDLQ.length > 0) {
+    return [...inMemoryDLQ];
+  }
+
+  // Fallback to MongoDB if memory is empty
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const entries = await DLQEntry.find({ processed: false })
+        .sort({ timestamp: -1 })
+        .limit(1000)
+        .lean()
+        .exec() as unknown as Array<{
+        id: string;
+        originalFunction: string;
+        error: { message: string; name?: string; stack?: string };
+        timestamp: Date;
+        attempts: number;
+        lastAttempt: Date;
+        metadata?: Record<string, any>;
+      }>;
+
+      return entries.map(e => ({
+        id: e.id,
+        originalFunction: e.originalFunction,
+        error: new Error(e.error.message),
+        timestamp: e.timestamp,
+        attempts: e.attempts,
+        lastAttempt: e.lastAttempt,
+        metadata: e.metadata
+      }));
+    } catch (err) {
+      logger.warn('[DeadLetterQueue] Failed to fetch from MongoDB', {
+        error: (err as Error).message
+      });
+    }
+  }
+
+  return [...inMemoryDLQ];
 };
 
 // Get dead letter queue statistics
-export const getDeadLetterStats = (): {
+export const getDeadLetterStats = async (): Promise<{
   totalEntries: number;
   recentEntries: number;
   oldestEntry: Date | null;
   newestEntry: Date | null;
-} => {
-  if (deadLetterQueue.length === 0) {
+}> => {
+  // Check memory first
+  if (inMemoryDLQ.length > 0) {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     return {
-      totalEntries: 0,
-      recentEntries: 0,
-      oldestEntry: null,
-      newestEntry: null
+      totalEntries: inMemoryDLQ.length,
+      recentEntries: inMemoryDLQ.filter(e => e.timestamp > oneHourAgo).length,
+      oldestEntry: inMemoryDLQ[inMemoryDLQ.length - 1]?.timestamp || null,
+      newestEntry: inMemoryDLQ[0]?.timestamp || null
     };
   }
 
-  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  // Fallback to MongoDB
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const entries = await DLQEntry.find({ processed: false }).lean();
+
+      return {
+        totalEntries: entries.length,
+        recentEntries: entries.filter(e => e.timestamp > oneHourAgo).length,
+        oldestEntry: entries.length > 0 ? entries[entries.length - 1].timestamp : null,
+        newestEntry: entries.length > 0 ? entries[0].timestamp : null
+      };
+    } catch (err) {
+      logger.warn('[DeadLetterQueue] Failed to get stats from MongoDB', {
+        error: (err as Error).message
+      });
+    }
+  }
 
   return {
-    totalEntries: deadLetterQueue.length,
-    recentEntries: deadLetterQueue.filter(e => e.timestamp > oneHourAgo).length,
-    oldestEntry: deadLetterQueue[deadLetterQueue.length - 1]?.timestamp || null,
-    newestEntry: deadLetterQueue[0]?.timestamp || null
+    totalEntries: inMemoryDLQ.length,
+    recentEntries: 0,
+    oldestEntry: null,
+    newestEntry: null
   };
 };
 
 // Clear dead letter queue
-export const clearDeadLetterQueue = (): void => {
-  deadLetterQueue.length = 0;
+export const clearDeadLetterQueue = async (): Promise<void> => {
+  inMemoryDLQ.length = 0;
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await DLQEntry.deleteMany({});
+    } catch (err) {
+      logger.warn('[DeadLetterQueue] Failed to clear MongoDB', {
+        error: (err as Error).message
+      });
+    }
+  }
+
   logger.info('[DeadLetterQueue] Cleared');
 };
 

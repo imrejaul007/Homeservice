@@ -1,7 +1,8 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { validateProviderIdParam } from '../middleware/validateObjectId.middleware';
+import { asyncHandler } from '../utils/asyncHandler';
 import {
   getProviders,
   getProviderDetails,
@@ -25,6 +26,8 @@ import {
   getDashboardStats,
   placePayoutHold,
   releasePayoutHold,
+  getProviderServices,
+  searchProviders,
 } from '../controllers/providerOps.controller';
 
 const router = express.Router();
@@ -54,8 +57,26 @@ const providerIdRoutes = express.Router({ mergeParams: true });
 providerIdRoutes.use(validateProviderIdParam);
 
 // Provider list and details
+router.get('/providers/search', searchProviders);
 router.get('/providers', getProviders);
 router.get('/providers/:providerId', validateProviderIdParam, getProviderDetails);
+router.get('/providers/:providerId/services', validateProviderIdParam, getProviderServices);
+router.get('/providers/:providerId/portfolio', validateProviderIdParam, asyncHandler(async (req: Request, res: Response) => {
+  const { providerId } = req.params;
+  const ProviderProfile = (await import('../models/providerProfile.model')).default;
+  const profile = await ProviderProfile.findOne({ userId: providerId }).populate('portfolio');
+  if (!profile) {
+    res.status(404).json({ success: false, error: 'Provider profile not found' });
+    return;
+  }
+  res.json({ success: true, data: profile.portfolio || [] });
+}));
+router.get('/providers/:providerId/contracts', validateProviderIdParam, asyncHandler(async (req: Request, res: Response) => {
+  const { providerId } = req.params;
+  const ManagedContract = (await import('../models/managedContract.model')).default;
+  const contracts = await ManagedContract.find({ providerId }).sort({ createdAt: -1 });
+  res.json({ success: true, data: contracts });
+}));
 
 // Provider actions
 providerIdRoutes.post('/approve', approveProvider);

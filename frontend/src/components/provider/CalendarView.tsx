@@ -239,16 +239,18 @@ const CalendarHeader: React.FC<CalendarHeaderProps> = ({
       <div className="flex items-center gap-2">
         <button
           onClick={onPrevMonth}
-          className="p-2 hover:bg-nilin-muted rounded-lg transition-colors"
+          aria-label="Previous month"
+          className="w-10 h-10 flex items-center justify-center hover:bg-nilin-muted rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
         >
           <ChevronLeft className="w-5 h-5 text-nilin-charcoal" />
         </button>
-        <h2 className="text-lg font-semibold text-nilin-charcoal min-w-[200px] text-center">
+        <h2 className="text-lg font-semibold text-nilin-charcoal min-w-[200px] text-center" aria-live="polite">
           {MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}
         </h2>
         <button
           onClick={onNextMonth}
-          className="p-2 hover:bg-nilin-muted rounded-lg transition-colors"
+          aria-label="Next month"
+          className="w-10 h-10 flex items-center justify-center hover:bg-nilin-muted rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
         >
           <ChevronRight className="w-5 h-5 text-nilin-charcoal" />
         </button>
@@ -257,14 +259,14 @@ const CalendarHeader: React.FC<CalendarHeaderProps> = ({
       <div className="flex items-center gap-2">
         <button
           onClick={onToday}
-          className="px-3 py-1.5 text-sm font-medium text-nilin-coral hover:bg-nilin-blush rounded-lg transition-colors"
+          className="px-3 py-1.5 text-sm font-medium text-nilin-coral hover:bg-nilin-blush rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
         >
           Today
         </button>
         <button
           onClick={() => onDateSelect(new Date())}
-          className="p-2 hover:bg-nilin-muted rounded-lg transition-colors"
-          title="Add booking"
+          className="w-10 h-10 flex items-center justify-center hover:bg-nilin-muted rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+          aria-label="Add booking"
         >
           <Plus className="w-5 h-5 text-nilin-coral" />
         </button>
@@ -1153,7 +1155,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     const isAccept = confirmDialog.type === 'accept';
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl">
           <div className="flex items-center gap-4 mb-4">
             <div className={cn(
@@ -1205,7 +1207,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   };
 
   return (
-    <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)}>
+    <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)} role="region" aria-label="Booking calendar">
+      {/* Screen reader announcements */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {events.filter((e) => e.type === 'booking').length} bookings in {MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -1225,9 +1232,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         {/* View Toggle & Filters */}
         <div className="flex items-center gap-3">
           {/* Status Filter */}
+          <label htmlFor="calendar-status-filter" className="sr-only">Filter bookings by status</label>
           <select
+            id="calendar-status-filter"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+            aria-label="Filter bookings by status"
             className="text-sm border border-nilin-border rounded-lg px-3 py-1.5 text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
           >
             <option value="all">All Status</option>
@@ -1238,11 +1248,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </select>
 
           {/* View Toggle */}
-          <div className="flex items-center bg-nilin-muted rounded-lg p-1">
+          <div role="group" aria-label="Calendar view selection" className="flex items-center bg-nilin-muted rounded-lg p-1">
             <button
               onClick={() => setView('month')}
+              aria-pressed={view === 'month'}
               className={cn(
-                'px-3 py-1 text-sm font-medium rounded-md transition-colors',
+                'px-3 py-1 text-sm font-medium rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1',
                 view === 'month'
                   ? 'bg-white text-nilin-charcoal shadow-sm'
                   : 'text-nilin-warmGray hover:text-nilin-charcoal'
@@ -1252,8 +1263,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             </button>
             <button
               onClick={() => setView('day')}
+              aria-pressed={view === 'day'}
               className={cn(
-                'px-3 py-1 text-sm font-medium rounded-md transition-colors',
+                'px-3 py-1 text-sm font-medium rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1',
                 view === 'day'
                   ? 'bg-white text-nilin-charcoal shadow-sm'
                   : 'text-nilin-warmGray hover:text-nilin-charcoal'

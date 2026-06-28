@@ -83,13 +83,14 @@ const CategoryGrid: React.FC<CategoryGridProps> = ({
   }
 
   return (
-    <div className="bg-nilin-cream rounded-nilin-lg p-4 lg:p-6 shadow-nilin">
+    <div className="bg-nilin-cream rounded-nilin-lg p-4 lg:p-6 shadow-nilin" role="region" aria-label="Browse service categories">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 lg:gap-6">
         {resolvedCategories.map((category, index) => (
           <button
             key={category.id}
             onClick={() => handleCategoryClick(category)}
-            className="group relative"
+            aria-label={`${category.name}${category.serviceCount ? `, ${category.serviceCount} services available` : ''}`}
+            className="group relative min-h-[80px] focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded-nilin-lg"
           >
             <div className={`
               ${gradients[index % gradients.length]}

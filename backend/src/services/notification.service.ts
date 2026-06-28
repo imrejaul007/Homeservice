@@ -1,7 +1,7 @@
 import BookingNotification from '../models/bookingNotification.model';
 import { NotificationQueue } from '../models/notificationQueue.model';
 import User from '../models/user.model';
-import { buildDefaultChannels, formatNotificationForSocket } from '../utils/notificationHelpers';
+import { buildDefaultChannels, buildNotificationCategoryQuery, formatNotificationForSocket, type NotificationCategory } from '../utils/notificationHelpers';
 import { eventBus, EVENT_TYPES } from '../event-bus';
 import { send as emailSend } from './email.service';
 import { smsService } from './sms.service';
@@ -240,7 +240,11 @@ export type NotificationType =
   | 'offer_expiry_reminder'
   | 'offer_expired'
   | 'offer_unused_reminder'
-  | 'offer_claimed';
+  | 'offer_claimed'
+  // Dispute appeal notification types
+  | 'dispute_appeal_submitted'
+  | 'dispute_appeal_approved'
+  | 'dispute_appeal_rejected';
 
 export type NotificationChannel = 'in_app' | 'email' | 'sms' | 'push';
 
@@ -611,6 +615,36 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
       message: 'A customer has claimed an offer.',
     },
   },
+  dispute_appeal_submitted: {
+    customer: {
+      title: 'Appeal Submitted',
+      message: 'Your appeal has been submitted and is pending review.',
+    },
+    provider: {
+      title: 'Dispute Appeal Submitted',
+      message: 'An appeal has been submitted for a dispute.',
+    },
+  },
+  dispute_appeal_approved: {
+    customer: {
+      title: 'Appeal Approved',
+      message: 'Your appeal has been approved. The dispute will be reopened.',
+    },
+    provider: {
+      title: 'Dispute Appeal Approved',
+      message: 'An appeal has been approved. The dispute has been reopened.',
+    },
+  },
+  dispute_appeal_rejected: {
+    customer: {
+      title: 'Appeal Rejected',
+      message: 'Your appeal has been rejected. The original resolution stands.',
+    },
+    provider: {
+      title: 'Dispute Appeal Rejected',
+      message: 'An appeal has been rejected. The original resolution stands.',
+    },
+  },
 };
 
 // ============================================
@@ -747,19 +781,45 @@ export class NotificationService {
       status: 'delivered',
     });
 
-    await notification.save();
-    await this.pruneOldNotifications(recipientId);
-    await this.emitNotificationCreated(notification);
-    await this.dispatchRealtimeChannels({
-      recipientId,
-      type: notificationType,
-      title: roleTemplate.title,
-      message: roleTemplate.message,
-      bookingId,
-      metadata,
-    }, notification);
+    // CRITICAL FIX: Wrap notification operations in try-catch to ensure failures are retriable
+    try {
+      await notification.save();
+      await this.pruneOldNotifications(recipientId);
+      await this.emitNotificationCreated(notification);
+      await this.dispatchRealtimeChannels({
+        recipientId,
+        type: notificationType,
+        title: roleTemplate.title,
+        message: roleTemplate.message,
+        bookingId,
+        metadata,
+      }, notification);
 
-    return notification;
+      return notification;
+    } catch (error) {
+      // Ensure failed notifications are queued for retry instead of silently failing
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Notification creation failed, queueing for retry', {
+        context: 'NotificationService',
+        action: 'NOTIFICATION_CREATE_FAILED_QUEUED',
+        bookingId,
+        recipientId,
+        notificationType,
+        error: errorMessage,
+      });
+
+      // Queue the notification for retry
+      await this.queueFailedNotifications([{
+        recipientId,
+        type: notificationType,
+        title: roleTemplate.title,
+        message: roleTemplate.message,
+        metadata,
+      }], errorMessage);
+
+      // Return null but don't throw - caller shouldn't fail if notification fails
+      return null;
+    }
   }
 
   async sendBookingNotifications(
@@ -966,7 +1026,7 @@ export class NotificationService {
       page?: number;
       limit?: number;
       unreadOnly?: boolean;
-      type?: NotificationType;
+      type?: NotificationType | NotificationCategory;
     } = {}
   ): Promise<{
     notifications: any[];
@@ -983,7 +1043,14 @@ export class NotificationService {
     const query: any = { recipientId: userId };
     // FIX: Use correct field path for in-app read status (channels.inApp.read, not isRead)
     if (unreadOnly) query['channels.inApp.read'] = false;
-    if (type) query.type = type;
+    if (type) {
+      const categoryQuery = buildNotificationCategoryQuery(type);
+      if (categoryQuery) {
+        Object.assign(query, categoryQuery);
+      } else {
+        query.type = type;
+      }
+    }
 
     const skip = (page - 1) * limit;
 
@@ -1360,6 +1427,7 @@ export class NotificationService {
 
   /**
    * Register a device token for push notifications
+   * FIX P1: Added FCM token format validation before storing
    */
   async registerDeviceToken(
     userId: string,
@@ -1370,6 +1438,19 @@ export class NotificationService {
     const user = await User.findById(userId);
     if (!user) {
       throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
+    }
+
+    // FIX P1: Validate FCM token format before storing
+    if (!this.isValidFcmToken(token)) {
+      logger.warn('Invalid FCM token format rejected', {
+        context: 'NotificationService',
+        action: 'INVALID_TOKEN_FORMAT',
+        userId,
+        platform,
+        tokenLength: token.length,
+        tokenPrefix: token.substring(0, 10)
+      });
+      throw ApiError.badRequest('Invalid push notification token format', undefined, ERROR_CODES.INVALID_TOKEN);
     }
 
     // Check if token already exists
@@ -1395,6 +1476,57 @@ export class NotificationService {
     }
 
     await user.save();
+  }
+
+  /**
+   * FIX P1: Validate FCM token format
+   * Supports both legacy and VAPID FCM token formats
+   */
+  private isValidFcmToken(token: string): boolean {
+    if (!token || typeof token !== 'string') {
+      return false;
+    }
+
+    // Legacy FCM tokens are typically 152 characters
+    // VAPID tokens are longer (typically 140-180+ chars) and may contain dots
+    const MIN_TOKEN_LENGTH = 100;
+    const MAX_TOKEN_LENGTH = 400;
+
+    // Check length constraints
+    if (token.length < MIN_TOKEN_LENGTH || token.length > MAX_TOKEN_LENGTH) {
+      return false;
+    }
+
+    // Legacy token pattern: alphanumeric, typically 152 chars
+    // Contains only: a-z, A-Z, 0-9, _-
+    const legacyPattern = /^[a-zA-Z0-9_-]{100,200}$/;
+
+    // VAPID token pattern: may contain dots (e.g., BK7...x...Q)
+    // Format: e.g., "BKz...xfg....fB...d...==....A...Q...="
+    const vapidPattern = /^[a-zA-Z0-9_.\-/=]{100,400}$/;
+
+    // Check if token matches either pattern
+    const isValidLegacy = legacyPattern.test(token);
+    const isValidVapid = vapidPattern.test(token);
+
+    // Additional check: reject tokens with suspicious patterns
+    const suspiciousPatterns = [
+      /<script/i,
+      /javascript:/i,
+      /on\w+=/i,
+      /data:/i
+    ];
+
+    const hasSuspiciousContent = suspiciousPatterns.some(pattern => pattern.test(token));
+    if (hasSuspiciousContent) {
+      logger.warn('FCM token contains suspicious content', {
+        context: 'NotificationService',
+        action: 'SUSPICIOUS_TOKEN'
+      });
+      return false;
+    }
+
+    return isValidLegacy || isValidVapid;
   }
 
   /**
@@ -1725,6 +1857,10 @@ export class NotificationService {
       offer_expired: prefs.push?.promotions ?? true,
       offer_unused_reminder: prefs.push?.promotions ?? true,
       offer_claimed: prefs.push?.promotions ?? true,
+      // Dispute appeal notification preferences
+      dispute_appeal_submitted: prefs.push?.disputeUpdates ?? true,
+      dispute_appeal_approved: prefs.push?.disputeUpdates ?? true,
+      dispute_appeal_rejected: prefs.push?.disputeUpdates ?? true,
     };
   }
 

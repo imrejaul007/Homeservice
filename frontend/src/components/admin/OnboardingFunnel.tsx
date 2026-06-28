@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   TrendingDown,
@@ -146,149 +147,11 @@ export const OnboardingFunnel: React.FC<OnboardingFunnelProps> = ({
       if (response.data?.success) {
         setMetrics(response.data.data);
       } else {
-        // Mock data
-        setMetrics({
-          totalStarted: 1234,
-          totalCompleted: 456,
-          overallConversionRate: 36.9,
-          avgCompletionTimeMinutes: 45,
-          stages: [
-            {
-              id: 's1',
-              name: 'Started Registration',
-              key: 'registration',
-              count: 1234,
-              percentage: 100,
-              dropoffRate: 0,
-              avgTimeSeconds: 120,
-              description: 'Provider began the signup process'
-            },
-            {
-              id: 's2',
-              name: 'Email Verified',
-              key: 'email_verified',
-              count: 1087,
-              percentage: 88.1,
-              dropoffRate: 11.9,
-              avgTimeSeconds: 300,
-              description: 'Confirmed email address'
-            },
-            {
-              id: 's3',
-              name: 'Phone Verified',
-              key: 'phone_verified',
-              count: 987,
-              percentage: 80.0,
-              dropoffRate: 8.1,
-              avgTimeSeconds: 180,
-              description: 'Verified mobile number with OTP'
-            },
-            {
-              id: 's4',
-              name: 'Profile Started',
-              key: 'profile_started',
-              count: 876,
-              percentage: 71.0,
-              dropoffRate: 9.0,
-              avgTimeSeconds: 600,
-              description: 'Began filling in profile information'
-            },
-            {
-              id: 's5',
-              name: 'Profile Completed',
-              key: 'profile_completed',
-              count: 734,
-              percentage: 59.5,
-              dropoffRate: 11.5,
-              avgTimeSeconds: 1200,
-              description: 'All required profile fields filled'
-            },
-            {
-              id: 's6',
-              name: 'Documents Uploaded',
-              key: 'documents_uploaded',
-              count: 623,
-              percentage: 50.5,
-              dropoffRate: 9.0,
-              avgTimeSeconds: 2400,
-              description: 'ID and required documents submitted'
-            },
-            {
-              id: 's7',
-              name: 'Background Check',
-              key: 'background_check',
-              count: 545,
-              percentage: 44.2,
-              dropoffRate: 6.3,
-              avgTimeSeconds: 86400,
-              description: 'Awaiting background verification'
-            },
-            {
-              id: 's8',
-              name: 'Final Review',
-              key: 'final_review',
-              count: 512,
-              percentage: 41.5,
-              dropoffRate: 2.7,
-              avgTimeSeconds: 3600,
-              description: 'Admin review of submitted information'
-            },
-            {
-              id: 's9',
-              name: 'Approved',
-              key: 'approved',
-              count: 456,
-              percentage: 36.9,
-              dropoffRate: 4.6,
-              avgTimeSeconds: 0,
-              description: 'Successfully onboarded to platform'
-            }
-          ],
-          dropoffReasons: [
-            { stage: 'Email Verification', reason: 'Did not receive email', count: 45, percentage: 30.6 },
-            { stage: 'Phone Verification', reason: 'OTP not working', count: 38, percentage: 25.8 },
-            { stage: 'Profile Completed', reason: 'Too many fields to fill', count: 52, percentage: 35.4 },
-            { stage: 'Documents Uploaded', reason: 'Cannot upload documents', count: 12, percentage: 8.2 }
-          ],
-          abandonmentPatterns: [
-            { pattern: 'Mobile users abandoning after profile step', count: 156, avgDropoffStage: 'profile_completed' },
-            { pattern: 'Weekend users completing faster', count: 89, avgDropoffStage: 'completed' },
-            { pattern: 'Users from specific location dropping', count: 34, avgDropoffStage: 'documents_uploaded' }
-          ],
-          cohortComparison: [
-            { cohort: 'Week 1', startDate: '2024-01-01', endDate: '2024-01-07', started: 180, completed: 65, conversionRate: 36.1 },
-            { cohort: 'Week 2', startDate: '2024-01-08', endDate: '2024-01-14', started: 195, completed: 72, conversionRate: 36.9 },
-            { cohort: 'Week 3', startDate: '2024-01-15', endDate: '2024-01-21', started: 210, completed: 82, conversionRate: 39.0 },
-            { cohort: 'Week 4', startDate: '2024-01-22', endDate: '2024-01-28', started: 225, completed: 89, conversionRate: 39.6 },
-            { cohort: 'Week 5', startDate: '2024-01-29', endDate: '2024-02-04', started: 212, completed: 78, conversionRate: 36.8 },
-            { cohort: 'Week 6', startDate: '2024-02-05', endDate: '2024-02-11', started: 212, completed: 70, conversionRate: 33.0 }
-          ],
-          trend: [
-            { date: 'Mon', started: 156, completed: 58, conversionRate: 37.2 },
-            { date: 'Tue', started: 178, completed: 65, conversionRate: 36.5 },
-            { date: 'Wed', started: 189, completed: 72, conversionRate: 38.1 },
-            { date: 'Thu', started: 167, completed: 61, conversionRate: 36.5 },
-            { date: 'Fri', started: 145, completed: 54, conversionRate: 37.2 },
-            { date: 'Sat', started: 198, completed: 75, conversionRate: 37.9 },
-            { date: 'Sun', started: 201, completed: 71, conversionRate: 35.3 }
-          ],
-          deviceBreakdown: [
-            { device: 'Mobile', count: 823, conversionRate: 34.2 },
-            { device: 'Desktop', count: 312, conversionRate: 42.8 },
-            { device: 'Tablet', count: 99, conversionRate: 38.4 }
-          ],
-          locationBreakdown: [
-            { location: 'Dubai', started: 567, completed: 218, conversionRate: 38.4 },
-            { location: 'Abu Dhabi', started: 312, completed: 112, conversionRate: 35.9 },
-            { location: 'Sharjah', started: 145, completed: 52, conversionRate: 35.9 },
-            { location: 'Ajman', started: 89, completed: 34, conversionRate: 38.2 },
-            { location: 'Other', started: 121, completed: 40, conversionRate: 33.1 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching onboarding funnel data:', err);
-      setError('Failed to load onboarding funnel data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

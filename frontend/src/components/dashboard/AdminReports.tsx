@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
+import { reportsApi } from '../../services/analyticsApi';
 import PageLayout from '../layout/PageLayout';
 import { AdminPageShell } from '../admin/AdminPageShell';
 import {
@@ -408,6 +409,29 @@ const AdminReports: React.FC = () => {
 
   // Error State
   const [error, setError] = useState<string | null>(null);
+  const [dueReportCount, setDueReportCount] = useState(0);
+  const [runningDueReports, setRunningDueReports] = useState(false);
+
+  useEffect(() => {
+    reportsApi.getDueReports()
+      .then((due) => setDueReportCount(due.count))
+      .catch(() => setDueReportCount(0));
+  }, []);
+
+  const handleRunDueReports = async () => {
+    setRunningDueReports(true);
+    try {
+      const result = await reportsApi.runDueReports();
+      toast.success(`Processed ${result.processed} scheduled report(s)`);
+      const due = await reportsApi.getDueReports();
+      setDueReportCount(due.count);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to run due reports';
+      toast.error(message);
+    } finally {
+      setRunningDueReports(false);
+    }
+  };
 
   const syncUrlParams = useCallback(
     (tab: TabType, nextPeriod: PeriodType) => {
@@ -1278,6 +1302,35 @@ const AdminReports: React.FC = () => {
           onChange={handleTabChange}
           isLoading={isLoading}
         />
+      </div>
+
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-nilin-border/50 bg-white/60 p-4">
+        <div>
+          <p className="text-sm font-medium text-nilin-charcoal font-sans">Scheduled report delivery</p>
+          <p className="text-xs text-nilin-warmGray mt-1 font-sans">
+            {dueReportCount > 0
+              ? `${dueReportCount} scheduled report(s) ready to run`
+              : 'No scheduled reports are due right now'}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleRunDueReports}
+            disabled={runningDueReports || dueReportCount === 0}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-nilin-border/50 bg-white text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/40 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${runningDueReports ? 'animate-spin' : ''}`} />
+            Run due reports
+          </button>
+          <Link
+            to="/admin/custom-reports?tab=scheduled"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-nilin-coral/10 text-nilin-coral text-sm font-medium hover:bg-nilin-coral/20"
+          >
+            Manage schedules
+            <ChevronRight className="h-4 w-4" />
+          </Link>
+        </div>
       </div>
 
       {/* Content */}

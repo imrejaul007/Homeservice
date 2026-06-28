@@ -58,7 +58,7 @@ const ticketApi = {
     }>('/support/tickets', data);
 
     return {
-      ticketNumber: response.data.ticketNumber,
+      ticketNumber: response.data?.ticketNumber ?? '',
     };
   },
 };

@@ -15,23 +15,29 @@ export function isCapacitor(): boolean {
  * Get the appropriate API URL based on environment
  * - Mobile/Capacitor: Uses VITE_API_URL or falls back to deployed backend
  * - Web (dev): Uses VITE_API_URL or localhost:5000
- * - Web (prod): Uses VITE_API_URL or relative path
+ * - Web (prod): Uses VITE_API_URL or same-origin /api
  */
 export function getApiUrl(): string {
   const envUrl = import.meta.env.VITE_API_URL;
 
-  // If environment variable is set, use it
   if (envUrl) {
     return envUrl;
   }
 
-  // Mobile/Capacitor fallback to deployed backend
+  if (import.meta.env.DEV) {
+    console.warn(
+      '[getApiUrl] VITE_API_URL is not set. Using development fallback http://localhost:5000/api'
+    );
+  }
+
+  if (import.meta.env.PROD && typeof window !== 'undefined') {
+    return `${window.location.origin}/api`;
+  }
+
   if (isCapacitor()) {
-    // For mobile, use the deployed backend URL
     return 'https://homeservice-1.onrender.com/api';
   }
 
-  // Web fallback
   return 'http://localhost:5000/api';
 }
 
@@ -41,11 +47,7 @@ export function getApiUrl(): string {
  */
 export function getSocketUrl(): string {
   const apiUrl = getApiUrl();
-  // Remove /api suffix if present
   return apiUrl.replace(/\/api$/, '');
 }
 
-/**
- * Default export for convenience
- */
 export default getApiUrl;

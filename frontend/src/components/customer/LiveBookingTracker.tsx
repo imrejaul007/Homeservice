@@ -543,49 +543,42 @@ export const LiveBookingTracker: React.FC<LiveBookingTrackerProps> = ({
     // Subscribe to specific booking state events
     const unsubscribeConfirmed = socketService.on('booking:confirmed', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Booking confirmed event received');
         fetchTrackingData();
       }
     });
 
     const unsubscribeEnRoute = socketService.on('booking:en_route', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Provider en route event received');
         fetchTrackingData();
       }
     });
 
     const unsubscribeArrived = socketService.on('booking:arrived', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Provider arrived event received');
         fetchTrackingData();
       }
     });
 
     const unsubscribeStarted = socketService.on('booking:started', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Service started event received');
         fetchTrackingData();
       }
     });
 
     const unsubscribeCompleted = socketService.on('booking:completed', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Booking completed event received');
         fetchTrackingData();
       }
     });
 
     const unsubscribeCancelled = socketService.on('booking:cancelled', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Booking cancelled event received');
         fetchTrackingData();
       }
     });
 
     const unsubscribeReminder = socketService.on('booking:reminder', (data: any) => {
       if (isForThisBooking(data)) {
-        console.log('Booking reminder event received');
         fetchTrackingData();
       }
     });

@@ -126,7 +126,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       setUnreadCount(response.data.unreadCount);
       setHasMore(newNotifications.length === 20);
       setPage(pageNum);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to load notifications');
     } finally {
       setIsLoading(false);
@@ -182,7 +182,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         prev.map(n => (n.id === id ? { ...n, isRead: true, readAt: new Date() } : n))
       );
       setUnreadCount(prev => Math.max(0, prev - 1));
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to mark as read');
     } finally {
       setActionLoading(null);
@@ -196,7 +196,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       await notificationApi.markAllAsRead();
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true, readAt: new Date() })));
       setUnreadCount(0);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to mark all as read');
     } finally {
       setActionLoading(null);
@@ -213,7 +213,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       if (deleted && !deleted.isRead) {
         setUnreadCount(prev => Math.max(0, prev - 1));
       }
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete notification');
     } finally {
       setActionLoading(null);
@@ -226,7 +226,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
     try {
       await notificationApi.deleteAllRead();
       setNotifications(prev => prev.filter(n => !n.isRead));
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete read notifications');
     } finally {
       setActionLoading(null);
@@ -514,7 +514,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
             <button
               onClick={() => setFilterUnread(!filterUnread)}
               className={cn(
-                'flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors',
+                'flex items-center gap-2 px-4 py-3 border rounded-lg text-sm font-medium transition-colors',
                 filterUnread
                   ? 'bg-[#E8B4A8] border-[#E8B4A8] text-white'
                   : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'

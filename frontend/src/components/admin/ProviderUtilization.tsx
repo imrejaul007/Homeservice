@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users,
@@ -117,62 +118,11 @@ export const ProviderUtilization: React.FC<ProviderUtilizationProps> = ({
       if (response.data?.success) {
         setData(response.data.data);
       } else {
-        // Mock data
-        setData({
-          overallUtilization: 67,
-          averageHoursPerWeek: 32,
-          totalProviders: 1247,
-          activeProviders: 1089,
-          utilizationByTier: [
-            { tier: 'Platinum', utilization: 89, count: 156, avgJobsPerWeek: 18 },
-            { tier: 'Gold', utilization: 74, count: 423, avgJobsPerWeek: 12 },
-            { tier: 'Silver', utilization: 58, count: 456, avgJobsPerWeek: 7 },
-            { tier: 'Bronze', utilization: 42, count: 212, avgJobsPerWeek: 4 }
-          ],
-          utilizationTrend: [
-            { date: 'Week 1', utilization: 62, bookings: 1823 },
-            { date: 'Week 2', utilization: 65, bookings: 1956 },
-            { date: 'Week 3', utilization: 68, bookings: 2102 },
-            { date: 'Week 4', utilization: 67, bookings: 2089 },
-            { date: 'Week 5', utilization: 71, bookings: 2234 },
-            { date: 'Week 6', utilization: 69, bookings: 2156 }
-          ],
-          peakHours: [
-            { hour: '06:00', utilization: 45, demand: 120 },
-            { hour: '08:00', utilization: 78, demand: 345 },
-            { hour: '10:00', utilization: 92, demand: 456 },
-            { hour: '12:00', utilization: 85, demand: 389 },
-            { hour: '14:00', utilization: 88, demand: 412 },
-            { hour: '16:00', utilization: 95, demand: 534 },
-            { hour: '18:00', utilization: 98, demand: 612 },
-            { hour: '20:00', utilization: 76, demand: 423 },
-            { hour: '22:00', utilization: 34, demand: 156 }
-          ],
-          categoryUtilization: [
-            { category: 'Cleaning', utilization: 82, providers: 342, bookings: 1245 },
-            { category: 'Plumbing', utilization: 68, providers: 189, bookings: 567 },
-            { category: 'Electrical', utilization: 74, providers: 156, bookings: 423 },
-            { category: 'Painting', utilization: 56, providers: 98, bookings: 234 },
-            { category: 'Gardening', utilization: 71, providers: 145, bookings: 389 },
-            { category: 'Moving', utilization: 63, providers: 78, bookings: 178 }
-          ],
-          topPerformers: [
-            { providerId: 'p1', providerName: 'Ahmed Hassan', utilization: 98, completedJobs: 47, rating: 4.9, earnings: 12500 },
-            { providerId: 'p2', providerName: 'Sarah Khan', utilization: 95, completedJobs: 42, rating: 4.8, earnings: 11200 },
-            { providerId: 'p3', providerName: 'Mohammed Ali', utilization: 93, completedJobs: 39, rating: 4.9, earnings: 10800 },
-            { providerId: 'p4', providerName: 'Fatima Omar', utilization: 91, completedJobs: 38, rating: 4.7, earnings: 9900 },
-            { providerId: 'p5', providerName: 'Omar Farouk', utilization: 89, completedJobs: 35, rating: 4.8, earnings: 9500 }
-          ],
-          underperformers: [
-            { providerId: 'u1', providerName: 'John Smith', utilization: 18, completedJobs: 3, avgRating: 3.2 },
-            { providerId: 'u2', providerName: 'Lisa Wong', utilization: 22, completedJobs: 5, avgRating: 3.5 },
-            { providerId: 'u3', providerName: 'Tom Brown', utilization: 25, completedJobs: 6, avgRating: 3.8 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching utilization data:', err);
-      setError('Failed to load utilization data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

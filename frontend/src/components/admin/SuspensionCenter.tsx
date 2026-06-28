@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
 import {
@@ -38,6 +39,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface SuspensionRecord {
   id: string;
@@ -155,129 +159,11 @@ export const SuspensionCenter: React.FC<SuspensionCenterProps> = ({
         setSuspensions(response.data.data.suspensions || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setSuspensions([
-          {
-            id: 'sus-001',
-            providerId: 'prov-001',
-            providerName: 'Ahmed Hassan',
-            email: 'ahmed@email.com',
-            phone: '+971501234567',
-            type: 'temporary',
-            reason: 'Multiple customer complaints about no-shows and service quality',
-            category: 'customer_complaint',
-            status: 'active',
-            suspendedAt: new Date().toISOString(),
-            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewerId: 'admin-001',
-            reviewerName: 'Admin User',
-            impact: { affectedBookings: 23, affectedRevenue: 4500, affectedCustomers: 18 },
-            history: [
-              { action: 'Suspension Created', performedBy: 'Admin User', performedAt: new Date().toISOString() }
-            ]
-          },
-          {
-            id: 'sus-002',
-            providerId: 'prov-002',
-            providerName: 'Sarah Khan',
-            email: 'sarah@email.com',
-            phone: '+971502345678',
-            type: 'temporary',
-            reason: 'Suspected fake review activity',
-            category: 'fraud',
-            status: 'pending_appeal',
-            suspendedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            expiresAt: new Date(Date.now() + 11 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewerId: 'admin-001',
-            reviewerName: 'Admin User',
-            appeal: {
-              submittedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-              reason: 'I believe this is a misunderstanding. The reviews were from genuine customers who I have served. I can provide evidence of service completion.',
-              status: 'pending'
-            },
-            impact: { affectedBookings: 45, affectedRevenue: 8900, affectedCustomers: 32 },
-            history: [
-              { action: 'Suspension Created', performedBy: 'Admin User', performedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-              { action: 'Appeal Submitted', performedBy: 'Sarah Khan', performedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() }
-            ]
-          },
-          {
-            id: 'sus-003',
-            providerId: 'prov-003',
-            providerName: 'Mohammed Ali',
-            email: 'mohammed@email.com',
-            phone: '+971503456789',
-            type: 'permanent',
-            reason: 'Confirmed fraudulent activities including payment manipulation and customer data misuse',
-            category: 'fraud',
-            status: 'active',
-            suspendedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewerId: 'admin-001',
-            reviewerName: 'Admin User',
-            impact: { affectedBookings: 156, affectedRevenue: 34500, affectedCustomers: 89 },
-            history: [
-              { action: 'Suspension Created', performedBy: 'Admin User', performedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString() },
-              { action: 'Evidence Reviewed', performedBy: 'Admin User', performedAt: new Date(Date.now() - 13 * 24 * 60 * 60 * 1000).toISOString() }
-            ]
-          },
-          {
-            id: 'sus-004',
-            providerId: 'prov-004',
-            providerName: 'Fatima Omar',
-            email: 'fatima@email.com',
-            phone: '+971504567890',
-            type: 'temporary',
-            reason: 'Non-compliance with pricing policy - charging above agreed rates',
-            category: 'non_compliance',
-            status: 'resolved',
-            suspendedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-            expiresAt: new Date(Date.now() - 23 * 24 * 60 * 60 * 1000).toISOString(),
-            resolvedAt: new Date(Date.now() - 23 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewerId: 'admin-001',
-            reviewerName: 'Admin User',
-            impact: { affectedBookings: 12, affectedRevenue: 2100, affectedCustomers: 10 },
-            history: [
-              { action: 'Suspension Created', performedBy: 'Admin User', performedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString() },
-              { action: 'Suspension Resolved', performedBy: 'Admin User', performedAt: new Date(Date.now() - 23 * 24 * 60 * 60 * 1000).toISOString(), note: 'Provider agreed to comply with pricing policy' }
-            ]
-          }
-        ]);
-        setStats({
-          totalSuspensions: 89,
-          activeSuspensions: 34,
-          temporarySuspensions: 67,
-          permanentSuspensions: 22,
-          pendingAppeals: 8,
-          resolvedThisMonth: 15,
-          avgSuspensionDuration: 7.2,
-          byCategory: [
-            { category: 'Customer Complaint', count: 28, color: '#EC4899' },
-            { category: 'Policy Violation', count: 23, color: '#EF4444' },
-            { category: 'Quality Issues', count: 18, color: '#F59E0B' },
-            { category: 'Fraud', count: 12, color: '#DC2626' },
-            { category: 'Non-Compliance', count: 5, color: '#8B5CF6' },
-            { category: 'Safety', count: 3, color: '#B91C1C' }
-          ],
-          trend: [
-            { month: 'Jan', suspensions: 12, resolutions: 8 },
-            { month: 'Feb', suspensions: 15, resolutions: 10 },
-            { month: 'Mar', suspensions: 18, resolutions: 12 },
-            { month: 'Apr', suspensions: 14, resolutions: 15 },
-            { month: 'May', suspensions: 16, resolutions: 11 },
-            { month: 'Jun', suspensions: 14, resolutions: 13 }
-          ],
-          topReasons: [
-            { reason: 'No-shows', count: 23 },
-            { reason: 'Overcharging', count: 18 },
-            { reason: 'Poor quality', count: 15 },
-            { reason: 'Fake reviews', count: 12 },
-            { reason: 'Policy breach', count: 9 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching suspension data:', err);
-      setError('Failed to load suspension data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -294,6 +180,7 @@ export const SuspensionCenter: React.FC<SuspensionCenterProps> = ({
   };
 
   const handleReinstate = async (suspensionId: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     // Show confirmation modal before reinstating
     setConfirmModal({
       open: true,
@@ -322,6 +209,7 @@ export const SuspensionCenter: React.FC<SuspensionCenterProps> = ({
   };
 
   const handleReviewAppeal = async (suspensionId: string, approved: boolean, note: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     // Show confirmation modal before reviewing appeal
     setConfirmModal({
       open: true,
@@ -602,8 +490,9 @@ export const SuspensionCenter: React.FC<SuspensionCenterProps> = ({
                     {suspension.status === 'active' && (
                       <button
                         onClick={() => handleReinstate(suspension.id)}
-                        disabled={actionLoading === suspension.id}
-                        className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium"
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === suspension.id}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Reinstate provider'}
+                        className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Unlock className="w-4 h-4" />
                       </button>
@@ -612,15 +501,17 @@ export const SuspensionCenter: React.FC<SuspensionCenterProps> = ({
                       <>
                         <button
                           onClick={() => handleReviewAppeal(suspension.id, true, 'Appeal approved')}
-                          disabled={actionLoading === suspension.id}
-                          className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium"
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === suspension.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Approve appeal'}
+                          className="px-3 py-1.5 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <CheckCircle className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleReviewAppeal(suspension.id, false, 'Appeal rejected')}
-                          disabled={actionLoading === suspension.id}
-                          className="px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors text-sm font-medium"
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === suspension.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Reject appeal'}
+                          className="px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <XCircle className="w-4 h-4" />
                         </button>

@@ -504,7 +504,7 @@ export const processPayout = async (
     logger.info('PAYOUT_INITIATED', {
       payoutId: payout._id.toString(),
       providerId: payout.providerId.toString(),
-      amount: payout.netAmount || payout.amount,
+      amount: payout.earningsBreakdown?.netAmount ?? payout.amount,
       currency: payout.currency || 'AED',
       method: payout.method,
       action: 'PAYOUT_INITIATED',

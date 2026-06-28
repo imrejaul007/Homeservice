@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw,
@@ -41,6 +42,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface ReconciliationItem {
   id: string;
@@ -129,126 +133,11 @@ export const ReconciliationEngine: React.FC<ReconciliationEngineProps> = ({
         setItems(response.data.data.items || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setItems([
-          {
-            id: 'rec-001',
-            type: 'payment',
-            status: 'matched',
-            amount: 450,
-            currency: 'AED',
-            platformRef: 'PAY-2024-001',
-            externalRef: 'STR-123456',
-            customerName: 'Ahmed Hassan',
-            description: 'Home cleaning service',
-            platformDate: new Date().toISOString(),
-            discrepancy: 0
-          },
-          {
-            id: 'rec-002',
-            type: 'payout',
-            status: 'mismatch',
-            amount: 1200,
-            currency: 'AED',
-            platformRef: 'PO-2024-045',
-            externalRef: 'BANK-789012',
-            providerName: 'Elite Cleaners',
-            description: 'Weekly payout',
-            platformDate: new Date().toISOString(),
-            discrepancy: 15.50,
-            discrepancyReason: 'Bank processing fee not reflected'
-          },
-          {
-            id: 'rec-003',
-            type: 'refund',
-            status: 'pending',
-            amount: 220,
-            currency: 'AED',
-            platformRef: 'REF-2024-089',
-            externalRef: 'PENDING',
-            customerName: 'Sarah Khan',
-            providerName: 'Professional Plumbers',
-            description: 'Service cancellation refund',
-            platformDate: new Date(Date.now() - 3600000).toISOString()
-          },
-          {
-            id: 'rec-004',
-            type: 'commission',
-            status: 'matched',
-            amount: 45,
-            currency: 'AED',
-            platformRef: 'COMM-2024-156',
-            externalRef: 'COMM-STR-456',
-            providerName: 'Garden Experts',
-            description: 'Platform commission',
-            platformDate: new Date(Date.now() - 7200000).toISOString()
-          },
-          {
-            id: 'rec-005',
-            type: 'dispute',
-            status: 'resolved',
-            amount: 350,
-            currency: 'AED',
-            platformRef: 'DSP-2024-023',
-            externalRef: 'DSP-STR-789',
-            customerName: 'Omar Ali',
-            providerName: 'Quality Painters',
-            description: 'Partial refund for incomplete work',
-            platformDate: new Date(Date.now() - 10800000).toISOString(),
-            resolvedBy: 'admin@nilin.com',
-            resolvedAt: new Date(Date.now() - 3600000).toISOString()
-          },
-          {
-            id: 'rec-006',
-            type: 'payment',
-            status: 'matched',
-            amount: 890,
-            currency: 'AED',
-            platformRef: 'PAY-2024-002',
-            externalRef: 'STR-123457',
-            customerName: 'Fatima Al-Said',
-            description: 'Electrical repairs',
-            platformDate: new Date(Date.now() - 14400000).toISOString()
-          }
-        ]);
-        setStats({
-          totalTransactions: 2847,
-          matched: 2654,
-          mismatched: 89,
-          pending: 67,
-          resolved: 37,
-          totalAmount: 1245890,
-          discrepancyAmount: 4567.89,
-          matchRate: 93.2,
-          avgResolutionTime: 4.5,
-          trend: [
-            { date: 'Mon', matched: 380, mismatched: 12 },
-            { date: 'Tue', matched: 395, mismatched: 15 },
-            { date: 'Wed', matched: 412, mismatched: 10 },
-            { date: 'Thu', matched: 388, mismatched: 18 },
-            { date: 'Fri', matched: 425, mismatched: 14 },
-            { date: 'Sat', matched: 356, mismatched: 11 },
-            { date: 'Sun', matched: 298, mismatched: 9 }
-          ],
-          byType: [
-            { type: 'Payment', count: 1890, amount: 892450, color: '#3B82F6' },
-            { type: 'Payout', count: 456, amount: 234560, color: '#10B981' },
-            { type: 'Refund', count: 234, amount: 45678, color: '#F59E0B' },
-            { type: 'Commission', count: 189, amount: 67890, color: '#8B5CF6' },
-            { type: 'Dispute', count: 78, amount: 2312, color: '#EF4444' }
-          ],
-          recentDiscrepancies: [
-            { type: 'Bank fees', count: 23, avgAmount: 15.50 },
-            { type: 'Currency conversion', count: 18, avgAmount: 12.30 },
-            { type: 'Timing differences', count: 31, avgAmount: 8.45 },
-            { type: 'Chargebacks', count: 17, avgAmount: 156.78 }
-          ]
-        });
-        setLastRun(new Date().toISOString());
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching reconciliation data:', err);
-      setError('Failed to load reconciliation data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -265,6 +154,7 @@ export const ReconciliationEngine: React.FC<ReconciliationEngineProps> = ({
   };
 
   const handleAutoReconcile = async () => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setAutoReconcileLoading(true);
     try {
       // Simulate auto-reconciliation
@@ -276,6 +166,7 @@ export const ReconciliationEngine: React.FC<ReconciliationEngineProps> = ({
   };
 
   const handleMarkResolved = async (itemId: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(itemId);
     try {
       await api.patch(`/admin/reconciliation/${itemId}`, { status: 'resolved' });
@@ -351,7 +242,8 @@ export const ReconciliationEngine: React.FC<ReconciliationEngineProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={handleAutoReconcile}
-            disabled={autoReconcileLoading}
+            disabled={WIDGET_MUTATIONS_READ_ONLY || autoReconcileLoading}
+            title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Run auto-reconciliation'}
             className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl hover:shadow-md transition-colors text-sm font-medium"
           >
             {autoReconcileLoading ? (
@@ -583,7 +475,8 @@ export const ReconciliationEngine: React.FC<ReconciliationEngineProps> = ({
                     {item.status === 'mismatch' && (
                       <button
                         onClick={() => handleMarkResolved(item.id)}
-                        disabled={actionLoading === item.id}
+                        disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === item.id}
+                        title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Mark resolved'}
                         className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors text-sm font-medium"
                       >
                         {actionLoading === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Resolve'}

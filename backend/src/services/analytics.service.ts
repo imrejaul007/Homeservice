@@ -8,6 +8,7 @@ import { geographicLookupStages, DEFAULT_BOOKING_CITY, DEFAULT_BOOKING_COUNTRY }
 import logger from '../utils/logger';
 import { cache, ANALYTICS_CACHE_TTL } from '../config/redis';
 import { withCache } from '../utils/queryOptimizer';
+import { eventBus, EventTypes } from '../events/eventBus';
 
 // ============================================
 // Analytics Types
@@ -132,6 +133,11 @@ export class AnalyticsService {
     LONG: 600,    // 10 minutes
   };
 
+  constructor() {
+    // Auto-invalidate analytics cache when bookings change
+    this.initCacheInvalidationListener();
+  }
+
   /**
    * Get comprehensive dashboard metrics
    */
@@ -236,7 +242,7 @@ export class AnalyticsService {
           $group: {
             _id: null,
             count: { $sum: 1 },
-            total: { $sum: '$pricing.totalAmount' },
+            total: { $sum: '$pricing.platformAmount' },
           },
         },
       ]),
@@ -305,8 +311,23 @@ export class AnalyticsService {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const [totalProviders, activeProviders, pendingProviders, newThisMonth, avgRating] = await Promise.all([
-      User.countDocuments({ role: 'provider' }),
+    // Import ProviderProfile for accurate provider counting
+    const ProviderProfile = mongoose.model('ProviderProfile');
+
+    const [totalProviders, verifiedProviders, recentlyActiveProviders, pendingProviders, newThisMonth, avgRating] = await Promise.all([
+      // Canonical provider count: verified, active, not deleted
+      ProviderProfile.countDocuments({
+        isDeleted: false,
+        'verificationStatus.overall': 'approved',
+        isActive: true,
+      }),
+      // Canonical definition: verified and active providers
+      ProviderProfile.countDocuments({
+        'verificationStatus.overall': 'approved',
+        isActive: true,
+        isDeleted: { $ne: true },
+      }),
+      // Recently active: providers with recent activity
       User.countDocuments({
         role: 'provider',
         updatedAt: { $gte: thirtyDaysAgo },
@@ -327,9 +348,10 @@ export class AnalyticsService {
 
     return {
       total: totalProviders,
-      active: activeProviders,
+      active: verifiedProviders,  // Canonical: verified + active providers
       pending: pendingProviders,
       newThisMonth,
+      recentlyActive: recentlyActiveProviders,  // Additional metric
       averageRating: avgRating[0]?.avgRating || 0,
     };
   }
@@ -398,7 +420,7 @@ export class AnalyticsService {
         {
           $group: {
             _id: dateUnit,
-            revenue: { $sum: '$pricing.totalAmount' },
+            revenue: { $sum: '$pricing.platformAmount' },
             bookings: { $sum: 1 },
             customers: { $addToSet: '$customerId' },
             providers: { $addToSet: '$providerId' },
@@ -630,6 +652,7 @@ export class AnalyticsService {
 
   /**
    * Get conversion funnel data
+   * FIX #8: Track unique customers instead of just counting bookings
    */
   async getConversionFunnel(startDate: Date, endDate: Date): Promise<FunnelStep[]> {
     const cacheKey = `analytics:funnel:${startDate.toISOString()}:${endDate.toISOString()}`;
@@ -643,6 +666,7 @@ export class AnalyticsService {
         completed: 'Completed',
       };
 
+      // FIX #8: Use $addToSet to count unique customers instead of just bookings
       const counts = await Booking.aggregate([
         {
           $match: {
@@ -652,12 +676,23 @@ export class AnalyticsService {
         {
           $group: {
             _id: '$status',
-            count: { $sum: 1 },
+            // Count unique booking IDs to avoid duplicates
+            bookingCount: { $sum: 1 },
+            // Track unique customers per status
+            uniqueCustomers: { $addToSet: '$customerId' },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            bookingCount: 1,
+            // Return count of unique customers
+            uniqueCustomerCount: { $size: '$uniqueCustomers' },
           },
         },
       ]);
 
-      const countMap = new Map(counts.map(c => [c._id, c.count]));
+      const countMap = new Map(counts.map(c => [c._id, c.uniqueCustomerCount || c.bookingCount]));
       const funnelSteps: FunnelStep[] = [];
       let previousCount = 0;
 
@@ -821,6 +856,40 @@ export class AnalyticsService {
       logger.info('Analytics cache cleared', { keysDeleted: keys.length });
     } catch (error) {
       logger.error('Failed to clear analytics cache', { error });
+    }
+  }
+
+  /**
+   * Subscribe to booking events to invalidate analytics cache automatically
+   * When a booking is created, completed, cancelled, or otherwise changed,
+   * the cached analytics (dashboard, time series, trends, funnels, etc.)
+   * become stale. This listener flushes them so subsequent reads are fresh.
+   */
+  private initCacheInvalidationListener(): void {
+    const BOOKING_EVENTS = [
+      EventTypes.BOOKING_CREATED,
+      EventTypes.BOOKING_CONFIRMED,
+      EventTypes.BOOKING_COMPLETED,
+      EventTypes.BOOKING_CANCELLED,
+      EventTypes.BOOKING_NO_SHOW,
+    ];
+
+    for (const eventType of BOOKING_EVENTS) {
+      eventBus.subscribe(eventType, async (event) => {
+        try {
+          await this.clearCache();
+          logger.debug('Analytics cache invalidated due to booking event', {
+            eventType,
+            eventId: event.id,
+          });
+        } catch (error) {
+          logger.error('Failed to invalidate analytics cache on booking event', {
+            eventType,
+            eventId: event.id,
+            error,
+          });
+        }
+      });
     }
   }
 

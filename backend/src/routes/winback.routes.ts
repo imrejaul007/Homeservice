@@ -6,6 +6,7 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { body, query, param, validationResult } from 'express-validator';
+import rateLimit from 'express-rate-limit';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
@@ -19,6 +20,16 @@ import {
 } from '../automation/winBackCampaign';
 
 const router = Router();
+
+// Rate limiter for tracking endpoint (unauthenticated, so needs protection)
+const trackingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 requests per minute per IP (tracking is lightweight)
+  message: {
+    success: false,
+    message: 'Too many tracking requests, please try again later'
+  }
+});
 
 /**
  * GET /api/winback/stats
@@ -217,9 +228,12 @@ router.post(
 /**
  * POST /api/winback/:campaignId/track
  * Track campaign engagement
+ * NOTE: Intentionally unauthenticated - called by email clients/browsers for tracking
+ * Uses MongoDB ObjectId validation and rate limiting to prevent abuse
  */
 router.post(
   '/:campaignId/track',
+  trackingLimiter,
   [
     param('campaignId').isMongoId().withMessage('Valid campaign ID required'),
     body('action').isIn(['open', 'click']).withMessage('Action must be open or click'),

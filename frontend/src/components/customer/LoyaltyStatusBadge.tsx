@@ -15,7 +15,7 @@ import { useAuthStore } from '../../stores/authStore';
 // Types
 // =============================================================================
 
-export type LoyaltyTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
+export type LoyaltyTier = 'bronze' | 'silver' | 'gold' | 'platinum';
 
 export interface LoyaltyBenefits {
   tier: LoyaltyTier;
@@ -87,16 +87,16 @@ const LOYALTY_TIERS: Record<LoyaltyTier, LoyaltyBenefits> = {
     tier: 'gold',
     name: 'Gold',
     minPoints: 5000,
-    maxPoints: 14999,
+    maxPoints: 9999,
     benefits: [
-      '15% discount on all bookings',
-      'VIP birthday package',
-      'Dedicated support line',
+      'Earn 2 points per AED 10 spent',
+      '15% off on your birthday',
+      'Premium customer support',
       'First access to new features',
-      'Quarterly free add-ons',
+      'Free delivery on all bookings',
       'Exclusive Gold events access',
     ],
-    bonusMultiplier: 1.5,
+    bonusMultiplier: 2,
     color: 'text-yellow-600',
     bgColor: 'bg-yellow-50',
     borderColor: 'border-yellow-400',
@@ -105,43 +105,22 @@ const LOYALTY_TIERS: Record<LoyaltyTier, LoyaltyBenefits> = {
   platinum: {
     tier: 'platinum',
     name: 'Platinum',
-    minPoints: 15000,
-    maxPoints: 49999,
+    minPoints: 10000,
+    maxPoints: Infinity,
     benefits: [
-      '20% discount on all bookings',
-      'Premium birthday experience',
-      '24/7 concierge support',
-      'Complimentary priority bookings',
-      'Monthly free service credits',
-      'Private events access',
+      'Earn 3 points per AED 10 spent',
+      '20% off on your birthday',
+      'VIP concierge support',
+      'Guaranteed availability',
+      'Free premium service upgrades',
+      'Platinum-exclusive experiences',
       'Personal account manager',
     ],
-    bonusMultiplier: 2,
+    bonusMultiplier: 3,
     color: 'text-slate-700',
     bgColor: 'bg-gradient-to-br from-slate-100 to-slate-50',
     borderColor: 'border-slate-400',
     icon: <Crown className="h-4 w-4" />,
-  },
-  diamond: {
-    tier: 'diamond',
-    name: 'Diamond',
-    minPoints: 50000,
-    maxPoints: Infinity,
-    benefits: [
-      '25% discount on all bookings',
-      'Luxury birthday experience',
-      'White-glove concierge service',
-      'Guaranteed availability',
-      'Significant monthly credits',
-      'VIP event invitations',
-      'Personal lifestyle manager',
-      'Customized service packages',
-    ],
-    bonusMultiplier: 3,
-    color: 'text-sky-600',
-    bgColor: 'bg-gradient-to-br from-sky-50 via-slate-50 to-white',
-    borderColor: 'border-sky-400',
-    icon: <Sparkles className="h-4 w-4" />,
   },
 };
 
@@ -171,7 +150,7 @@ const TierProgress: React.FC<TierProgressProps> = ({
           <span className="font-semibold text-sky-700">Maximum Tier Reached!</span>
         </div>
         <p className="text-sm text-sky-600">
-          You've reached Diamond status. Enjoy all exclusive benefits!
+          You've reached Platinum status — the highest tier! Enjoy all VIP benefits.
         </p>
       </div>
     );
@@ -278,12 +257,9 @@ export const LoyaltyStatusBadge: React.FC<LoyaltyStatusBadgeProps> = ({
     let tier: LoyaltyTier = 'bronze';
     let next: LoyaltyTier | null = 'silver';
 
-    if (points >= 50000) {
-      tier = 'diamond';
-      next = null;
-    } else if (points >= 15000) {
+    if (points >= 10000) {
       tier = 'platinum';
-      next = 'diamond';
+      next = null;
     } else if (points >= 5000) {
       tier = 'gold';
       next = 'platinum';

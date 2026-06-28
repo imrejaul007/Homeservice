@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { Mail, ArrowLeft, CheckCircle, AlertCircle } from 'lucide-react';
+import CaptchaWidget from './CaptchaWidget';
 
 // Validation schema
 const forgotPasswordSchema = z.object({
@@ -18,6 +19,8 @@ type ForgotPasswordForm = z.infer<typeof forgotPasswordSchema>;
 const ForgotPassword: React.FC = () => {
   const [isSuccess, setIsSuccess] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaRequired, setCaptchaRequired] = useState(false);
   
   const { forgotPassword, isLoading, errors, clearErrors } = useAuthStore();
 
@@ -44,12 +47,15 @@ const ForgotPassword: React.FC = () => {
     try {
       clearErrors();
       
-      await forgotPassword(data.email);
+      await forgotPassword(data.email, captchaToken ?? undefined);
       
       setSubmittedEmail(data.email);
       setIsSuccess(true);
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Request failed');
+      if (error.message.toLowerCase().includes('captcha')) {
+        setCaptchaRequired(true);
+      }
       setError('root', { type: 'server', message: error.message });
     }
   };
@@ -57,7 +63,7 @@ const ForgotPassword: React.FC = () => {
   const handleResend = async () => {
     if (submittedEmail) {
       try {
-        await forgotPassword(submittedEmail);
+        await forgotPassword(submittedEmail, captchaToken ?? undefined);
       } catch (error) {
         console.error('Resend failed:', error);
       }
@@ -66,7 +72,7 @@ const ForgotPassword: React.FC = () => {
 
   if (isSuccess) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+      <div className="min-h-screen bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
         <div className="sm:mx-auto sm:w-full sm:max-w-md">
           <div className="flex justify-center">
             <div className="rounded-full bg-green-100 p-3">
@@ -142,7 +148,7 @@ const ForgotPassword: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="flex justify-center">
           <div className="rounded-full bg-nilin-rose/20 p-3">
@@ -186,6 +192,8 @@ const ForgotPassword: React.FC = () => {
                 <p className="mt-1 text-sm text-red-500">{formErrors.email.message}</p>
               )}
             </div>
+
+            <CaptchaWidget onToken={setCaptchaToken} className="mt-4" />
 
             {/* Submit Button */}
             <div>

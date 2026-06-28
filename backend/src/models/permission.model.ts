@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import logger from '../utils/logger';
 
 export interface IPermission extends Document {
   name: string;
@@ -114,7 +115,7 @@ export const seedRoles = async () => {
       { upsert: true, new: true }
     );
   }
-  console.log('Roles seeded');
+  logger.info('Roles seeded', { context: 'Permission' });
 };
 
 export default { Permission, Role, seedRoles, PERMISSIONS, DEFAULT_ROLES };

@@ -89,13 +89,18 @@ export const earnCashback = async (
       return { success: false, error: 'Cashback amount is zero or negative' };
     }
 
+    // FIX: Use findOneAndUpdate for atomic upsert to prevent race condition duplicates
     if (sourceId) {
-      const existing = await Cashback.findOne({
-        userId,
-        source,
-        sourceId,
-        isDeleted: false,
-      }).lean();
+      const existing = await Cashback.findOneAndUpdate(
+        {
+          userId,
+          source,
+          sourceId,
+          isDeleted: false,
+        },
+        { $setOnInsert: {} }, // Will be ignored if doc exists
+        { new: false, upsert: false }
+      );
 
       if (existing) {
         logger.info('Cashback already awarded — skipping duplicate', {

@@ -1,30 +1,87 @@
 // Referral Share Component - Viral growth
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Gift, Share2, Copy, Check, MessageCircle, Users, Clock, TrendingUp } from 'lucide-react';
 import { useReferralStore, shareToPlatform, calculateReferralReward, getDeepLink } from '../../services/marketplace/ReferralService';
 import { analytics } from '../../services/product/AnalyticsService';
 import { formatReferralReward } from '../../utils/currency';
 import toast from 'react-hot-toast';
+import authService from '../../services/AuthService';
 
 interface ReferralShareProps {
   compact?: boolean;
 }
 
-// Mock friend avatars for social proof (in production, these would be real user avatars)
-const FRIEND_AVATARS = [
-  { initials: 'AK', color: 'bg-blue-500' },
-  { initials: 'PS', color: 'bg-green-500' },
-  { initials: 'MR', color: 'bg-purple-500' },
-  { initials: 'JD', color: 'bg-orange-500' },
-  { initials: 'ST', color: 'bg-pink-500' },
+// Types for referred friends from API
+interface ReferredFriend {
+  name: string;
+  joinedAt: string;
+}
+
+// Color palette for avatar backgrounds
+const AVATAR_COLORS = [
+  'bg-blue-500',
+  'bg-green-500',
+  'bg-purple-500',
+  'bg-orange-500',
+  'bg-pink-500',
+  'bg-cyan-500',
+  'bg-amber-500',
+  'bg-rose-500',
+  'bg-indigo-500',
+  'bg-teal-500',
 ];
+
+// Generate initials from name
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+// Get consistent color for a name (for avatar display)
+function getAvatarColor(name: string): string {
+  const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
 
 export function ReferralShare({ compact = false }: ReferralShareProps) {
   const { referralCode, referrals } = useReferralStore();
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number>(24 * 60 * 60 * 1000); // 24h in ms
+  const [referredFriends, setReferredFriends] = useState<ReferredFriend[]>([]);
+  const [loadingFriends, setLoadingFriends] = useState(false);
+
+  // Fetch real referred friends from API
+  const fetchReferredFriends = useCallback(async () => {
+    setLoadingFriends(true);
+    try {
+      const response = await authService.get<{
+        success: boolean;
+        data: {
+          recentReferrals?: ReferredFriend[];
+          totalReferrals: number;
+          successfulReferrals: number;
+        };
+      }>('/referrals/stats');
+
+      if (response.success && response.data?.recentReferrals) {
+        setReferredFriends(response.data.recentReferrals);
+      }
+    } catch (error) {
+      console.error('Failed to fetch referred friends:', error);
+      // Silently fail - will fall back to empty array
+    } finally {
+      setLoadingFriends(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchReferredFriends();
+  }, [fetchReferredFriends]);
 
   const referralCount = referrals.filter((r: { status: string }) => r.status === 'completed').length;
   const totalEarned = referrals.filter((r: { status: string }) => r.status === 'rewarded')
@@ -36,8 +93,8 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
   const progressToNext = Math.min(100, Math.round((referralCount / nextTierThreshold) * 100));
   const creditsToNextTier = (nextTierThreshold - referralCount) * 100;
 
-  // Social proof: show "X friends joined" (mock data + real referrals)
-  const socialProofCount = Math.max(5, referralCount + 5); // Always show at least 5
+  // Social proof: show "X friends joined"
+  const socialProofCount = referralCount;
 
   // Countdown timer for urgency
   useEffect(() => {
@@ -106,7 +163,7 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
             </div>
             <div>
               <p className="text-sm font-semibold text-nilin-charcoal">Invite friends</p>
-              <p className="text-xs text-nilin-warmGray">Earn ₹100 per referral</p>
+              <p className="text-xs text-nilin-warmGray">Earn 500 coins per referral</p>
             </div>
           </div>
 
@@ -156,22 +213,49 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
 
         {/* Social Proof - Friend avatars */}
         <div className="flex items-center gap-2 mb-4">
-          {/* Friend avatars */}
+          {/* Friend avatars - show real referred friends or placeholder */}
           <div className="flex -space-x-2">
-            {FRIEND_AVATARS.slice(0, 4).map((avatar, index) => (
-              <div
-                key={index}
-                className={`w-8 h-8 rounded-full ${avatar.color} flex items-center justify-center text-white text-xs font-bold border-2 border-white`}
-              >
-                {avatar.initials}
+            {referredFriends.length > 0 ? (
+              // Show real referred friends
+              referredFriends.slice(0, 4).map((friend, index) => (
+                <div
+                  key={index}
+                  className={`w-8 h-8 rounded-full ${getAvatarColor(friend.name)} flex items-center justify-center text-white text-xs font-bold border-2 border-white`}
+                  title={friend.name}
+                >
+                  {getInitials(friend.name)}
+                </div>
+              ))
+            ) : (
+              // Show placeholder avatars when no referrals yet
+              <>
+                {[0, 1, 2, 3].map((index) => (
+                  <div
+                    key={index}
+                    className="w-8 h-8 rounded-full bg-nilin-warmGray/40 flex items-center justify-center text-white text-xs font-bold border-2 border-white"
+                  >
+                    <Users className="w-4 h-4 opacity-50" />
+                  </div>
+                ))}
+              </>
+            )}
+            {/* Show count of total referred friends */}
+            {referredFriends.length > 4 && (
+              <div className="w-8 h-8 rounded-full bg-nilin-warmGray flex items-center justify-center text-white text-xs font-bold border-2 border-white">
+                +{referredFriends.length - 4}
               </div>
-            ))}
-            <div className="w-8 h-8 rounded-full bg-nilin-warmGray flex items-center justify-center text-white text-xs font-bold border-2 border-white">
-              +{socialProofCount - 4}
-            </div>
+            )}
           </div>
           <p className="text-sm text-nilin-charcoal font-medium">
-            <span className="text-nilin-coral font-bold">{socialProofCount}</span> friends joined this week!
+            {referredFriends.length > 0 ? (
+              <>
+                <span className="text-nilin-coral font-bold">{referredFriends.length}</span> friends joined!
+              </>
+            ) : (
+              <>
+                <span className="text-nilin-coral font-bold">{socialProofCount}</span> friends joined this week!
+              </>
+            )}
           </p>
         </div>
 
@@ -195,7 +279,7 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
             />
           </div>
           <p className="text-xs text-nilin-warmGray mt-1.5">
-            Invite {creditsToNextTier > 0 ? creditsToNextTier : 0} more friends to unlock ₹{nextTierThreshold >= 10 ? 150 : nextTierThreshold >= 5 ? 150 : 100} per referral!
+            Invite {creditsToNextTier > 0 ? creditsToNextTier : 0} more friends to reach your next referral milestone!
           </p>
         </div>
 
@@ -206,12 +290,12 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
             <div className="text-xs text-nilin-warmGray">Friends</div>
           </div>
           <div className="bg-white/60 backdrop-blur-sm rounded-xl p-3 text-center">
-            <div className="text-xl font-bold text-green-600">₹{totalEarned}</div>
-            <div className="text-xs text-nilin-warmGray">Earned</div>
+            <div className="text-xl font-bold text-green-600">{totalEarned.toLocaleString()}</div>
+            <div className="text-xs text-nilin-warmGray">Coins Earned</div>
           </div>
           <div className="bg-white/60 backdrop-blur-sm rounded-xl p-3 text-center">
-            <div className="text-xl font-bold text-nilin-coral">₹{potentialEarnings}</div>
-            <div className="text-xs text-nilin-warmGray">Potential</div>
+            <div className="text-xl font-bold text-nilin-coral">{potentialEarnings.toLocaleString()}</div>
+            <div className="text-xs text-nilin-warmGray">Potential Coins</div>
           </div>
         </div>
 

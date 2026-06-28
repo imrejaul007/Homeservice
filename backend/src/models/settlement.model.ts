@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema, Model, Types } from 'mongoose';
+import logger from '../utils/logger';
 
 export interface ISettlement extends Document {
   _id: Types.ObjectId;
@@ -496,7 +497,11 @@ async function getProviderCommissionRate(providerId: string | Types.ObjectId): P
     }
   } catch (error) {
     // Subscription model might not be registered, use default
-    console.warn(`Could not fetch subscription for provider ${providerId}, using default commission rate`);
+    logger.warn('Could not fetch subscription for provider, using default commission rate', {
+      context: 'Settlement',
+      providerId: String(providerId),
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
   return DEFAULT_COMMISSION_RATE;
 }

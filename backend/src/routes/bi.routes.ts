@@ -735,12 +735,21 @@ router.get('/health', authenticate, requireRole('admin'), asyncHandler(async (_r
   const customerHealth = totalCustomers > 0 ? (activeCustomers / totalCustomers) * 100 : 0;
 
   // Get provider metrics
-  const [activeProviders, totalProviders] = await Promise.all([
+  const ProviderProfile = require('../models/providerProfile.model').default;
+
+  const [canonicalActiveProviders, recentlyBookedProviders, totalProviders] = await Promise.all([
+    // Canonical definition: verified + active + not deleted
+    ProviderProfile.countDocuments({
+      'verificationStatus.overall': 'approved',
+      isActive: true,
+      isDeleted: { $ne: true },
+    }),
+    // Recently booked: providers who completed bookings in last 30 days (for health metric)
     Booking.distinct('providerId', { status: 'completed', createdAt: { $gte: thirtyDaysAgo } }),
     User.countDocuments({ role: 'provider' }),
   ]);
 
-  const providerHealth = totalProviders > 0 ? (activeProviders.length / totalProviders) * 100 : 0;
+  const providerHealth = totalProviders > 0 ? (recentlyBookedProviders.length / totalProviders) * 100 : 0;
 
   // Calculate overall health score (weighted average)
   const bookingScore = Math.min(100, Math.max(0, 50 + bookingTrend * 2));
@@ -843,7 +852,7 @@ router.get('/health', authenticate, requireRole('admin'), asyncHandler(async (_r
         score: Math.round(providerScore),
         trend: providerHealth > 50 ? 'improving' : providerHealth < 30 ? 'declining' : 'stable',
         metrics: {
-          active: activeProviders.length,
+          active: canonicalActiveProviders,
           total: totalProviders,
           engagementRate: Math.round(providerHealth * 10) / 10,
         },

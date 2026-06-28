@@ -39,7 +39,7 @@ import {
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
 import { useToastActions } from '../common/Toast';
-import { AdminReview, AdminReviewStats, getReviewDisplayStatus } from '../../services/adminReviewApi';
+import { adminReviewApi, AdminReview, AdminReviewStats, getReviewDisplayStatus } from '../../services/adminReviewApi';
 
 /**
  * REWRITTEN: This component now uses the existing review moderation system
@@ -123,23 +123,18 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
     try {
       setError(null);
 
-      // Fetch flagged reviews (those with reportCount > 0)
-      // We'll fetch all reviews and filter client-side for now
-      // TODO: Add backend endpoint /admin/reviews/flagged that filters by reportCount
+      // Fetch flagged reviews using the dedicated endpoint
       const [reviewsResponse, statsResponse] = await Promise.all([
-        api.get('/admin/reviews', {
-          params: { page: 1, limit: 100, status: 'all' }
-        }),
+        api.get('/admin/reviews/flagged'),
         api.get('/admin/reviews/stats')
       ]);
 
       if (reviewsResponse.data?.success && statsResponse.data?.success) {
-        const allReviews: AdminReview[] = reviewsResponse.data.data.reviews || [];
+        const flaggedReviewsData: AdminReview[] = reviewsResponse.data.data?.reviews || [];
         const rawStats = statsResponse.data.data;
 
-        // Filter to only flagged reviews (reportCount > 0)
-        const flaggedReviews: FlaggedReview[] = allReviews
-          .filter(r => r.reportCount > 0)
+        // Transform to FlaggedReview type
+        const flaggedReviews: FlaggedReview[] = flaggedReviewsData
           .map(r => ({
             ...r,
             flagReasons: computeFlagReasons(r),
@@ -169,7 +164,7 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
 
         setStats(flaggedStats);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching review flags:', err);
       if (isMountedRef.current) {
         setError(err.response?.data?.message || 'Failed to load flagged reviews');
@@ -198,12 +193,12 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
   const handleModerate = async (reviewId: string, action: 'approve' | 'reject' | 'hide' | 'delete') => {
     setActionLoading(reviewId);
     try {
-      await api.patch(`/admin/reviews/${reviewId}/moderate`, { action });
+      await adminReviewApi.moderate(reviewId, action);
       toast.success('Review moderated', `Action '${action}' completed`);
       await fetchData(); // Refresh data
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error moderating review:', err);
-      toast.error('Moderation failed', err.response?.data?.message || 'Please try again');
+      toast.error('Moderation failed', { description: err.response?.data?.message || 'Please try again' });
     } finally {
       setActionLoading(null);
     }

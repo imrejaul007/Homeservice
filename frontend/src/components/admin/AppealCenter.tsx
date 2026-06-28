@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   FileText,
@@ -37,6 +38,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface Appeal {
   id: string;
@@ -150,132 +154,10 @@ export const AppealCenter: React.FC<AppealCenterProps> = ({
         setAppeals(response.data.data.appeals || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setAppeals([
-          {
-            id: 'appeal-001',
-            appealNumber: 'APL-2024-001',
-            type: 'provider_suspension',
-            status: 'under_review',
-            priority: 'high',
-            appellantId: 'prov-001',
-            appellantName: 'Ahmed Hassan',
-            appellantEmail: 'ahmed@email.com',
-            appellantType: 'provider',
-            subject: 'Suspension Appeal - Review Manipulation Accusation',
-            description: 'I am appealing my suspension as I believe the reviews flagged as suspicious were from genuine customers. I have been providing quality service on this platform for over 2 years with a 4.8 average rating. The flagged reviews came from verified bookings and I can provide evidence of service completion for each one.',
-            originalDecision: 'Account suspended for 14 days due to suspected fake review activity',
-            originalDecisionDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            submittedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            evidence: [
-              { id: 'ev-1', type: 'document', name: 'Service_completion_proof.pdf', url: '#', uploadedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-              { id: 'ev-2', type: 'image', name: 'customer_messages.jpg', url: '#', uploadedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() }
-            ],
-            messages: [
-              { id: 'm1', senderId: 'prov-001', senderName: 'Ahmed Hassan', senderRole: 'appellant', message: 'I have attached proof of service completion for all the flagged reviews. Please review.', timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-              { id: 'm2', senderId: 'admin-001', senderName: 'Admin User', senderRole: 'admin', message: 'Thank you for your submission. We are reviewing your evidence and will get back to you shortly.', timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() }
-            ]
-          },
-          {
-            id: 'appeal-002',
-            appealNumber: 'APL-2024-002',
-            type: 'payout_dispute',
-            status: 'submitted',
-            priority: 'medium',
-            appellantId: 'prov-002',
-            appellantName: 'Sarah Khan',
-            appellantEmail: 'sarah@email.com',
-            appellantType: 'provider',
-            subject: 'Incorrect Payout Calculation',
-            description: 'My payout for June shows AED 3,450 but based on my completed bookings, it should be AED 4,200. There is a discrepancy of AED 750 that I cannot account for.',
-            originalDecision: 'Payout processed as per platform records',
-            originalDecisionDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-            submittedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
-            evidence: [
-              { id: 'ev-3', type: 'screenshot', name: 'booking_history.png', url: '#', uploadedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString() }
-            ],
-            messages: []
-          },
-          {
-            id: 'appeal-003',
-            appealNumber: 'APL-2024-003',
-            type: 'review_removal',
-            status: 'approved',
-            priority: 'low',
-            appellantId: 'cust-001',
-            appellantName: 'Omar Ali',
-            appellantEmail: 'omar@email.com',
-            appellantType: 'customer',
-            subject: 'Request to Remove Defamatory Review',
-            description: 'A customer left a 1-star review claiming I damaged their property, but this is completely false. The inspection report shows no damage was caused. I am requesting the review be removed as it is damaging my business reputation.',
-            originalDecision: 'Review retained as it reflects customer experience',
-            originalDecisionDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-            submittedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewedBy: 'admin@nilin.com',
-            reviewerNote: 'Evidence provided (inspection report) confirms no damage was caused. Review removed.',
-            evidence: [
-              { id: 'ev-4', type: 'document', name: 'inspection_report.pdf', url: '#', uploadedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString() }
-            ],
-            messages: [],
-            decision: {
-              outcome: 'overturned',
-              summary: 'Review has been removed based on the inspection report provided by the appellant.'
-            }
-          },
-          {
-            id: 'appeal-004',
-            appealNumber: 'APL-2024-004',
-            type: 'policy_violation',
-            status: 'rejected',
-            priority: 'high',
-            appellantId: 'prov-003',
-            appellantName: 'Mohammed Ali',
-            appellantEmail: 'mohammed@email.com',
-            appellantType: 'provider',
-            subject: 'Pricing Policy Violation Appeal',
-            description: 'I was fined for charging above the platform rates, but the customer agreed to the higher price before service was provided. I believe this should not be considered a violation since both parties agreed.',
-            originalDecision: 'Fine imposed for pricing policy violation',
-            originalDecisionDate: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString(),
-            submittedAt: new Date(Date.now() - 18 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-            reviewedBy: 'admin@nilin.com',
-            reviewerNote: 'The pricing policy clearly states that providers must charge platform rates. The violation stands.',
-            evidence: [],
-            messages: [],
-            decision: {
-              outcome: 'upheld',
-              summary: 'The original decision is upheld. Providers must adhere to platform pricing regardless of verbal agreements.'
-            }
-          }
-        ]);
-        setStats({
-          totalAppeals: 156,
-          pendingReview: 23,
-          approved: 89,
-          rejected: 34,
-          withdrawn: 10,
-          avgReviewTime: 4.5,
-          approvalRate: 72.4,
-          byType: [
-            { type: 'Provider Suspension', count: 45, color: '#EF4444' },
-            { type: 'Account Termination', count: 23, color: '#DC2626' },
-            { type: 'Review Removal', count: 34, color: '#F59E0B' },
-            { type: 'Payout Dispute', count: 38, color: '#3B82F6' },
-            { type: 'Policy Violation', count: 16, color: '#8B5CF6' }
-          ],
-          trend: [
-            { week: 'Week 1', submitted: 18, resolved: 15 },
-            { week: 'Week 2', submitted: 22, resolved: 20 },
-            { week: 'Week 3', submitted: 25, resolved: 22 },
-            { week: 'Week 4', submitted: 19, resolved: 24 }
-          ],
-          avgResolutionTime: 3.2
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
-      console.error('Error fetching appeals:', err);
-      setError('Failed to load appeals data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -292,6 +174,7 @@ export const AppealCenter: React.FC<AppealCenterProps> = ({
   };
 
   const handleUpdateStatus = async (appealId: string, newStatus: Appeal['status'], note?: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(appealId);
     try {
       await api.patch(`/admin/appeals/${appealId}`, { status: newStatus, reviewerNote: note });
@@ -299,7 +182,7 @@ export const AppealCenter: React.FC<AppealCenterProps> = ({
         a.id === appealId ? { ...a, status: newStatus, reviewedAt: new Date().toISOString() } : a
       ));
     } catch (err) {
-      console.error('Error updating appeal:', err);
+      // Error state is handled by the parent component
     } finally {
       setActionLoading(null);
     }
@@ -573,8 +456,9 @@ export const AppealCenter: React.FC<AppealCenterProps> = ({
                       <>
                         <button
                           onClick={() => handleUpdateStatus(appeal.id, 'under_review')}
-                          disabled={actionLoading === appeal.id}
-                          className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors text-sm font-medium"
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === appeal.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Start review'}
+                          className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Review
                         </button>

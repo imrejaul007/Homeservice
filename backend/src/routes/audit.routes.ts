@@ -19,9 +19,75 @@ const querySchema = Joi.object({
   endDate: Joi.date().iso().optional(),
 });
 
+// Create audit log schema
+const createSchema = Joi.object({
+  action: Joi.string().required(),
+  resource: Joi.string().required(),
+  resourceId: Joi.string().optional(),
+  description: Joi.string().optional(),
+  oldValue: Joi.object().optional(),
+  newValue: Joi.object().optional(),
+  status: Joi.string().valid('success', 'failure').default('success'),
+  metadata: Joi.object().optional(),
+});
+
 // All audit routes require admin authentication
 router.use(authenticate);
 router.use(requireRole('admin'));
+
+// POST /audit - Create a new audit log entry
+router.post('/', asyncHandler(async (req: Request, res: Response) => {
+  const { error, value } = createSchema.validate(req.body);
+  if (error) {
+    res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message,
+      })),
+    });
+    return;
+  }
+
+  const {
+    action,
+    resource,
+    resourceId,
+    description,
+    oldValue,
+    newValue,
+    status,
+    metadata,
+  } = value;
+
+  // Get user from auth middleware
+  const userId = (req as any).user?.id;
+
+  // Get IP address
+  const ipAddress = req.ip || req.socket.remoteAddress;
+
+  const auditLog = new AuditLog({
+    userId,
+    action,
+    resource,
+    resourceId,
+    description,
+    oldValue,
+    newValue,
+    status: status || 'success',
+    ipAddress,
+    userAgent: req.get('User-Agent'),
+    metadata,
+  });
+
+  await auditLog.save();
+
+  res.status(201).json({
+    success: true,
+    data: auditLog,
+  });
+}));
 
 // GET /audit - List audit logs with filtering and pagination
 router.get('/', asyncHandler(async (req: Request, res: Response) => {

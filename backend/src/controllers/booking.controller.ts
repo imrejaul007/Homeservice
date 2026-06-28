@@ -19,6 +19,15 @@ import {
 import { LOCATION_TYPES, OBJECT_ID_PATTERN, IDEMPOTENCY_KEY_PATTERN } from '../validation/schemas';
 import { LocationType } from '../interfaces/service.interface';
 
+// Import centralized validation schemas (consolidated)
+import {
+  cancelBookingSchema,
+  acceptBookingSchema,
+  rejectBookingSchema,
+  completeBookingSchema,
+  rescheduleBookingSchema,
+} from '../middleware/validation';
+
 // Email service imports
 import {
   sendBookingConfirmation,
@@ -62,6 +71,11 @@ const customerInfoSchema = Joi.object({
   phone: Joi.string(),
   specialRequests: Joi.string(),
   accessInstructions: Joi.string(),
+});
+
+const markPaymentCompletedSchema = Joi.object({
+  transactionId: Joi.string().max(255).optional(),
+  notes: Joi.string().max(500).optional(),
 });
 
 const addOnSchema = Joi.object({
@@ -173,37 +187,17 @@ const bookingFiltersSchema = Joi.object({
   search: Joi.string().min(1).max(200),
   reviewable: Joi.boolean(),
   city: Joi.string().min(1).max(100),
+  // Price range filters
+  minPrice: Joi.number().min(0),
+  maxPrice: Joi.number().min(0),
 }).options({ stripUnknown: true });
 
-const acceptBookingSchema = Joi.object({
-  notes: Joi.string(),
-  estimatedArrival: Joi.string(),
-});
-
-const rejectBookingSchema = Joi.object({
-  reason: Joi.string(),
-});
-
-const cancelBookingSchema = Joi.object({
-  reason: Joi.string(),
-  // FIX: Add cancellationToken for guest bookings
-  cancellationToken: Joi.string(),
-  email: Joi.string().email(),
-});
-
-const completeBookingSchema = Joi.object({
-  notes: Joi.string(),
-  actualDuration: Joi.number(),
-});
+// Note: acceptBookingSchema, rejectBookingSchema, cancelBookingSchema,
+// completeBookingSchema, and rescheduleBookingSchema are now imported from
+// '../middleware/validation' for consistency
 
 const addMessageSchema = Joi.object({
   message: Joi.string().required().min(1),
-});
-
-const rescheduleBookingSchema = Joi.object({
-  scheduledDate: Joi.string().required(),
-  scheduledTime: Joi.string().required(),
-  reason: Joi.string(),
 });
 
 const reportProviderNoShowSchema = Joi.object({
@@ -272,7 +266,7 @@ const formatBookingForEmail = async (
       Promise.resolve(customer || booking.customer || booking._doc?.customer).then(async (c) => {
         if (c) return c;
         if (booking.customerId) {
-          const customers = await User.find({ _id: booking.customerId }).select('firstName lastName email').lean();
+          const customers = await User.find({ _id: booking.customerId, isDeleted: { $ne: true } }).select('firstName lastName email').lean();
           return customers[0];
         }
         return null;
@@ -589,11 +583,13 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
   }
 
   const customerId = (req.user as IUser)._id.toString();
+  const { cancellationReason } = req.body;
   // FIX: Pass cancellation token and email for guest booking cancellation
   const cancelData = {
     reason: value.reason,
     cancellationToken: value.cancellationToken,
     email: value.email,
+    cancellationReason: cancellationReason || '',
   };
   const result = await bookingService.cancelBooking(id, customerId, cancelData);
 
@@ -969,6 +965,88 @@ export const completeBooking = asyncHandler(async (req: Request, res: Response) 
   });
 });
 
+export const markBookingPaymentCompleted = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    throw new ApiError(403, 'Only providers can mark booking payment as completed');
+  }
+
+  const { id } = req.params;
+  const { error, value } = markPaymentCompletedSchema.validate(req.body || {});
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const providerId = (req.user as IUser)._id.toString();
+
+  // Verify provider owns this booking (IDOR prevention)
+  const bookingCheck = await Booking.findById(id);
+  if (!bookingCheck || bookingCheck.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+  if (bookingCheck.providerId?.toString() !== providerId) {
+    logger.warn('IDOR attempt detected in markBookingPaymentCompleted', {
+      action: 'IDOR_ATTEMPT',
+      bookingId: id,
+      userId: providerId,
+      userRole: 'provider',
+    });
+    throw new ApiError(403, 'Access denied. You do not have permission to update payment for this booking.');
+  }
+
+  const booking = await bookingService.markBookingPaymentCompleted(id, providerId, value);
+
+  res.json({
+    success: true,
+    message: 'Payment marked as completed successfully',
+    data: { booking },
+  });
+});
+
+// ============================================
+// Customer Payment Confirmation (after Stripe webhook)
+// ============================================
+
+export const confirmCustomerPayment = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { paymentIntentId } = req.body;
+
+  const user = req.user as IUser;
+  const userId = user._id.toString();
+
+  // Verify booking exists and belongs to the customer
+  const booking = await Booking.findById(id);
+  if (!booking || booking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // Verify the customer owns this booking
+  if (booking.customerId?.toString() !== userId && !booking.isGuestBooking) {
+    throw new ApiError(403, 'Access denied. You do not have permission to update this booking.');
+  }
+
+  // For guest bookings, verify by email if provided
+  if (booking.isGuestBooking) {
+    const guestEmail = req.body.guestEmail;
+    if (guestEmail && booking.guestInfo?.email !== guestEmail) {
+      throw new ApiError(403, 'Access denied. Guest email does not match.');
+    }
+  }
+
+  // Update payment status
+  const bookingService = require('../services/booking.service').bookingService;
+  const updatedBooking = await bookingService.markBookingPaymentCompleted(
+    id,
+    userId,
+    { transactionId: paymentIntentId }
+  );
+
+  res.json({
+    success: true,
+    message: 'Payment confirmed successfully',
+    data: { booking: updatedBooking },
+  });
+});
+
 // ============================================
 // Communication
 // ============================================
@@ -1084,16 +1162,54 @@ export const createGuestBooking = asyncHandler(async (req: Request, res: Respons
 
 export const trackBooking = asyncHandler(async (req: Request, res: Response) => {
   const { bookingNumber } = req.params;
+  const verificationEmail = typeof req.query.email === 'string' ? req.query.email.trim() : undefined;
 
   if (!bookingNumber) {
     throw new ApiError(400, 'Booking number is required');
   }
 
-  const result = await bookingService.trackBooking(bookingNumber);
+  const result = await bookingService.trackBooking(bookingNumber, { verificationEmail });
 
   res.json({
     success: true,
     data: result,
+  });
+});
+
+/**
+ * GET /api/bookings/:id/tracking
+ * Authenticated booking tracking by booking ID
+ */
+export const getBookingTracking = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user?._id?.toString();
+
+  const booking = await Booking.findById(id).select('bookingNumber customerId providerId status');
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  const isAuthorized =
+    req.user?.role === 'admin' ||
+    booking.customerId?.toString() === userId ||
+    booking.providerId?.toString() === userId;
+
+  if (!isAuthorized) {
+    throw new ApiError(403, 'Not authorized to track this booking');
+  }
+
+  const result = await bookingService.trackBooking(booking.bookingNumber, { includeInternalIds: true });
+
+  res.json({
+    success: true,
+    data: {
+      bookingId: booking._id.toString(),
+      status: result.status,
+      providerLocation: result.providerLocation,
+      etaMinutes: result.etaMinutes,
+      distanceRemaining: result.distanceRemaining,
+      ...result,
+    },
   });
 });
 
@@ -1572,6 +1688,87 @@ export const getProviderBookingCount = asyncHandler(async (req: Request, res: Re
 });
 
 // ============================================
+// Booking Statistics
+// ============================================
+
+/**
+ * Get booking statistics for the authenticated customer
+ * GET /api/bookings/stats
+ * OPTIMIZED: Single aggregation combining status counts and revenue
+ */
+export const getBookingStats = asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req.user as IUser)._id.toString();
+  const { startDate, endDate } = req.query;
+
+  // Build match query
+  const matchQuery: any = {
+    customerId: new mongoose.Types.ObjectId(userId),
+    isDeleted: { $ne: true }
+  };
+
+  // Apply date filters if provided
+  if (startDate) {
+    matchQuery.createdAt = { $gte: new Date(startDate as string) };
+  }
+  if (endDate) {
+    matchQuery.createdAt = {
+      ...matchQuery.createdAt,
+      $lte: new Date(endDate as string)
+    };
+  }
+
+  // OPTIMIZED: Single aggregation that gets both status counts AND revenue
+  const combinedStats = await Booking.aggregate([
+    { $match: matchQuery },
+    { $group: {
+      _id: '$status',
+      count: { $sum: 1 },
+      // Calculate revenue for completed bookings in the same aggregation
+      completedRevenue: {
+        $sum: {
+          $cond: [{ $eq: ['$status', 'completed'] }, '$pricing.totalAmount', 0]
+        }
+      }
+    }}
+  ]);
+
+  // Transform combined stats to flat object
+  const statsMap: Record<string, number> = {
+    total: 0,
+    pending: 0,
+    confirmed: 0,
+    in_progress: 0,
+    completed: 0,
+    cancelled: 0,
+    no_show: 0
+  };
+
+  let totalRevenue = 0;
+
+  combinedStats.forEach(stat => {
+    const status = stat._id as string;
+    const count = stat.count;
+    statsMap[status] = count;
+    statsMap.total += count;
+    totalRevenue += stat.completedRevenue || 0;
+  });
+
+  res.json({
+    success: true,
+    data: {
+      total: statsMap.total,
+      pending: statsMap.pending,
+      confirmed: statsMap.confirmed,
+      in_progress: statsMap.in_progress,
+      completed: statsMap.completed,
+      cancelled: statsMap.cancelled,
+      no_show: statsMap.no_show,
+      revenue: totalRevenue
+    }
+  });
+});
+
+// ============================================
 // Export
 // ============================================
 
@@ -1586,14 +1783,17 @@ export default {
   rejectBooking,
   startBooking,
   completeBooking,
+  markBookingPaymentCompleted,
   addBookingMessage,
   markMessagesAsRead,
   createGuestBooking,
   trackBooking,
+  getBookingTracking,
   rateBooking,
   reportProviderNoShow,
   applyCouponToBooking,
   removeCouponFromBooking,
   getCustomerBookingCount,
   getProviderBookingCount,
+  getBookingStats,
 };

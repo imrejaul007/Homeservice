@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger';
+import { withCircuitBreaker, CIRCUIT_NAMES } from './circuitBreaker.service';
 
 export interface CloudBackupUploadResult {
   url?: string;
@@ -87,21 +88,42 @@ export class AwsS3CloudBackupAdapter implements CloudBackupAdapter {
       throw new Error(`Backup file not found: ${filePath}`);
     }
 
-    // Placeholder until @aws-sdk/client-s3 is added — log intent without failing the job
-    logger.info('S3 backup upload placeholder', {
-      bucket: this.bucket,
-      region: this.region,
-      key,
-      fileSize: fs.statSync(filePath).size,
-      backupStatus: 's3_placeholder',
-      action: 'BACKUP_S3_PLACEHOLDER',
-    });
+    // Wrap upload with circuit breaker for resilience
+    return withCircuitBreaker<CloudBackupUploadResult>(
+      CIRCUIT_NAMES.CLOUDINARY,
+      async () => {
+        // Placeholder until @aws-sdk/client-s3 is added — log intent without failing the job
+        logger.info('S3 backup upload placeholder', {
+          bucket: this.bucket,
+          region: this.region,
+          key,
+          fileSize: fs.statSync(filePath).size,
+          backupStatus: 's3_placeholder',
+          action: 'BACKUP_S3_PLACEHOLDER',
+        });
 
-    return {
-      provider: 'aws-stub',
-      url: `s3://${this.bucket}/${key}`,
-      message: 'S3 adapter stub — file retained locally until SDK integration',
-    };
+        return {
+          provider: 'aws-stub',
+          url: `s3://${this.bucket}/${key}`,
+          message: 'S3 adapter stub — file retained locally until SDK integration',
+        };
+      },
+      // Fallback: keep file locally and queue for retry
+      async () => {
+        logger.warn('S3 circuit breaker open - keeping backup locally', {
+          bucket: this.bucket,
+          key,
+          backupStatus: 'circuit_fallback',
+          action: 'BACKUP_S3_CIRCUIT_FALLBACK',
+        });
+
+        return {
+          provider: 'aws-fallback',
+          skipped: true,
+          message: 'Cloud upload skipped due to service unavailability. File retained locally.',
+        };
+      }
+    );
   }
 }
 

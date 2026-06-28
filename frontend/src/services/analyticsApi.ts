@@ -959,6 +959,149 @@ export const analyticsApi = {
     });
     return response.data.data;
   },
+
+  // Customer-scoped analytics
+  getCustomerBookingFrequency: async (
+    period: string = '30d',
+    customerId?: string,
+  ): Promise<CustomerBookingFrequencyData> => {
+    const response = await api.get('/analytics/customer/booking-frequency', {
+      params: { period, ...(customerId ? { customerId } : {}) },
+    });
+    return response.data.data;
+  },
+
+  getCustomerCategoryDistribution: async (
+    period: string = '90d',
+    customerId?: string,
+  ): Promise<CustomerCategoryDistributionData> => {
+    const response = await api.get('/analytics/customer/category-distribution', {
+      params: { period, ...(customerId ? { customerId } : {}) },
+    });
+    return response.data.data;
+  },
+
+  getCustomerCESHistory: async (customerId?: string): Promise<CustomerCESHistoryData> => {
+    const response = await api.get('/analytics/customer/ces-history', {
+      params: customerId ? { customerId } : undefined,
+    });
+    return response.data.data;
+  },
+
+  submitCustomerCES: async (payload: {
+    score: number;
+    bookingId?: string;
+    serviceId?: string;
+    feedback?: string;
+  }): Promise<void> => {
+    await api.post('/analytics/customer/ces', payload);
+  },
+
+  // Admin analytics
+  getAdminMarketShare: async (
+    period: string = '90d',
+    region: string = 'all',
+  ): Promise<AdminMarketShareData> => {
+    const response = await api.get('/analytics/admin/market-share', {
+      params: { period, region },
+    });
+    return response.data.data;
+  },
+
+  getAdminGrossMargin: async (period: string = '90d'): Promise<AdminGrossMarginData> => {
+    const response = await api.get('/analytics/admin/gross-margin', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getAdminPlatformCAC: async (period: string = '90d'): Promise<AdminPlatformCACData> => {
+    const response = await api.get('/analytics/admin/platform-cac', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getAdminLTVBySegment: async (period: string = '90d'): Promise<AdminLTVBySegmentData> => {
+    const response = await api.get('/analytics/admin/ltv-by-segment', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getAdminViralCoefficient: async (period: string = '30d'): Promise<AdminViralCoefficientData> => {
+    const response = await api.get('/analytics/admin/viral-coefficient', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getAdminTakeRate: async (period: string = '30d'): Promise<AdminTakeRateData> => {
+    const response = await api.get('/analytics/admin/take-rate', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getAdminMarketplaceVelocity: async (period: string = '24h'): Promise<AdminMarketplaceVelocityData> => {
+    const response = await api.get('/analytics/admin/marketplace-velocity', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getCustomerAOVTrend: async (
+    period: string = '30d',
+    customerId?: string,
+  ): Promise<CustomerAOVTrendData> => {
+    const response = await api.get('/analytics/customer/aov-trend', {
+      params: { period, ...(customerId ? { customerId } : {}) },
+    });
+    return response.data.data;
+  },
+
+  getCustomerSeasonalPatterns: async (
+    year?: number,
+    customerId?: string,
+  ): Promise<CustomerSeasonalPatternsData> => {
+    const response = await api.get('/analytics/customer/seasonal-patterns', {
+      params: { year, ...(customerId ? { customerId } : {}) },
+    });
+    return response.data.data;
+  },
+
+  getCustomerNPS: async (): Promise<CustomerNPSData> => {
+    const response = await api.get('/analytics/customer/nps');
+    return response.data.data;
+  },
+
+  submitCustomerNPS: async (payload: {
+    score: number;
+    bookingId?: string;
+    feedback?: string;
+  }): Promise<CustomerNPSData> => {
+    const response = await api.post('/analytics/customer/nps', payload);
+    return response.data.data.stats;
+  },
+
+  getCustomerReferralAttribution: async (
+    customerId?: string,
+  ): Promise<CustomerReferralAttributionData> => {
+    const response = await api.get('/analytics/customer/referral-attribution', {
+      params: customerId ? { customerId } : undefined,
+    });
+    return response.data.data;
+  },
+
+  getProviderNoShowRate: async (
+    period: string = '30d',
+    providerId?: string,
+  ): Promise<ProviderNoShowRateData> => {
+    const response = await api.get('/analytics/provider/no-show-rate', {
+      params: { period, ...(providerId ? { providerId } : {}) },
+    });
+    return response.data.data;
+  },
 };
 
 // ============================================
@@ -1573,6 +1716,329 @@ export interface GeographicAnalytics {
   };
 }
 
+export interface CustomerBookingFrequencyData {
+  customerId: string;
+  totalBookings: number;
+  bookingsByPeriod: {
+    week: number;
+    month: number;
+    quarter: number;
+    year: number;
+  };
+  averageBookingsPerMonth: number;
+  trend: number;
+  trendDirection: 'up' | 'down' | 'stable';
+  mostActiveDay: string;
+  peakHours: string;
+  favoriteCategories: string[];
+  timeSeries: Array<{
+    date: string;
+    bookings: number;
+    revenue: number;
+    avgValue: number;
+  }>;
+}
+
+export interface CustomerCategoryDistributionData {
+  customerId: string;
+  categories: Array<{
+    categoryId: string;
+    categoryName: string;
+    totalSpent: number;
+    bookingCount: number;
+    percentage: number;
+  }>;
+  totalSpent: number;
+  diversification: number;
+  topCategory: string;
+  monthlyTrend: Array<Record<string, string | number>>;
+}
+
+export interface CustomerCESHistoryData {
+  customerId: string;
+  scores: Array<{
+    score: number;
+    date: string;
+    serviceId?: string;
+    bookingId?: string;
+  }>;
+  averageScore: number;
+  benchmark: number;
+  trend: number;
+  distribution: {
+    veryEasy: number;
+    easy: number;
+    neutral: number;
+    difficult: number;
+    veryDifficult: number;
+  };
+  responseRate: number;
+}
+
+export interface AdminMarketShareData {
+  share: Array<{
+    platform: string;
+    share: number;
+    revenue: number;
+    customers: number;
+    growth: number;
+  }>;
+  trend: Array<{
+    month: string;
+    yourPlatform: number;
+    competitor1: number;
+    competitor2: number;
+    competitor3: number;
+  }>;
+  totalMarket: number;
+  period: string;
+  region: string;
+}
+
+export interface AdminGrossMarginData {
+  breakdown: Array<{
+    category: string;
+    revenue: number;
+    cost: number;
+    grossProfit: number;
+    margin: number;
+  }>;
+  trend: Array<{
+    month: string;
+    margin: number;
+    benchmark: number;
+  }>;
+  summary: {
+    totalRevenue: number;
+    totalCost: number;
+    totalProfit: number;
+    overallMargin: number;
+  };
+  period: string;
+}
+
+export interface AdminPlatformCACData {
+  timeSeries: Array<{
+    month: string;
+    totalSpend: number;
+    newCustomers: number;
+    newProviders: number;
+    customerCAC: number;
+    providerCAC: number;
+    blendedCAC: number;
+  }>;
+  stats: {
+    currentCustomerCAC: number;
+    currentProviderCAC: number;
+    currentBlendedCAC: number;
+    cacTrend: number;
+    totalSpend: number;
+    totalCustomers: number;
+    totalProviders: number;
+    ltvToCacRatio: number;
+    cacByChannel: Array<{
+      channel: string;
+      spend: number;
+      acquisitions: number;
+      cac: number;
+    }>;
+  };
+  period: string;
+}
+
+export interface AdminLTVBySegmentData {
+  segments: Array<{
+    segmentId: string;
+    segmentName: string;
+    userCount: number;
+    avgLTV: number;
+    totalLTV: number;
+    avgOrders: number;
+    avgOrderValue: number;
+    churnRate: number;
+    growth: number;
+  }>;
+  stats: {
+    totalUsers: number;
+    avgLTV: number;
+    totalLTV: number;
+    topSegment: string;
+    fastestGrowingSegment: string;
+    segments: AdminLTVBySegmentData['segments'];
+  };
+  period: string;
+}
+
+export interface AdminViralCoefficientData {
+  timeSeries: Array<{
+    date: string;
+    kFactor: number;
+    invitesSent: number;
+    invitesAccepted: number;
+    conversionRate: number;
+    viralReach: number;
+  }>;
+  stats: {
+    currentK: number;
+    targetK: number;
+    avgInvitesPerUser: number;
+    avgConversionRate: number;
+    totalViralUsers: number;
+    viralGrowth: number;
+    organicGrowth: number;
+    networkEffect: number;
+  };
+  period: string;
+}
+
+export interface AdminTakeRateData {
+  timeSeries: Array<{
+    date: string;
+    grossRevenue: number;
+    netRevenue: number;
+    platformRevenue: number;
+    takeRate: number;
+    transactionCount: number;
+  }>;
+  stats: {
+    currentTakeRate: number;
+    targetTakeRate: number;
+    grossRevenue: number;
+    platformRevenue: number;
+    totalTransactions: number;
+    avgTransactionValue: number;
+    takeRateTrend: number;
+    byCategory: Array<{
+      category: string;
+      grossRevenue: number;
+      takeRate: number;
+    }>;
+  };
+  period: string;
+}
+
+export interface AdminMarketplaceVelocityData {
+  timeSeries: Array<{
+    timestamp: string;
+    bookings: number;
+    revenue: number;
+    newUsers: number;
+    transactions: number;
+  }>;
+  stats: {
+    currentTPS: number;
+    peakTPS: number;
+    avgResponseTime: number;
+    totalBookings: number;
+    totalRevenue: number;
+    totalUsers: number;
+    activeProviders: number;
+    growth: number;
+  };
+  period: string;
+}
+
+export interface CustomerAOVTrendData {
+  customerId: string;
+  currentAOV: number;
+  previousAOV: number;
+  change: number;
+  changePercent: number;
+  trend: 'up' | 'down' | 'stable';
+  lifetimeAverage: number;
+  highestOrder: number;
+  lowestOrder: number;
+  targetAOV: number;
+  timeSeries: Array<{
+    date: string;
+    aov: number;
+    orderCount: number;
+    totalSpent: number;
+  }>;
+}
+
+export interface CustomerSeasonalPatternsData {
+  customerId: string;
+  monthlyData: Array<{
+    month: number;
+    year: number;
+    bookings: number;
+    spending: number;
+    averageValue: number;
+    season: 'winter' | 'spring' | 'summer' | 'fall';
+  }>;
+  seasonalTotals: Record<string, { bookings: number; spending: number }>;
+  peakMonth: { month: number; year: number };
+  slowMonth: { month: number; year: number };
+  seasonalityIndex: number;
+}
+
+export interface CustomerNPSData {
+  currentScore: number;
+  responseCount: number;
+  promoters: number;
+  passives: number;
+  detractors: number;
+  averageScore: number;
+  trend: number;
+  responseRate: number;
+}
+
+export interface CustomerReferralAttributionData {
+  stats: {
+    totalReferrals: number;
+    successfulReferrals: number;
+    pendingReferrals: number;
+    conversionRate: number;
+    totalEarnings: number;
+    referralCode: string;
+    shareUrl: string;
+  };
+  referrals: Array<{
+    referralId: string;
+    referrerName: string;
+    referralDate: string;
+    status: 'pending' | 'converted' | 'expired';
+    reward?: {
+      amount: number;
+      type: string;
+      claimedAt?: string;
+    };
+  }>;
+  channels: Array<{
+    channel: string;
+    referrals: number;
+    conversions: number;
+    conversionRate: number;
+    revenue: number;
+    color: string;
+  }>;
+}
+
+export interface ProviderNoShowRateData {
+  providerId: string;
+  period: string;
+  stats: {
+    totalBookings: number;
+    noShows: number;
+    lateCancellations: number;
+    noShowRate: number;
+    averageNoShowRate: number;
+    trend: number;
+    revenueLoss: number;
+    topReason: string;
+    customerImpact: number;
+  };
+  dailyData: Array<{
+    date: string;
+    totalBookings: number;
+    noShows: number;
+    lateCancellations: number;
+    completed: number;
+    rate: number;
+  }>;
+}
+
 // ============================================
 // Business Intelligence API Service
 // ============================================
@@ -1772,7 +2238,7 @@ export const executiveDashboardApi = {
 export const churnApi = {
   // Get churn prediction for a specific user
   getChurnRisk: async (userId: string): Promise<ChurnRisk> => {
-    const response = await api.get(`/churn/predict/${userId}`);
+    const response = await api.get(`/admin/churn/predict/${userId}`);
     return response.data.data;
   },
 
@@ -1782,7 +2248,7 @@ export const churnApi = {
     limit?: number;
     offset?: number;
   } = {}): Promise<{ customers: ChurnRisk[]; total: number }> => {
-    const response = await api.get('/churn/at-risk', { params: options });
+    const response = await api.get('/admin/churn/at-risk', { params: options });
     return response.data.data;
   },
 
@@ -1794,13 +2260,13 @@ export const churnApi = {
 
   // Get churn statistics
   getChurnStats: async (): Promise<ChurnStats> => {
-    const response = await api.get('/churn/stats');
+    const response = await api.get('/admin/churn/stats');
     return response.data.data;
   },
 
   // Get churn overview for dashboard
   getChurnOverview: async (): Promise<ChurnOverview> => {
-    const response = await api.get('/churn/overview');
+    const response = await api.get('/admin/churn/overview');
     return response.data.data;
   },
 
@@ -1813,7 +2279,30 @@ export const churnApi = {
   // Get churn statistics (admin endpoint)
   getChurnStatsAdmin: async (startDate?: string, endDate?: string): Promise<ChurnStatsAdmin> => {
     const response = await api.get('/admin/churn/stats', { params: { startDate, endDate } });
-    return response.data.data;
+    const data = response.data.data;
+    // Defensive normalization: backend may return either ChurnStats (atRiskCustomers)
+    // or alternate field names depending on version. Always return a complete
+    // ChurnStatsAdmin shape so consumers don't have to handle missing fields.
+    return {
+      totalCustomers: data.totalCustomers ?? 0,
+      activeCustomers: data.activeCustomers ?? 0,
+      atRiskCustomers: data.atRiskCustomers ?? data.totalAtRisk ?? 0,
+      churnRate: data.churnRate ?? 0,
+      byRiskLevel: {
+        critical: data.byRiskLevel?.critical ?? 0,
+        high: data.byRiskLevel?.high ?? 0,
+        medium: data.byRiskLevel?.medium ?? 0,
+        low: data.byRiskLevel?.low ?? 0,
+      },
+      averageRiskScore: data.averageRiskScore ?? 0,
+      totalLifetimeValueAtRisk: data.totalLifetimeValueAtRisk ?? 0,
+      churnTrend: data.churnTrend ?? [],
+      topRiskFactors: (data.topRiskFactors ?? []).map((f: { factor: string; count: number; percentage?: number }) => ({
+        factor: f.factor,
+        count: f.count,
+        percentage: f.percentage ?? 0,
+      })),
+    };
   },
 
   // Get at-risk customers (admin endpoint)
@@ -1825,19 +2314,56 @@ export const churnApi = {
     offset?: number;
   } = {}): Promise<{ customers: AtRiskCustomer[]; total: number }> => {
     const response = await api.get('/admin/churn/at-risk', { params: options });
-    return response.data.data;
+    const data = response.data.data;
+    // Backend returns { customers, total, pagination }; normalize for callers.
+    return {
+      customers: data.customers ?? [],
+      total: data.total ?? (data.customers?.length ?? 0),
+    };
   },
 
   // Get churn risk for specific customer (admin endpoint)
   getChurnRiskAdmin: async (customerId: string): Promise<ChurnRiskAdmin> => {
-    const response = await api.get(`/churn/admin/churn/customers/${customerId}/risk`);
+    const response = await api.get(`/admin/churn/customers/${customerId}/risk`);
     return response.data.data;
   },
 
   // Get churn overview for dashboard (admin endpoint)
   getChurnOverviewAdmin: async (): Promise<ChurnOverviewAdmin> => {
     const response = await api.get('/admin/churn/overview');
-    return response.data.data;
+    const data = response.data.data;
+    return {
+      totalAtRisk: data.totalAtRisk ?? 0,
+      churnRate: data.churnRate ?? 0,
+      byRiskLevel: {
+        critical: data.byRiskLevel?.critical ?? 0,
+        high: data.byRiskLevel?.high ?? 0,
+        medium: data.byRiskLevel?.medium ?? 0,
+        low: data.byRiskLevel?.low ?? 0,
+      },
+      averageRiskScore: data.averageRiskScore ?? 0,
+      totalLifetimeValueAtRisk: data.totalLifetimeValueAtRisk ?? 0,
+      topRiskFactors: (data.topRiskFactors ?? []).map((f: { factor: string; count: number; percentage?: number }) => ({
+        factor: f.factor,
+        count: f.count,
+        percentage: f.percentage ?? 0,
+      })),
+      recentAlerts: (data.recentAlerts ?? []).map((a: {
+        customerId: string;
+        customerName: string;
+        riskLevel: 'low' | 'medium' | 'high' | 'critical';
+        riskScore: number;
+        daysSinceLastBooking: number;
+        recommendedAction: string;
+      }) => ({
+        customerId: a.customerId,
+        customerName: a.customerName,
+        riskLevel: a.riskLevel,
+        riskScore: a.riskScore,
+        daysSinceLastBooking: a.daysSinceLastBooking,
+        recommendedAction: a.recommendedAction,
+      })),
+    };
   },
 
   // Refresh churn cache

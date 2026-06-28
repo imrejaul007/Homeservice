@@ -1,5 +1,10 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../../middleware/auth.middleware';
+import { authenticate, requireRole } from '../../middleware/auth.middleware';
+import { adminLimiter } from '../../middleware/rateLimiter';
+import {
+  enforceAdminIpAllowlist,
+  enforcePlatformRequire2FA,
+} from '../../middleware/platformSettings.middleware';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { ApiError } from '../../utils/ApiError';
 import {
@@ -14,6 +19,14 @@ import {
 
 const router = Router();
 
+// All dashboard routes require authentication, admin role, IP allowlist,
+// platform 2FA enforcement, and admin rate limiting.
+router.use(authenticate);
+router.use(requireRole('admin'));
+router.use(enforceAdminIpAllowlist);
+router.use(enforcePlatformRequire2FA);
+router.use(adminLimiter);
+
 // ============================================
 // Dashboard Metrics Endpoint
 // ============================================
@@ -23,7 +36,7 @@ const router = Router();
  * @desc    Get comprehensive dashboard metrics
  * @access  Admin
  */
-router.get('/metrics', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/metrics', asyncHandler(async (_req: Request, res: Response) => {
   const metrics = await analyticsService.getDashboardMetrics();
 
   res.json({
@@ -44,7 +57,7 @@ router.get('/metrics', authenticate, asyncHandler(async (_req: Request, res: Res
  * @query   endDate - End date (ISO string)
  * @query   granularity - 'day' | 'week' | 'month' (default: 'day')
  */
-router.get('/timeseries', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/timeseries', asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate, granularity = 'day' } = req.query;
 
   // Default to last 30 days if no dates provided
@@ -98,7 +111,7 @@ router.get('/timeseries', authenticate, asyncHandler(async (req: Request, res: R
  * @query   previousStart - Previous period start date (ISO string)
  * @query   previousEnd - Previous period end date (ISO string)
  */
-router.get('/trends', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/trends', asyncHandler(async (req: Request, res: Response) => {
   const { metric, currentStart, currentEnd, previousStart, previousEnd } = req.query;
 
   const validMetrics = ['revenue', 'bookings', 'customers', 'providers'];
@@ -162,7 +175,7 @@ router.get('/trends', authenticate, asyncHandler(async (req: Request, res: Respo
  * @query   type - 'weekly' | 'monthly' (default: 'monthly')
  * @query   periods - Number of retention periods to analyze (default: 6)
  */
-router.get('/cohorts', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/cohorts', asyncHandler(async (req: Request, res: Response) => {
   const { type = 'monthly', periods = '6' } = req.query;
 
   const validTypes = ['weekly', 'monthly'];
@@ -217,7 +230,7 @@ router.get('/cohorts', authenticate, asyncHandler(async (req: Request, res: Resp
  * @query   startDate - Start date (ISO string)
  * @query   endDate - End date (ISO string)
  */
-router.get('/geographic', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/geographic', asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
 
   // Default to last 90 days if no dates provided
@@ -269,7 +282,7 @@ router.get('/geographic', authenticate, asyncHandler(async (req: Request, res: R
  * @query   startDate - Start date (ISO string)
  * @query   endDate - End date (ISO string)
  */
-router.get('/categories', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/categories', asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
 
   // Default to last 30 days if no dates provided

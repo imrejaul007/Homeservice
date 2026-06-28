@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance, type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { sanitizeHtml, secureStorage, isSecureContext } from '@/lib/security';
 import { getApiUrl } from '@/lib/getApiUrl';
+import { showDeduplicatedError } from '@/utils/toastUtils';
 
 const API_URL = getApiUrl();
 
@@ -43,6 +44,98 @@ const getCsrfToken = async (): Promise<string | null> => {
 // Retry configuration
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
+
+/**
+ * Network error detection utility
+ * Determines if an error is a network connectivity issue
+ */
+export const isNetworkError = (error: unknown): boolean => {
+  // Check if browser is offline
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return true;
+  }
+
+  // Check for TypeError (usually network errors in browsers)
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  // Check axios error codes for network issues
+  const axiosError = error as { code?: string; message?: string };
+  const networkErrorCodes = [
+    'ERR_NETWORK',
+    'ERR_CONNECTION_REFUSED',
+    'ERR_CONNECTION_RESET',
+    'ERR_CONNECTION_ABORTED',
+    'ERR_NAME_NOT_RESOLVED',
+    'ERR_INTERNET_DISCONNECTED',
+    'NETWORK_ERROR',
+  ];
+
+  if (axiosError.code && networkErrorCodes.includes(axiosError.code)) {
+    return true;
+  }
+
+  // Check if message contains network-related text
+  if (axiosError.message) {
+    const networkMessages = [
+      'network',
+      'connection',
+      'internet',
+      'offline',
+      'fetch',
+      'ssl',
+      'tls',
+    ];
+    const msg = axiosError.message.toLowerCase();
+    return networkMessages.some((m) => msg.includes(m));
+  }
+
+  // Check if error has no response (network error)
+  const errorWithResponse = error as { response?: unknown };
+  if (errorWithResponse.response === undefined && error !== null) {
+    // Has error but no response - likely network issue
+    const errorString = String(error);
+    if (!errorString.includes('status') && !errorString.includes('401') && !errorString.includes('403')) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+/**
+ * Check if an error indicates server-side failure (5xx)
+ */
+export const isServerError = (error: unknown): boolean => {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  return typeof status === 'number' && status >= 500 && status < 600;
+};
+
+/**
+ * Check if an error indicates a client-side failure (4xx)
+ */
+export const isClientError = (error: unknown): boolean => {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  return typeof status === 'number' && status >= 400 && status < 500;
+};
+
+/**
+ * Get retryable status codes
+ */
+export const isRetryableError = (error: unknown): boolean => {
+  // Network errors are always retryable
+  if (isNetworkError(error)) return true;
+
+  // Server errors (5xx) are retryable
+  if (isServerError(error)) return true;
+
+  // 429 Too Many Requests is retryable
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  if (status === 429) return true;
+
+  return false;
+};
 
 // Error types
 export interface ApiError {
@@ -199,6 +292,20 @@ api.interceptors.request.use(
       config.headers.Authorization = `Bearer ${tokens.accessToken}`;
     }
 
+    // Session tracking header for backend session management
+    try {
+      const stored = secureStorage.getItem('auth-storage');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        const sessionId = parsed?.state?.sessionId;
+        if (sessionId) {
+          config.headers['x-session-id'] = sessionId;
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+
     // Add CSRF token for state-changing requests (mutations)
     const method = config.method?.toUpperCase();
     if (method && CSRF_PROTECTED_METHODS.includes(method)) {
@@ -352,7 +459,13 @@ api.interceptors.response.use(
     // Handle 429 Too Many Requests
     if (error.response?.status === 429) {
       const retryAfter = error.response.headers['retry-after'];
-      console.warn(`Rate limited. Retry after ${retryAfter || 'unknown'} seconds`);
+      const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : 60;
+      console.warn(`Rate limited. Retry after ${retrySeconds} seconds`);
+      showDeduplicatedError(
+        'Too many requests',
+        `Please wait ${retrySeconds} seconds before trying again`,
+        'api-rate-limit'
+      );
     }
 
     // Handle 500 Internal Server Error
@@ -450,7 +563,12 @@ export const apiService = {
 };
 
 // Export typed API instance and CSRF utilities
-export { api, getCsrfToken, refreshCsrfToken, clearAuth };
+export {
+  api,
+  getCsrfToken,
+  refreshCsrfToken,
+  clearAuth,
+};
 
 // Default export
 export default apiService;

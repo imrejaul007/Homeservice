@@ -324,7 +324,7 @@ const Demo: React.FC = () => {
 
       // Move to scenario selection
       setView('scenario-select');
-    } catch (err: any) {
+    } catch (err) {
       setError(err.message || 'Failed to generate demo account. Please try again.');
     } finally {
       setIsGenerating(false);

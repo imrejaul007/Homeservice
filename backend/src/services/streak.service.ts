@@ -119,13 +119,24 @@ export const checkIn = async (userId: string): Promise<CheckInResult> => {
   const streakBonus = Math.min(currentStreak * 2, 50);
   pointsEarned = basePoints + streakBonus;
 
-  // Update user - persist longestStreak to loyaltySystem for O(1) retrieval
+  // Update user - award coins and persist streak data
+  const updatedLongest = Math.max((user as any).loyaltySystem?.longestStreak || loyaltySystem.longestStreak || 0, currentStreak);
   (user as any).loyaltySystem = {
     ...loyaltySystem,
     streakDays: currentStreak,
     lastStreakDate: now,
-    longestStreak: Math.max((user as any).loyaltySystem?.longestStreak || loyaltySystem.longestStreak || 0, currentStreak),
-    totalPoints: (loyaltySystem.totalPoints || 0) + pointsEarned,
+    longestStreak: updatedLongest,
+    coins: (loyaltySystem.coins || 0) + pointsEarned,
+    totalEarned: (loyaltySystem.totalEarned || 0) + pointsEarned,
+    pointsHistory: [
+      ...(loyaltySystem.pointsHistory || []),
+      {
+        amount: pointsEarned,
+        type: 'bonus' as const,
+        description: `Daily check-in streak bonus (${currentStreak} day streak)`,
+        date: new Date(),
+      },
+    ].slice(-100),
   };
 
   (user as any).streakHistory = [

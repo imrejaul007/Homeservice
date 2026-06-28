@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+// Shares notification preference state with NotificationSettings.tsx via useNotificationPreferences /
+// useNotificationPreferencesStore — keep save/load paths aligned when changing either page.
 import { Globe, Bell, Shield, Check, AlertCircle, Save } from 'lucide-react';
 import { useNotificationPreferences } from '../../hooks/useNotificationPreferences';
 import { useWebPushRegistration } from '../../hooks/useWebPushRegistration';

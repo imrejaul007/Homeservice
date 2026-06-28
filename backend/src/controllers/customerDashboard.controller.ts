@@ -488,7 +488,7 @@ export const getRecommendedPros = asyncHandler(async (req: Request, res: Respons
   const { error, value } = recommendedProsQuerySchema.validate(req.query, { abortEarly: true });
   if (error) {
     logger.warn(`Invalid query parameters in getRecommendedPros: ${error.message}`);
-    throw new ApiError(403, 'Access denied');
+    throw new ApiError(400, error.details[0]?.message || 'Invalid query parameters');
   }
 
   const pros = await customerDashboardService.getRecommendedPros(
@@ -499,6 +499,7 @@ export const getRecommendedPros = asyncHandler(async (req: Request, res: Respons
       latitude: value.latitude,
       longitude: value.longitude,
       maxDistanceKm: value.radius,
+      category: value.category,
     }
   );
 

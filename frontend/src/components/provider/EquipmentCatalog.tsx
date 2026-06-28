@@ -15,6 +15,7 @@ import {
   Check
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { api } from '../../services/api';
 
 type EquipmentCategory = 'cleaning' | 'plumbing' | 'electrical' | 'landscaping' | 'construction' | 'general';
 type RentalStatus = 'available' | 'rented' | 'reserved' | 'maintenance' | 'retired';
@@ -90,6 +91,7 @@ const EquipmentCatalog: React.FC<EquipmentCatalogProps> = ({
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [filteredEquipment, setFilteredEquipment] = useState<Equipment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<EquipmentCategory | 'all'>('all');
   const [sortBy, setSortBy] = useState<'price' | 'name' | 'rating'>('price');
@@ -104,106 +106,37 @@ const EquipmentCatalog: React.FC<EquipmentCatalogProps> = ({
     }).format(price);
   };
 
-  // Mock data - in production, fetch from API
   useEffect(() => {
-    const mockEquipment: Equipment[] = [
-      {
-        _id: '1',
-        equipmentId: 'EQ-001',
-        name: 'Professional Steam Cleaner',
-        description: 'Industrial-grade steam cleaner for deep cleaning carpets and upholstery. Includes multiple attachments.',
-        category: 'cleaning',
-        manufacturer: 'Karcher',
-        model: 'SC4',
-        condition: 'good',
-        images: [],
-        dailyRate: 150,
-        weeklyRate: 750,
-        monthlyRate: 2500,
-        depositAmount: 500,
-        depositRefundable: true,
-        maxRentalDays: 30,
-        minRentalDays: 1,
-        requiresTraining: false,
-        status: 'available',
-        location: { address: 'Dubai Marina', distance: 2.5 },
-        rating: 4.8,
-        reviewCount: 124,
-      },
-      {
-        _id: '2',
-        equipmentId: 'EQ-002',
-        name: 'High-Pressure Water Jet',
-        description: 'Heavy-duty pressure washer for exterior cleaning. 200 bar pressure rating.',
-        category: 'cleaning',
-        manufacturer: 'Bosch',
-        model: 'GHP 5-75',
-        condition: 'new',
-        images: [],
-        dailyRate: 200,
-        weeklyRate: 1000,
-        monthlyRate: 3500,
-        depositAmount: 750,
-        depositRefundable: true,
-        maxRentalDays: 14,
-        minRentalDays: 1,
-        requiresTraining: true,
-        status: 'available',
-        location: { address: 'Jumeirah', distance: 5.1 },
-        rating: 4.9,
-        reviewCount: 89,
-      },
-      {
-        _id: '3',
-        equipmentId: 'EQ-003',
-        name: 'Electric Drain Camera',
-        description: 'Inspection camera with 30m cable for drain and pipe diagnostics.',
-        category: 'plumbing',
-        manufacturer: 'Ridgid',
-        model: 'SeeSnake',
-        condition: 'good',
-        images: [],
-        dailyRate: 300,
-        weeklyRate: 1500,
-        depositAmount: 1000,
-        depositRefundable: true,
-        maxRentalDays: 7,
-        minRentalDays: 1,
-        requiresLicense: 'Plumbing License',
-        requiresTraining: false,
-        status: 'available',
-        location: { address: 'Downtown Dubai', distance: 3.8 },
-        rating: 4.7,
-        reviewCount: 56,
-      },
-      {
-        _id: '4',
-        equipmentId: 'EQ-004',
-        name: 'Industrial Generator 10kVA',
-        description: 'Diesel generator for construction sites and events. Silent operation.',
-        category: 'construction',
-        manufacturer: 'Caterpillar',
-        model: 'GP10',
-        condition: 'good',
-        images: [],
-        dailyRate: 500,
-        weeklyRate: 2500,
-        depositAmount: 2000,
-        depositRefundable: true,
-        maxRentalDays: 30,
-        minRentalDays: 3,
-        requiresTraining: true,
-        status: 'available',
-        location: { address: 'Al Quoz', distance: 8.2 },
-        rating: 4.6,
-        reviewCount: 42,
-      },
-    ];
+    const fetchEquipment = async () => {
+      setIsLoading(true);
+      setLoadError(null);
 
-    setEquipment(mockEquipment);
-    setFilteredEquipment(mockEquipment);
-    setIsLoading(false);
-  }, []);
+      try {
+        const response = await api.get('/equipment/catalog', {
+          params: {
+            ...(providerId ? { providerId } : {}),
+            limit: 100,
+          },
+        });
+
+        const items = (response.data.data.equipment || []).map((item: Equipment & { _id?: string }) => ({
+          ...item,
+          _id: item._id?.toString?.() || item.equipmentId,
+        }));
+
+        setEquipment(items);
+        setFilteredEquipment(items);
+      } catch (err) {
+        setEquipment([]);
+        setFilteredEquipment([]);
+        setLoadError(err instanceof Error ? err.message : 'Failed to load equipment catalog');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchEquipment();
+  }, [providerId]);
 
   // Filter and sort equipment
   useEffect(() => {
@@ -279,6 +212,29 @@ const EquipmentCatalog: React.FC<EquipmentCatalogProps> = ({
     return (
       <div className="flex items-center justify-center py-12">
         <div className="h-8 w-8 border-4 border-nilin-coral/30 border-t-nilin-coral rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-6 text-center">
+        <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-2" />
+        <p className="text-sm text-red-700">{loadError}</p>
+      </div>
+    );
+  }
+
+  if (equipment.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-10 text-center">
+        <Wrench className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+        <p className="text-sm font-medium text-nilin-charcoal">No equipment listed yet</p>
+        <p className="text-sm text-nilin-gray mt-1">
+          {isProviderView
+            ? 'Add equipment to your catalog to make it available for rental.'
+            : 'Check back later for available rental equipment.'}
+        </p>
       </div>
     );
   }

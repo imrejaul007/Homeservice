@@ -219,6 +219,21 @@ export interface ServerToClientEvents {
     affectedMetrics: string[];
     timestamp: Date;
   }) => void;
+
+  // Admin notification events (general notification for admin panel)
+  'admin:notification': (data: {
+    id: string;
+    type: 'new_dispute' | 'refund_request' | 'provider_suspended' | 'sla_violation' | 'new_provider_submission' | 'new_service_pending' | 'new_withdrawal_request' | 'user_report' | 'payment_flagged' | 'compliance_alert' | string;
+    title: string;
+    message: string;
+    priority?: 'low' | 'normal' | 'high' | 'urgent';
+    category?: string;
+    data?: Record<string, unknown>;
+    timestamp: Date;
+  }) => void;
+
+  // Admin unread count update
+  'admin:unread_count': (data: { count: number }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -443,6 +458,12 @@ function validateSocketEvent<T>(eventName: string, data: unknown): { valid: bool
 class SocketServer {
   private io: Server<ClientToServerEvents, ServerToClientEvents>;
   private userSockets: Map<string, Set<string>> = new Map(); // userId -> Set of socketIds
+  // FIX P2: Presence Tracking Duplicate - Document why bookingRooms exists separately
+  // bookingRooms tracks which sockets have joined booking-specific rooms
+  // This is separate from userRooms in chat.handler.ts because:
+  // 1. SocketServer handles booking events, ChatSocketHandler handles chat messages
+  // 2. Different event types (booking:*, message:*) require separate tracking
+  // 3. Enables efficient emitToBooking() without querying all sockets
   private bookingRooms: Map<string, Set<string>> = new Map(); // bookingId -> Set of socketIds
   private socketToBooking: Map<string, Set<string>> = new Map(); // socketId -> Set of bookingIds (for cleanup)
   private deadLetterQueue: DeadLetterEvent[] = [];
@@ -692,6 +713,7 @@ class SocketServer {
   }
 
   // Retry failed events from DLQ
+  // FIX P1: Implement actual event re-emission instead of just logging
   async retryDeadLetterEvent(eventId: string): Promise<boolean> {
     const eventIndex = this.deadLetterQueue.findIndex(e => e.id === eventId);
     if (eventIndex === -1) {
@@ -706,34 +728,98 @@ class SocketServer {
         retryCount: event.retryCount,
         action: 'DLQ_MAX_RETRIES'
       });
+      // Remove from queue after max retries
+      this.deadLetterQueue.splice(eventIndex, 1);
       return false;
     }
 
-    // Increment retry count and schedule next retry with exponential backoff
+    // Increment retry count
     event.retryCount++;
-    const backoffMs = Math.pow(2, event.retryCount) * 1000;
-    event.nextRetryAt = new Date(Date.now() + backoffMs);
+    event.nextRetryAt = new Date(Date.now() + Math.pow(2, event.retryCount) * 1000);
 
-    logger.info('Dead letter event retry scheduled', {
+    logger.info('Retrying dead letter event', {
       eventId,
+      eventName: event.event,
       retryCount: event.retryCount,
-      nextRetryAt: event.nextRetryAt,
-      action: 'DLQ_RETRY_SCHEDULED'
+      action: 'DLQ_RETRY_ATTEMPT'
     });
 
-    // Actually retry the event
+    // Actually retry the event - re-emit to the appropriate room/target
     try {
-      // Here you would re-emit the event based on its type
-      // For now, we just log and remove from DLQ if successful
+      // Find target sockets based on event type and data
+      // For user-targeted events, emit to user's room
+      if (event.data && typeof event.data === 'object' && 'userId' in (event.data as any)) {
+        const targetUserId = (event.data as any).userId;
+        const emitted = this.emitToUser(event.event as any, targetUserId, event.data);
+        if (emitted) {
+          // Remove from DLQ on success
+          this.deadLetterQueue.splice(eventIndex, 1);
+          logger.info('Dead letter event retry successful', {
+            eventId,
+            eventName: event.event,
+            action: 'DLQ_RETRY_SUCCESS'
+          });
+          return true;
+        }
+      }
+
+      // For booking events, emit to booking room
+      if (event.data && typeof event.data === 'object' && 'bookingId' in (event.data as any)) {
+        const targetBookingId = (event.data as any).bookingId;
+        const emitted = this.emitToBooking(event.event as any, targetBookingId, event.data);
+        if (emitted) {
+          this.deadLetterQueue.splice(eventIndex, 1);
+          logger.info('Dead letter event retry successful', {
+            eventId,
+            eventName: event.event,
+            action: 'DLQ_RETRY_SUCCESS'
+          });
+          return true;
+        }
+      }
+
+      // For chat room events
+      if (event.data && typeof event.data === 'object' && 'chatRoomId' in (event.data as any)) {
+        const targetChatRoomId = (event.data as any).chatRoomId;
+        const emitted = this.emitToChatRoom(event.event as any, targetChatRoomId, event.data);
+        if (emitted) {
+          this.deadLetterQueue.splice(eventIndex, 1);
+          logger.info('Dead letter event retry successful', {
+            eventId,
+            eventName: event.event,
+            action: 'DLQ_RETRY_SUCCESS'
+          });
+          return true;
+        }
+      }
+
+      // If we can't determine target, log and remove from DLQ
+      logger.warn('Dead letter event has no identifiable target', {
+        eventId,
+        eventName: event.event,
+        action: 'DLQ_RETRY_NO_TARGET'
+      });
       this.deadLetterQueue.splice(eventIndex, 1);
-      logger.info('Dead letter event retry successful', { eventId, action: 'DLQ_RETRY_SUCCESS' });
-      return true;
+      return false;
     } catch (error) {
       logger.error('Dead letter event retry failed', {
         eventId,
+        eventName: event.event,
         error: (error as Error).message,
         action: 'DLQ_RETRY_FAILED'
       });
+
+      // If max retries exceeded, remove from queue
+      if (event.retryCount >= event.maxRetries) {
+        this.deadLetterQueue.splice(eventIndex, 1);
+        logger.warn('Dead letter event permanently failed', {
+          eventId,
+          eventName: event.event,
+          retryCount: event.retryCount,
+          action: 'DLQ_RETRY_PERMANENT_FAILURE'
+        });
+      }
+
       return false;
     }
   }
@@ -1038,21 +1124,27 @@ class SocketServer {
         });
       });
 
-      // Typing indicators (with validation)
-      socket.on('typing:start', (data: { bookingId: string }) => {
+      // Booking typing indicators (chat rooms use chat:typing:* in ChatSocketHandler)
+      socket.on('typing:start', (data: { bookingId?: string; chatRoomId?: string }) => {
+        if (data.chatRoomId && !data.bookingId) {
+          return;
+        }
         handleValidatedEvent<{ bookingId: string }>('typing:start', data, (validatedData) => {
           socket.to(`booking:${validatedData.bookingId}`).emit('typing:start', {
             bookingId: validatedData.bookingId,
-            userId: socket.userId,
+            userId: socket.userId!,
           });
         });
       });
 
-      socket.on('typing:stop', (data: { bookingId: string }) => {
+      socket.on('typing:stop', (data: { bookingId?: string; chatRoomId?: string }) => {
+        if (data.chatRoomId && !data.bookingId) {
+          return;
+        }
         handleValidatedEvent<{ bookingId: string }>('typing:stop', data, (validatedData) => {
           socket.to(`booking:${validatedData.bookingId}`).emit('typing:stop', {
             bookingId: validatedData.bookingId,
-            userId: socket.userId,
+            userId: socket.userId!,
           });
         });
       });
@@ -1361,27 +1453,7 @@ class SocketServer {
       });
     }
 
-    // FIX #1: Emit specific booking:accepted event when status is 'accepted'
-    if (booking.status === 'accepted') {
-      if (booking.customerId) {
-        this.emitToUser(booking.customerId.toString(), 'booking:accepted', {
-          ...eventData,
-          userId: booking.customerId.toString(),
-        });
-      }
-      if (booking.providerId) {
-        this.emitToUser(booking.providerId.toString(), 'booking:accepted', {
-          ...eventData,
-          userId: booking.providerId.toString(),
-        });
-      }
-      logger.info('Emitted booking:accepted event', {
-        bookingId: booking._id,
-        action: 'EMIT_BOOKING_ACCEPTED',
-      });
-    }
-
-    // FIX #1: Emit specific booking:rejected event when status is 'rejected'
+    // FIX #2: Emit specific booking:rejected event when status is 'rejected'
     if (booking.status === 'rejected') {
       if (booking.customerId) {
         this.emitToUser(booking.customerId.toString(), 'booking:rejected', {
@@ -2510,6 +2582,45 @@ class SocketServer {
       logger.info('Emitted insights:updated event', { providerId, reason, affectedMetrics, action: 'EMIT_INSIGHTS_UPDATED' });
     }
     return emitted;
+  }
+
+  // =============================================================================
+  // Admin Notification Events
+  // =============================================================================
+
+  /**
+   * Emit a general admin notification to all connected admin users
+   * Used for various admin notification types like disputes, refunds, SLA violations, etc.
+   */
+  emitAdminNotification(params: {
+    id: string;
+    type: 'new_dispute' | 'refund_request' | 'provider_suspended' | 'sla_violation' | 'new_provider_submission' | 'new_service_pending' | 'new_withdrawal_request' | 'user_report' | 'payment_flagged' | 'compliance_alert' | string;
+    title: string;
+    message: string;
+    priority?: 'low' | 'normal' | 'high' | 'urgent';
+    category?: string;
+    data?: Record<string, unknown>;
+  }): boolean {
+    const emitted = this.emitToAdmins('admin:notification', {
+      id: params.id,
+      type: params.type,
+      title: params.title,
+      message: params.message,
+      priority: params.priority,
+      category: params.category,
+      data: params.data,
+      timestamp: new Date(),
+    });
+
+    if (emitted) {
+      logger.info('Emitted admin notification', { id: params.id, type: params.type, title: params.title, action: 'EMIT_ADMIN_NOTIFICATION' });
+    }
+    return emitted;
+  }
+
+  // Emit admin unread count update
+  emitAdminUnreadCount(count: number): boolean {
+    return this.emitToAdmins('admin:unread_count', { count });
   }
 
   // Graceful shutdown

@@ -580,6 +580,71 @@ export const cloneCoupon = asyncHandler(async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/admin/coupons/bulk/deactivate - Bulk deactivate coupons
+ */
+export const bulkDeactivateCoupons = asyncHandler(async (req: Request, res: Response) => {
+  const { ids } = req.body;
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw ApiError.badRequest('Request body must contain an array of coupon IDs', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const invalidIds = ids.filter((id: string) => !mongoose.Types.ObjectId.isValid(id));
+  if (invalidIds.length > 0) {
+    throw ApiError.badRequest(`Invalid coupon IDs: ${invalidIds.join(', ')}`, [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const result = await Coupon.updateMany(
+    { _id: { $in: ids }, isActive: true },
+    { $set: { isActive: false } }
+  );
+
+  logger.info('Bulk coupons deactivated', {
+    action: 'BULK_COUPONS_DEACTIVATED',
+    ids,
+    modifiedCount: result.modifiedCount,
+    requestedBy: (req as any).user?._id,
+  });
+
+  res.json({
+    success: true,
+    message: `${result.modifiedCount} coupon(s) deactivated`,
+    data: { processed: ids.length, modifiedCount: result.modifiedCount }
+  });
+});
+
+/**
+ * DELETE /api/admin/coupons/bulk - Bulk delete coupons
+ */
+export const bulkDeleteCoupons = asyncHandler(async (req: Request, res: Response) => {
+  const { ids } = req.body;
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw ApiError.badRequest('Request body must contain an array of coupon IDs', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const invalidIds = ids.filter((id: string) => !mongoose.Types.ObjectId.isValid(id));
+  if (invalidIds.length > 0) {
+    throw ApiError.badRequest(`Invalid coupon IDs: ${invalidIds.join(', ')}`, [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const result = await Coupon.deleteMany({ _id: { $in: ids } });
+
+  logger.info('Bulk coupons deleted', {
+    action: 'BULK_COUPONS_DELETED',
+    ids,
+    deletedCount: result.deletedCount,
+    requestedBy: (req as any).user?._id,
+  });
+
+  res.json({
+    success: true,
+    message: `${result.deletedCount} coupon(s) deleted`,
+    data: { processed: ids.length, deletedCount: result.deletedCount }
+  });
+});
+
+/**
  * PATCH /api/admin/coupons/:id/status - Update coupon approval status
  * FIX: Supports draft -> pending_review -> approved -> published workflow
  */

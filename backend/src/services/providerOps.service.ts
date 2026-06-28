@@ -617,8 +617,25 @@ export class ProviderOpsService {
     adminId: string,
     reason: string,
     type: 'temporary' | 'permanent',
-    endDate?: Date
-  ): Promise<{ provider: any; verification: any }> {
+    endDate?: Date,
+    options?: {
+      notifyCustomers?: boolean;
+      cancelBookings?: boolean;
+      cancellationMessage?: string;
+    }
+  ): Promise<{
+    provider: any;
+    verification: any;
+    suspended: boolean;
+    notificationsSent: number;
+    bookingsCancelled: number;
+    affectedBookings: Array<{
+      bookingId: string;
+      customerId: string | null;
+      status: string;
+      scheduledDate: Date;
+    }>;
+  }> {
     const provider = await User.findById(providerId);
     if (!provider) {
       throw new ApiError(404, 'Provider not found');
@@ -707,6 +724,106 @@ export class ProviderOpsService {
       timestamp: new Date().toISOString()
     });
 
+    // ========================================
+    // Notify affected customers
+    // ========================================
+    const notifyCustomers = options?.notifyCustomers ?? true;
+    const cancelBookings = options?.cancelBookings ?? false;
+    const defaultCancellationMessage = options?.cancellationMessage || 'Your booking with this provider has been affected by a service update. Please contact support or rebook with an alternative provider.';
+
+    let notificationsSent = 0;
+    let bookingsCancelled = 0;
+    const affectedBookings: Array<{
+      bookingId: string;
+      customerId: string | null;
+      status: string;
+      scheduledDate: Date;
+    }> = [];
+
+    // Find affected bookings (pending and confirmed)
+    const affectedBookingDocs = await Booking.find({
+      providerId: new mongoose.Types.ObjectId(providerId),
+      status: { $in: ['pending', 'confirmed'] },
+    }).populate('customerId', 'firstName lastName email');
+
+    if (affectedBookingDocs.length > 0) {
+      affectedBookings.push(...affectedBookingDocs.map(b => ({
+        bookingId: b._id.toString(),
+        customerId: b.customerId?._id?.toString() || null,
+        status: b.status,
+        scheduledDate: b.scheduledDate,
+      })));
+
+      if (cancelBookings) {
+        // Cancel all affected bookings
+        await Booking.updateMany(
+          {
+            providerId: new mongoose.Types.ObjectId(providerId),
+            status: { $in: ['pending', 'confirmed'] },
+          },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              'cancellationDetails.cancelledBy': 'admin',
+              'cancellationDetails.cancelledAt': new Date(),
+              'cancellationDetails.reason': defaultCancellationMessage,
+              'cancellationDetails.refundAmount': '$pricing.totalAmount',
+              'cancellationDetails.refundStatus': 'pending',
+            },
+            $push: {
+              statusHistory: {
+                status: 'cancelled',
+                timestamp: new Date(),
+                reason: defaultCancellationMessage,
+                updatedBy: 'admin',
+                notes: 'Cancelled due to provider suspension',
+              },
+            },
+          }
+        );
+        bookingsCancelled = affectedBookingDocs.length;
+      }
+
+      // Send notifications to affected customers
+      if (notifyCustomers) {
+        const notificationService = new NotificationService();
+        const providerName = profile?.businessInfo?.businessName || provider.firstName || 'The provider';
+
+        for (const booking of affectedBookingDocs) {
+          // Skip if no customer (shouldn't happen for non-guest bookings)
+          if (!booking.customerId) continue;
+
+          const customerId = (booking.customerId as any)._id?.toString() || booking.customerId.toString();
+          const customerName = (booking.customerId as any).firstName || 'Valued customer';
+
+          try {
+            await notificationService.createNotification({
+              recipientId: customerId,
+              type: 'booking_cancelled',
+              title: 'Booking Update',
+              message: `Dear ${customerName}, your booking with ${providerName} has been affected by a service update. ${defaultCancellationMessage}`,
+              metadata: {
+                bookingId: booking._id.toString(),
+                providerId,
+                reason,
+                cancelledByAdmin: true,
+                bookingWasCancelled: cancelBookings,
+              },
+            });
+            notificationsSent++;
+          } catch (notificationError) {
+            logger.error('Failed to send suspension notification to customer', {
+              bookingId: booking._id.toString(),
+              customerId,
+              providerId,
+              error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+            });
+          }
+        }
+      }
+    }
+
     logger.info('PROVIDER_OPS: Provider suspended', {
       providerId,
       adminId,
@@ -714,11 +831,18 @@ export class ProviderOpsService {
       type,
       endDate,
       previousProfileOverall,
+      affectedBookings: affectedBookingDocs.length,
+      notificationsSent,
+      bookingsCancelled,
     });
 
     return {
       provider: await User.findById(providerId),
       verification,
+      suspended: true,
+      notificationsSent,
+      bookingsCancelled,
+      affectedBookings,
     };
   }
 

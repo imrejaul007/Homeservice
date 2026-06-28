@@ -7,11 +7,11 @@ import Footer from '../../components/layout/Footer';
 import { StripePaymentWrapper, CouponCodeInput, PriceBreakdown, DuplicateChargeWarning } from '../../components/payment';
 import PaymentService from '../../services/PaymentService';
 import { useAuthStore } from '../../stores/authStore';
-import authService from '../../services/AuthService';
-import { bookingApi, type Booking } from '../../services/bookingApi';
+import { bookingService, type Booking } from '../../services/BookingService';
 import type { PaymentMethodType } from '../../services/PaymentService';
 import { cn } from '../../lib/utils';
 import { usePriceConversion } from '../../utils/priceConverter';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 
 interface AppliedCoupon {
   code: string;
@@ -32,6 +32,7 @@ const PaymentPage: React.FC = () => {
   const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(true);
   const [isUpdatingPricing, setIsUpdatingPricing] = useState(false);
+  const [isCouponLoading, setIsCouponLoading] = useState(false); // Prevent concurrent coupon requests
 
   // Calculate pricing with coupon applied
   const calculatePricing = useCallback(() => {
@@ -59,11 +60,17 @@ const PaymentPage: React.FC = () => {
       return { valid: false, code, message: 'Booking ID is missing' };
     }
 
+    // Prevent concurrent coupon requests
+    if (isCouponLoading) {
+      return { valid: false, code, message: 'Applying coupon, please wait...' };
+    }
+
+    setIsCouponLoading(true);
     setIsUpdatingPricing(true);
     try {
       // FIX: Skip separate validation - applyCoupon endpoint validates internally
       // This reduces from 2 API calls to 1
-      const updatedBooking = await bookingApi.applyCoupon(bookingId, code);
+      const updatedBooking = await bookingService.applyCoupon(bookingId, code);
 
       if (updatedBooking) {
         setBooking(updatedBooking.booking);
@@ -92,6 +99,7 @@ const PaymentPage: React.FC = () => {
       return { valid: false, code, message: errorMessage };
     } finally {
       setIsUpdatingPricing(false);
+      setIsCouponLoading(false);
     }
   };
 
@@ -100,7 +108,7 @@ const PaymentPage: React.FC = () => {
 
     setIsUpdatingPricing(true);
     try {
-      await bookingApi.removeCoupon(bookingId);
+      await bookingService.removeCoupon(bookingId);
       setAppliedCoupon(null);
       await fetchBookingDetails();
     } catch (err) {
@@ -131,47 +139,42 @@ const PaymentPage: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      // P0 FIX: Use authService which properly manages token storage
-      // instead of raw fetch with manual sessionStorage parsing
-      const response = await authService.get<{ success: boolean; data: Booking }>(
-        `/bookings/${bookingId}`
-      );
+      const response = await bookingService.getBooking(bookingId);
 
-      if (response.success && response.data) {
-        setBooking(response.data);
+      if (response.success && response.data?.booking) {
+        setBooking(response.data.booking);
       } else {
         setError('Booking not found');
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load booking';
       setError(errorMessage);
+      showDeduplicatedError('Failed to load booking', errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
   const handlePaymentSuccess = async (paymentIntentId: string) => {
-    setPaymentComplete(true);
+    if (!bookingId) return;
 
-    // Refresh booking to show updated payment status
-    await fetchBookingDetails();
+    try {
+      await bookingService.confirmPayment(bookingId, paymentIntentId);
+      setPaymentComplete(true);
+      await fetchBookingDetails();
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to confirm payment';
+      setError(errorMessage);
+      showDeduplicatedError('Payment confirmation failed', errorMessage);
+    }
   };
 
   const handlePaymentError = (errorMessage: string) => {
-    // Set the error state for display
     setError(errorMessage);
+    showDeduplicatedError('Payment failed', errorMessage);
 
-    // Log payment failure for analytics/monitoring
-    if (bookingId) {
-      console.warn('Payment failed', { bookingId, error: errorMessage });
-    }
-
-    // FIX: Remove applied coupon on payment failure so user can retry with a fresh coupon state
-    // This prevents stale coupon state after payment failure
     if (appliedCoupon && bookingId) {
-      handleCouponRemove().catch((removeErr) => {
-        console.warn('Failed to remove coupon after payment error:', removeErr);
-      });
+      handleCouponRemove().catch(() => undefined);
     }
   };
 
@@ -273,7 +276,7 @@ const PaymentPage: React.FC = () => {
           {/* Back Button */}
           <button
             onClick={handleBack}
-            className="flex items-center gap-2 text-gray-600 hover:text-nilin-rose mb-6 transition-colors"
+            className="flex items-center gap-2 min-h-11 text-gray-600 hover:text-nilin-rose mb-6 transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
             <span>Back to booking</span>
@@ -292,9 +295,9 @@ const PaymentPage: React.FC = () => {
           <div className="bg-white rounded-2xl p-6 shadow-sm mb-6">
             <h3 className="font-semibold text-gray-900 mb-4">Booking Summary</h3>
             <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Service</span>
-                <span className="font-medium">{booking?.service?.name || 'Service'}</span>
+              <div className="flex justify-between gap-3">
+                <span className="text-gray-600 flex-shrink-0">Service</span>
+                <span className="font-medium text-right break-words">{booking?.service?.name || 'Service'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Date</span>

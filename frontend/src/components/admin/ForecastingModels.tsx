@@ -37,6 +37,7 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 
 interface ForecastPoint {
   date: string;
@@ -165,102 +166,11 @@ export const ForecastingModels: React.FC<ForecastingModelsProps> = ({
         setSeasonality(response.data.data.seasonality);
         setCategoryForecast(response.data.data.categoryForecast);
       } else {
-        // Generate realistic forecast data
-        const now = new Date();
-        const generateForecastPoints = (
-          baseValue: number,
-          variance: number,
-          trend: number,
-          days: number
-        ): ForecastPoint[] => {
-          const points: ForecastPoint[] = [];
-          for (let i = -14; i < days; i++) {
-            const date = new Date(now);
-            date.setDate(date.getDate() + i);
-            const dayOfWeek = date.getDay();
-            const weekendMultiplier = (dayOfWeek === 0 || dayOfWeek === 6) ? 1.2 : 1;
-
-            const trendComponent = trend * i;
-            const seasonalComponent = Math.sin((i / 7) * Math.PI) * variance * 0.5;
-            const noise = (Math.random() - 0.5) * variance;
-
-            const predicted = Math.round(
-              baseValue * weekendMultiplier + trendComponent + seasonalComponent + noise
-            );
-
-            const confidenceRange = Math.abs(0.1 + (Math.abs(i) / days) * 0.2);
-
-            points.push({
-              date: date.toISOString().split('T')[0],
-              actual: i < 0 ? Math.round(predicted + (Math.random() - 0.5) * variance * 0.3) : undefined,
-              predicted: Math.max(0, predicted),
-              lowerBound: Math.max(0, Math.round(predicted * (1 - confidenceRange))),
-              upperBound: Math.round(predicted * (1 + confidenceRange)),
-              confidence: Math.round((1 - confidenceRange) * 100)
-            });
-          }
-          return points;
-        };
-
-        setMetrics({
-          revenueForecast: generateForecastPoints(45000, 15000, 500, 30),
-          bookingForecast: generateForecastPoints(180, 40, 5, 30),
-          demandLevel: 'high',
-          trend: 'increasing',
-          seasonalityStrength: 0.78,
-          accuracy: 94.5,
-          lastUpdated: now
-        });
-
-        setInsights({
-          summary: 'Revenue is projected to grow 15% over the next 30 days, driven by seasonal demand and marketing campaigns.',
-          highlights: [
-            { type: 'opportunity', message: 'Easter weekend shows 35% above average bookings - consider surge pricing' },
-            { type: 'risk', message: 'Mid-week slowdown expected in week 3 - prepare promotional offers' },
-            { type: 'neutral', message: 'Stable demand pattern with typical weekend peaks' }
-          ],
-          recommendations: [
-            'Increase provider availability for weekend slots',
-            'Launch mid-week promotions during predicted low-demand periods',
-            'Pre-position inventory in high-demand areas'
-          ],
-          peakDays: [
-            { date: '2024-03-30', predicted: 320, reason: 'Saturday weekend peak' },
-            { date: '2024-03-31', predicted: 285, reason: 'Sunday weekend activity' },
-            { date: '2024-04-05', predicted: 340, reason: 'Friday combined with pre-holiday' }
-          ],
-          lowDemandDays: [
-            { date: '2024-03-27', predicted: 95, suggestion: 'Launch mid-week discount campaign' },
-            { date: '2024-04-03', predicted: 88, suggestion: 'Offer provider training sessions' }
-          ]
-        });
-
-        setSeasonality([
-          { month: 'Jan', historical: 85, predicted: 88, index: 1.0 },
-          { month: 'Feb', historical: 92, predicted: 95, index: 1.08 },
-          { month: 'Mar', historical: 100, predicted: 105, index: 1.20 },
-          { month: 'Apr', historical: 120, predicted: 128, index: 1.46 },
-          { month: 'May', historical: 95, predicted: 98, index: 1.12 },
-          { month: 'Jun', historical: 78, predicted: 82, index: 0.93 },
-          { month: 'Jul', historical: 72, predicted: 75, index: 0.86 },
-          { month: 'Aug', historical: 68, predicted: 70, index: 0.80 },
-          { month: 'Sep', historical: 88, predicted: 92, index: 1.05 },
-          { month: 'Oct', historical: 102, predicted: 108, index: 1.23 },
-          { month: 'Nov', historical: 115, predicted: 120, index: 1.37 },
-          { month: 'Dec', historical: 125, predicted: 130, index: 1.48 }
-        ]);
-
-        setCategoryForecast([
-          { category: 'Cleaning', current: 156, predicted: 185, change: 18.6, trend: 'up', confidence: 92 },
-          { category: 'Beauty', current: 134, predicted: 142, change: 6.0, trend: 'up', confidence: 88 },
-          { category: 'Maintenance', current: 189, predicted: 210, change: 11.1, trend: 'up', confidence: 95 },
-          { category: 'Moving', current: 98, predicted: 85, change: -13.3, trend: 'down', confidence: 78 },
-          { category: 'Pest Control', current: 67, predicted: 78, change: 16.4, trend: 'up', confidence: 82 }
-        ]);
+        setError('No forecasting data available from the server');
       }
     } catch (err) {
       console.error('Error fetching forecasting data:', err);
-      setError('Failed to load forecasting data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

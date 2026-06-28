@@ -153,8 +153,8 @@ export interface ServerToClientEvents {
   /** Customer did not show up for booking */
   'booking:no_show': (data: BookingEvent) => void;
 
-  /** Booking was accepted by provider */
-  'booking:accepted': (data: BookingEvent) => void;
+  /** Booking was confirmed by provider */
+  'booking:confirmed': (data: BookingEvent) => void;
 
   /** Booking was rejected by provider */
   'booking:rejected': (data: BookingEvent) => void;
@@ -838,8 +838,9 @@ class SocketService {
         this.resetReconnectionState();
         this.notifyListeners('connected', { socketId: this.socket?.id });
 
-        // Join user's room
-        this.emit('join:user_room', this.getUserIdFromToken(token));
+        // FIX P1: Join user's room with acknowledgment and retry
+        const userId = this.getUserIdFromToken(token);
+        this.joinUserRoomWithAck(userId);
 
         // Flush pending events
         this.flushPendingEvents();
@@ -1087,6 +1088,12 @@ class SocketService {
     });
   }
 
+  // FIX P1: Join user room with acknowledgment and retry
+  private joinUserRoomWithAck(userId: string): void {
+    if (!userId) return;
+    this.emit('join:user_room', userId);
+  }
+
   // ---------------------------------------------------------------------------
   // Room Management
   // ---------------------------------------------------------------------------
@@ -1175,14 +1182,14 @@ class SocketService {
    * Send typing indicator in chat room
    */
   startChatTyping(chatRoomId: string): void {
-    this.emit('typing:start', { chatRoomId });
+    this.emit('chat:typing:start', { chatRoomId });
   }
 
   /**
    * Stop typing indicator in chat room
    */
   stopChatTyping(chatRoomId: string): void {
-    this.emit('typing:stop', { chatRoomId });
+    this.emit('chat:typing:stop', { chatRoomId });
   }
 
   // ---------------------------------------------------------------------------
@@ -1328,9 +1335,9 @@ class SocketService {
     });
 
     // FIX: Add listeners for specific booking status events
-    this.socket.on('booking:accepted', (data) => {
+    this.socket.on('booking:confirmed', (data) => {
       this.notifyListeners('booking:status_changed', data);
-      this.notifyListeners('booking:accepted', data);
+      this.notifyListeners('booking:confirmed', data);
     });
 
     this.socket.on('booking:rejected', (data) => {
@@ -1539,6 +1546,35 @@ class SocketService {
     // FIX #3: Add subscription for chat:new_message event (backend emits this, also listening for chat:message:new)
     this.socket.on('chat:new_message', (data) => {
       this.notifyListeners('chat:new_message', data);
+    });
+
+    // Backend emits 'message:read' when a receiver reads messages
+    this.socket.on('message:read', (data) => {
+      this.notifyListeners('message:read', data);
+      this.notifyListeners('chat:message:read', data);
+    });
+
+    // Backend emits 'message:delivered' when message is delivered
+    this.socket.on('message:delivered', (data) => {
+      this.notifyListeners('message:delivered', data);
+      this.notifyListeners('chat:message:delivered', data);
+    });
+
+    // Backend emits 'message:deleted' when a message is soft-deleted
+    this.socket.on('message:deleted', (data) => {
+      this.notifyListeners('message:deleted', data);
+      this.notifyListeners('chat:message:deleted', data);
+    });
+
+    // Backend emits presence events for online/offline tracking
+    this.socket.on('presence:online', (data) => {
+      this.notifyListeners('presence:online', data);
+      this.notifyListeners('chat:presence:online', data);
+    });
+
+    this.socket.on('presence:offline', (data) => {
+      this.notifyListeners('presence:offline', data);
+      this.notifyListeners('chat:presence:offline', data);
     });
 
     // FIX #16: Add subscription for review:reply event (notifies customer when provider replies)

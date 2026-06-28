@@ -77,6 +77,96 @@ const EVENTS_REDIS_KEY = 'notification:events:';
 const EVENTS_TTL_SECONDS = 86400 * 7; // 7 days
 
 // =============================================================================
+// Rate Limiting (In-Memory with LRU Eviction)
+// =============================================================================
+
+interface RateLimitEntry {
+  count: number;
+  windowStart: number;
+}
+
+// In-memory rate limit cache with LRU eviction
+const RATE_LIMIT_CACHE_MAX_SIZE = 1000;
+const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 100;
+
+class LRUCache<K, V> {
+  private cache = new Map<K, V>();
+  private maxSize: number;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    // Delete first to refresh position if exists
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    }
+    // Evict oldest if at capacity
+    else if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+
+  delete(key: K): boolean {
+    return this.cache.delete(key);
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+
+  size(): number {
+    return this.cache.size;
+  }
+}
+
+// Rate limit cache - bounded to prevent memory leaks
+const rateLimitCache = new LRUCache<string, RateLimitEntry>(RATE_LIMIT_CACHE_MAX_SIZE);
+
+/**
+ * Check rate limit for analytics endpoint
+ * Returns true if allowed, false if rate limited
+ */
+function checkRateLimit(userId: string): { allowed: boolean; remaining: number; resetIn: number } {
+  const key = `analytics:${userId}`;
+  const now = Date.now();
+  const entry = rateLimitCache.get(key);
+
+  // If no entry or window expired, start new window
+  if (!entry || now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+    rateLimitCache.set(key, { count: 1, windowStart: now });
+    return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - 1, resetIn: RATE_LIMIT_WINDOW_MS };
+  }
+
+  // Check if under limit
+  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
+    const resetIn = RATE_LIMIT_WINDOW_MS - (now - entry.windowStart);
+    return { allowed: false, remaining: 0, resetIn: Math.max(0, resetIn) };
+  }
+
+  // Increment count
+  entry.count++;
+  rateLimitCache.set(key, entry);
+  return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - entry.count, resetIn: RATE_LIMIT_WINDOW_MS - (now - entry.windowStart) };
+}
+
+// =============================================================================
 // Notification Analytics Service Class
 // =============================================================================
 
@@ -94,6 +184,18 @@ export class NotificationAnalyticsService {
     channel: 'in_app' | 'email' | 'sms' | 'push',
     success: boolean = true
   ): Promise<void> {
+    // Rate limiting check
+    const rateLimit = checkRateLimit(userId);
+    if (!rateLimit.allowed) {
+      logger.warn('Rate limit exceeded for analytics delivery', {
+        context: 'NotificationAnalytics',
+        action: 'RATE_LIMIT_EXCEEDED',
+        userId,
+        resetIn: rateLimit.resetIn,
+      });
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(rateLimit.resetIn / 1000)} seconds.`);
+    }
+
     const event: DeliveryEvent = {
       notificationId,
       userId,
@@ -158,6 +260,18 @@ export class NotificationAnalyticsService {
     channel: 'in_app' | 'email' | 'sms' | 'push',
     metadata?: Record<string, unknown>
   ): Promise<void> {
+    // Rate limiting check
+    const rateLimit = checkRateLimit(userId);
+    if (!rateLimit.allowed) {
+      logger.warn('Rate limit exceeded for analytics click', {
+        context: 'NotificationAnalytics',
+        action: 'RATE_LIMIT_EXCEEDED',
+        userId,
+        resetIn: rateLimit.resetIn,
+      });
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(rateLimit.resetIn / 1000)} seconds.`);
+    }
+
     const event: ClickEvent = {
       notificationId,
       userId,
@@ -213,6 +327,18 @@ export class NotificationAnalyticsService {
     userId: string,
     channel: 'in_app' | 'email' | 'sms' | 'push'
   ): Promise<void> {
+    // Rate limiting check
+    const rateLimit = checkRateLimit(userId);
+    if (!rateLimit.allowed) {
+      logger.warn('Rate limit exceeded for analytics view', {
+        context: 'NotificationAnalytics',
+        action: 'RATE_LIMIT_EXCEEDED',
+        userId,
+        resetIn: rateLimit.resetIn,
+      });
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(rateLimit.resetIn / 1000)} seconds.`);
+    }
+
     const event: ViewEvent = {
       notificationId,
       userId,

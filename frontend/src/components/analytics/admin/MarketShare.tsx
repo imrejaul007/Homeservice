@@ -15,8 +15,9 @@ import {
   BarChart,
   Bar,
 } from 'recharts';
-import { PieChart as PieIcon, TrendingUp, Loader, Globe, Users, DollarSign, Target } from 'lucide-react';
+import { PieChart as PieIcon, TrendingUp, Loader, Globe, Users, DollarSign, Target, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface MarketShareProps {
   timeRange?: '30d' | '90d' | '1y';
@@ -60,65 +61,107 @@ interface ShareStats {
 
 const PLATFORM_COLORS = ['#2563EB', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
-const MOCK_SHARE_DATA: MarketShareData[] = [
-  { platform: 'Your Platform', share: 35, revenue: 2450000, customers: 45000, growth: 12, color: PLATFORM_COLORS[0] },
-  { platform: 'Competitor A', share: 28, revenue: 1960000, customers: 38000, growth: 5, color: PLATFORM_COLORS[1] },
-  { platform: 'Competitor B', share: 18, revenue: 1260000, customers: 24000, growth: -2, color: PLATFORM_COLORS[2] },
-  { platform: 'Competitor C', share: 12, revenue: 840000, customers: 15000, growth: 8, color: PLATFORM_COLORS[3] },
-  { platform: 'Others', share: 7, revenue: 490000, customers: 8000, growth: 3, color: PLATFORM_COLORS[4] },
-];
+const buildProjectionData = (trendData: TrendData[], growthRate: number): ProjectionData[] => {
+  if (trendData.length === 0) {
+    return [];
+  }
 
-const MOCK_TREND_DATA: TrendData[] = [
-  { month: 'Jan', yourPlatform: 30, competitor1: 32, competitor2: 20, competitor3: 18 },
-  { month: 'Feb', yourPlatform: 31, competitor1: 31, competitor2: 19, competitor3: 19 },
-  { month: 'Mar', yourPlatform: 32, competitor1: 30, competitor2: 19, competitor3: 19 },
-  { month: 'Apr', yourPlatform: 33, competitor1: 29, competitor2: 19, competitor3: 19 },
-  { month: 'May', yourPlatform: 34, competitor1: 28, competitor2: 18, competitor3: 20 },
-  { month: 'Jun', yourPlatform: 35, competitor1: 28, competitor2: 18, competitor3: 19 },
-];
+  const latest = trendData[trendData.length - 1];
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const startIndex = monthNames.indexOf(latest.month);
 
-const MOCK_PROJECTION_DATA: ProjectionData[] = [
-  { month: 'Jul', projected: 36, optimistic: 38, pessimistic: 34 },
-  { month: 'Aug', projected: 37, optimistic: 40, pessimistic: 35 },
-  { month: 'Sep', projected: 38, optimistic: 42, pessimistic: 36 },
-  { month: 'Oct', projected: 39, optimistic: 43, pessimistic: 37 },
-  { month: 'Nov', projected: 40, optimistic: 45, pessimistic: 38 },
-  { month: 'Dec', projected: 42, optimistic: 48, pessimistic: 39 },
-];
-
-const MOCK_STATS: ShareStats = {
-  currentShare: 35,
-  previousShare: 30,
-  change: 5,
-  changePercent: 16.7,
-  trend: 'up',
-  totalMarket: 7000000,
-  totalRevenue: 2450000,
-  growthRate: 12,
+  return Array.from({ length: 6 }, (_, index) => {
+    const projected = Math.min(100, latest.yourPlatform + (index + 1) * (growthRate / 12));
+    return {
+      month: monthNames[(startIndex + index + 1) % monthNames.length],
+      projected: Math.round(projected * 10) / 10,
+      optimistic: Math.round((projected + 2) * 10) / 10,
+      pessimistic: Math.round(Math.max(0, projected - 2) * 10) / 10,
+    };
+  });
 };
 
 export const MarketShare: React.FC<MarketShareProps> = ({
   timeRange = '90d',
-  region = 'all',
+  region: initialRegion = 'all',
 }) => {
   const [loading, setLoading] = useState(true);
-  const [shareData, setShareData] = useState<MarketShareData[]>(MOCK_SHARE_DATA);
-  const [trendData, setTrendData] = useState<TrendData[]>(MOCK_TREND_DATA);
-  const [projectionData] = useState<ProjectionData[]>(MOCK_PROJECTION_DATA);
-  const [stats, setStats] = useState<ShareStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [shareData, setShareData] = useState<MarketShareData[]>([]);
+  const [trendData, setTrendData] = useState<TrendData[]>([]);
+  const [projectionData, setProjectionData] = useState<ProjectionData[]>([]);
+  const [stats, setStats] = useState<ShareStats>({
+    currentShare: 0,
+    previousShare: 0,
+    change: 0,
+    changePercent: 0,
+    trend: 'stable',
+    totalMarket: 0,
+    totalRevenue: 0,
+    growthRate: 0,
+  });
+  const [platformCustomers, setPlatformCustomers] = useState(0);
   const [selectedRange, setSelectedRange] = useState(timeRange);
+  const [selectedRegion, setSelectedRegion] = useState(initialRegion);
   const [viewMode, setViewMode] = useState<'pie' | 'trend' | 'projection'>('pie');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setShareData(MOCK_SHARE_DATA);
-      setTrendData(MOCK_TREND_DATA);
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getAdminMarketShare(selectedRange, selectedRegion);
+        const coloredShare = (apiData.share || []).map((entry, index) => ({
+          ...entry,
+          color: PLATFORM_COLORS[index % PLATFORM_COLORS.length],
+        }));
+
+        const yourPlatform = coloredShare.find((entry) => entry.platform === 'Your Platform') || coloredShare[0];
+        const previousShare = apiData.trend?.length > 1
+          ? apiData.trend[apiData.trend.length - 2].yourPlatform
+          : yourPlatform?.share || 0;
+        const currentShare = yourPlatform?.share || 0;
+        const change = currentShare - previousShare;
+        const changePercent = previousShare > 0 ? (change / previousShare) * 100 : 0;
+
+        setShareData(coloredShare);
+        setTrendData(apiData.trend || []);
+        setProjectionData(buildProjectionData(apiData.trend || [], yourPlatform?.growth || 0));
+        setPlatformCustomers(yourPlatform?.customers || 0);
+        setStats({
+          currentShare,
+          previousShare,
+          change,
+          changePercent: Math.round(changePercent * 10) / 10,
+          trend: change > 0 ? 'up' : change < 0 ? 'down' : 'stable',
+          totalMarket: apiData.totalMarket || 0,
+          totalRevenue: yourPlatform?.revenue || 0,
+          growthRate: yourPlatform?.growth || 0,
+        });
+      } catch (err) {
+        setShareData([]);
+        setTrendData([]);
+        setProjectionData([]);
+        setPlatformCustomers(0);
+        setStats({
+          currentShare: 0,
+          previousShare: 0,
+          change: 0,
+          changePercent: 0,
+          trend: 'stable',
+          totalMarket: 0,
+          totalRevenue: 0,
+          growthRate: 0,
+        });
+        setError(err instanceof Error ? err.message : 'Failed to load market share data');
+      } finally {
+        setLoading(false);
+      }
     };
+
     fetchData();
-  }, [selectedRange, region]);
+  }, [selectedRange, selectedRegion]);
 
   const formatCurrency = (value: number) => {
     if (value >= 1000000) {
@@ -207,8 +250,8 @@ export const MarketShare: React.FC<MarketShareProps> = ({
           </div>
 
           <select
-            value={region}
-            onChange={(e) => {}}
+            value={selectedRegion}
+            onChange={(e) => setSelectedRegion(e.target.value)}
             className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             {regions.map((r) => (
@@ -231,6 +274,13 @@ export const MarketShare: React.FC<MarketShareProps> = ({
           </select>
         </div>
       </div>
+
+      {error && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -259,7 +309,7 @@ export const MarketShare: React.FC<MarketShareProps> = ({
             <Users className="h-4 w-4" />
             Your Customers
           </p>
-          <p className="text-2xl font-bold text-gray-900">{formatNumber(45000)}</p>
+          <p className="text-2xl font-bold text-gray-900">{formatNumber(platformCustomers)}</p>
           <p className="text-xs text-gray-500">active users</p>
         </div>
 
@@ -276,6 +326,14 @@ export const MarketShare: React.FC<MarketShareProps> = ({
       {loading ? (
         <div className="h-80 flex items-center justify-center">
           <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+        </div>
+      ) : shareData.length === 0 ? (
+        <div className="h-80 flex flex-col items-center justify-center text-center">
+          <Globe className="h-10 w-10 text-gray-300 mb-3" />
+          <p className="text-sm font-medium text-gray-700">No market share data available</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Market share metrics appear after the platform records completed bookings.
+          </p>
         </div>
       ) : viewMode === 'pie' ? (
         <>
@@ -334,6 +392,11 @@ export const MarketShare: React.FC<MarketShareProps> = ({
           </div>
         </>
       ) : viewMode === 'trend' ? (
+        trendData.length === 0 ? (
+          <div className="h-80 flex items-center justify-center text-sm text-gray-500">
+            No trend data available for this period.
+          </div>
+        ) : (
         <>
           {/* Market Share Trend */}
           <div className="h-80">
@@ -393,6 +456,11 @@ export const MarketShare: React.FC<MarketShareProps> = ({
             </ResponsiveContainer>
           </div>
         </>
+        )
+      ) : projectionData.length === 0 ? (
+        <div className="h-80 flex items-center justify-center text-sm text-gray-500">
+          Projection requires historical trend data.
+        </div>
       ) : (
         <>
           {/* Market Share Projection */}

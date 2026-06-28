@@ -105,6 +105,23 @@ const CATEGORIES = [
   { id: 'makeup', label: 'Makeup', icon: Award },
 ];
 
+/** Match a service's category/name against a chip slug using normalized token comparison */
+const matchesCategory = (pro: RecommendedPro, slug: string): boolean => {
+  if (slug === 'all') return true;
+  const normalize = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normalizedSlug = normalize(slug);
+  return (pro.services || []).some(s => {
+    const cat = normalize(s.category);
+    const name = normalize(s.name);
+    return (
+      cat === normalizedSlug ||
+      cat.includes(normalizedSlug) ||
+      normalizedSlug.includes(cat) ||
+      name.includes(normalizedSlug)
+    );
+  });
+};
+
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
@@ -167,7 +184,7 @@ const ProCardSkeleton: React.FC = () => (
 // =============================================================================
 
 const SKELETON_COUNT = 4;
-const HEADER_HEIGHT = 280; // px offset for scroll area calculation
+const HEADER_HEIGHT = 300; // px offset for scroll area calculation (increased for filters panel space)
 
 // =============================================================================
 // RECENT PRO CARD COMPONENT - Larger, more prominent for "Book Again"
@@ -186,14 +203,19 @@ const RecentProCard: React.FC<RecentProCardProps> = ({ pro, onBook, onViewProfil
   const initials = getInitials(pro.firstName, pro.lastName, pro.businessName);
   const avatarColor = getAvatarColor(displayName);
 
-  // Get lowest price from services
-  const getNumericPrice = (price: number | { amount: number; currency?: string; type?: string }): number => {
-    return typeof price === 'number' ? price : price.amount;
-  };
-  const validPrices = pro.services
-    ?.map(s => getNumericPrice(s.price))
-    .filter(p => typeof p === 'number' && Number.isFinite(p) && p >= 0) || [];
-  const lowestPrice = validPrices.length > 0 ? Math.min(...validPrices) : null;
+  // Get lowest price and its currency from services
+  const getServicePrice = (price: number | { amount: number; currency?: string; type?: string }) =>
+    typeof price === 'number' ? { amount: price, currency: 'AED' } : { amount: price.amount, currency: price.currency || 'AED' };
+
+  const validServices = (pro.services || [])
+    .map(s => getServicePrice(s.price))
+    .filter(p => typeof p.amount === 'number' && Number.isFinite(p.amount) && p.amount >= 0);
+
+  const lowestService = validServices.length > 0
+    ? validServices.reduce((a, b) => a.amount <= b.amount ? a : b)
+    : null;
+  const lowestPrice = lowestService?.amount ?? null;
+  const lowestCurrency = lowestService?.currency ?? 'AED';
 
   return (
     <div
@@ -331,7 +353,7 @@ const RecentProCard: React.FC<RecentProCardProps> = ({ pro, onBook, onViewProfil
 
             {/* Price */}
             {lowestPrice !== null && (
-              <ProStartingPrice amount={lowestPrice} align="right" />
+              <ProStartingPrice amount={lowestPrice} sourceCurrency={lowestCurrency} align="right" />
             )}
           </div>
 
@@ -394,14 +416,19 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
   const initials = getInitials(pro.firstName, pro.lastName, pro.businessName);
   const avatarColor = getAvatarColor(displayName);
 
-  // Get lowest price from services - use consistent helper like RecentProCard
-  const getNumericPrice = (price: number | { amount: number; currency?: string; type?: string }): number => {
-    return typeof price === 'number' ? price : price.amount;
-  };
-  const validPrices = pro.services
-    ?.map(s => getNumericPrice(s.price))
-    .filter(p => typeof p === 'number' && Number.isFinite(p) && p >= 0) || [];
-  const lowestPrice = validPrices.length > 0 ? Math.min(...validPrices) : null;
+  // Get lowest price and its currency from services
+  const getServicePrice = (price: number | { amount: number; currency?: string; type?: string }) =>
+    typeof price === 'number' ? { amount: price, currency: 'AED' } : { amount: price.amount, currency: price.currency || 'AED' };
+
+  const validServices = (pro.services || [])
+    .map(s => getServicePrice(s.price))
+    .filter(p => typeof p.amount === 'number' && Number.isFinite(p.amount) && p.amount >= 0);
+
+  const lowestService = validServices.length > 0
+    ? validServices.reduce((a, b) => a.amount <= b.amount ? a : b)
+    : null;
+  const lowestPrice = lowestService?.amount ?? null;
+  const lowestCurrency = lowestService?.currency ?? 'AED';
 
   // Get top 3 service names
   const serviceNames = pro.services?.slice(0, 3).map(s => s.name) || [];
@@ -473,6 +500,7 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
             {lowestPrice !== null && (
               <ProStartingPrice
                 amount={lowestPrice}
+                sourceCurrency={lowestCurrency}
                 className="font-bold text-nilin-charcoal text-sm"
                 showSuffix={false}
               />
@@ -634,6 +662,7 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
             {lowestPrice !== null ? (
               <ProStartingPrice
                 amount={lowestPrice}
+                sourceCurrency={lowestCurrency}
                 className="text-lg font-bold text-nilin-charcoal"
                 suffixClassName="text-[10px] text-nilin-warmGray ml-1"
               />
@@ -772,6 +801,22 @@ ModalOverlay.displayName = 'ModalOverlay';
 // MAIN VIEW PRO MODAL COMPONENT
 // =============================================================================
 
+interface FilterState {
+  minPrice: string;
+  maxPrice: string;
+  minRating: number;
+  verifiedOnly: boolean;
+  tier: 'all' | 'standard' | 'premium' | 'elite';
+}
+
+const DEFAULT_FILTERS: FilterState = {
+  minPrice: '',
+  maxPrice: '',
+  minRating: 0,
+  verifiedOnly: false,
+  tier: 'all',
+};
+
 interface ViewProModalProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -789,55 +834,96 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
   // State
   const [pros, setPros] = useState<RecommendedPro[]>([]);
   const [recentlyUsed, setRecentlyUsed] = useState<RecommendedPro[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
 
-  // Filter pros based on search and category
+  const hasActiveFilters =
+    filters.minPrice !== '' ||
+    filters.maxPrice !== '' ||
+    filters.minRating > 0 ||
+    filters.verifiedOnly ||
+    filters.tier !== 'all';
+
+  // Filter pros based on search, category chips, and advanced filters
   const filteredPros = useMemo(() => {
     let filtered = pros;
 
-    // Filter by category (if pro has categories/services)
+    // Category — use the improved matchesCategory helper (normalized slug matching)
     if (selectedCategory !== 'all') {
-      filtered = filtered.filter(pro =>
-        pro.services?.some(s =>
-          s.name?.toLowerCase().includes(selectedCategory) ||
-          s.category?.toLowerCase().includes(selectedCategory) ||
-          s.name?.toLowerCase().split(' ').some(word => word === selectedCategory) ||
-          s.category?.toLowerCase().split(' ').some(word => word === selectedCategory)
-        )
-      );
+      filtered = filtered.filter(pro => matchesCategory(pro, selectedCategory));
     }
 
-    // Filter by search query
+    // Text search — name, services, bio
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(pro =>
         pro.businessName?.toLowerCase().includes(query) ||
         pro.firstName?.toLowerCase().includes(query) ||
         pro.lastName?.toLowerCase().includes(query) ||
-        pro.services?.some(s => s.name?.toLowerCase().includes(query))
+        pro.bio?.toLowerCase().includes(query) ||
+        pro.services?.some(s => s.name?.toLowerCase().includes(query) || s.category?.toLowerCase().includes(query))
       );
     }
 
-    return filtered;
-  }, [pros, searchQuery, selectedCategory]);
+    // Advanced filters
+    if (filters.verifiedOnly) {
+      filtered = filtered.filter(pro => pro.isVerified);
+    }
+    if (filters.tier !== 'all') {
+      filtered = filtered.filter(pro => (pro.tier || 'standard') === filters.tier);
+    }
+    if (filters.minRating > 0) {
+      filtered = filtered.filter(pro => (pro.averageRating || 0) >= filters.minRating);
+    }
+    if (filters.minPrice !== '') {
+      const min = parseFloat(filters.minPrice);
+      if (!isNaN(min)) {
+        filtered = filtered.filter(pro =>
+          pro.services?.some(s => {
+            const p = typeof s.price === 'number' ? s.price : s.price?.amount;
+            return typeof p === 'number' && p >= min;
+          })
+        );
+      }
+    }
+    if (filters.maxPrice !== '') {
+      const max = parseFloat(filters.maxPrice);
+      if (!isNaN(max)) {
+        filtered = filtered.filter(pro =>
+          pro.services?.some(s => {
+            const p = typeof s.price === 'number' ? s.price : s.price?.amount;
+            return typeof p === 'number' && p <= max;
+          })
+        );
+      }
+    }
 
-  // Fetch recommended pros with AbortController for race condition prevention
-  const fetchPros = useCallback(async () => {
+    return filtered;
+  }, [pros, searchQuery, selectedCategory, filters]);
+
+  // Fetch recommended pros — uses the modal's AbortController as the external signal
+  const fetchPros = useCallback(async (append = false) => {
     // Cancel any in-flight request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
     abortControllerRef.current = new AbortController();
+    const { signal } = abortControllerRef.current;
 
-    setLoading(true);
-    setError(null);
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
-      // Get user's current location for distance calculation
       let userLocation: { latitude: number; longitude: number } | undefined;
       try {
         const location = await locationService.getCurrentLocation();
@@ -847,60 +933,74 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
             longitude: location.coordinates.longitude,
           };
         }
-      } catch (locError) {
-        // Continue without location - distance won't be shown
+      } catch {
+        // Continue without location
       }
 
-      const { pros: recommendedPros, recentlyUsed: recent } = await customerDashboardApi.getRecommendedPros(limit, userLocation);
-      // Only update state if request wasn't aborted
-      if (!abortControllerRef.current.signal.aborted) {
-        setPros(recommendedPros || []);
-        setRecentlyUsed(recent || []);
+      const { pros: recommendedPros, recentlyUsed: recent, hasMore: more } =
+        await customerDashboardApi.getRecommendedPros(limit, userLocation, {
+          signal,
+          offset: append ? pros.length : 0,
+        });
+
+      if (!signal.aborted) {
+        if (append) {
+          setPros(prev => [...prev, ...(recommendedPros || [])]);
+        } else {
+          setPros(recommendedPros || []);
+          setRecentlyUsed(recent || []);
+        }
+        setHasMore(more);
       }
     } catch (err) {
-      // Ignore abort errors
-      if (err instanceof Error && err.name === 'AbortError') {
-        return;
+      if (err instanceof Error && err.name === 'AbortError') return;
+      if (!abortControllerRef.current?.signal.aborted) {
+        if (err instanceof CustomerDashboardApiError && err.statusCode === 401) {
+          setError('Your session expired. Please sign in again to view professionals.');
+        } else if (err instanceof CustomerDashboardApiError && err.statusCode === 404) {
+          setError('No professionals are available in your area yet. Try again later.');
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to load professionals');
+        }
+        if (!append) setPros([]);
       }
-      if (err instanceof CustomerDashboardApiError && err.statusCode === 401) {
-        setError('Your session expired. Please sign in again to view professionals.');
-      } else if (err instanceof CustomerDashboardApiError && err.statusCode === 404) {
-        setError('No professionals are available in your area yet. Try again later.');
-      } else {
-        setError(err instanceof Error ? err.message : 'Failed to load professionals');
-      }
-      setPros([]);
     } finally {
       if (!abortControllerRef.current?.signal.aborted) {
         setLoading(false);
+        setLoadingMore(false);
       }
     }
-  }, [limit]);
+  }, [limit, pros.length]);
 
-  // Fetch on open, cleanup on close
+  // Fetch on open, reset filters on open
   useEffect(() => {
     if (open) {
       fetchPros();
-      // Reset filters
       setSearchQuery('');
       setSelectedCategory('all');
+      setFilters(DEFAULT_FILTERS);
+      setShowFilters(false);
     }
-  }, [open, fetchPros]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
-  // Reset state when modal closes
+  // Cancel request and reset state on close
   useEffect(() => {
     if (!open) {
-      // Cancel any in-flight request
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
       }
       setPros([]);
       setRecentlyUsed([]);
+      setHasMore(false);
       setError(null);
       setLoading(false);
+      setLoadingMore(false);
       setSearchQuery('');
       setSelectedCategory('all');
+      setFilters(DEFAULT_FILTERS);
+      setShowFilters(false);
     }
   }, [open]);
 
@@ -1038,18 +1138,103 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
               <button
                 onClick={() => setShowFilters(!showFilters)}
                 className={cn(
-                  'flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium',
+                  'relative flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium',
                   'whitespace-nowrap transition-all duration-200 border',
-                  showFilters
+                  showFilters || hasActiveFilters
                     ? 'bg-nilin-coral text-white border-nilin-coral'
                     : 'bg-white/80 text-nilin-charcoal border-nilin-border/30 hover:border-nilin-coral/30 hover:bg-nilin-blush/30'
                 )}
               >
                 <SlidersHorizontal className="w-4 h-4" />
                 <span>Filters</span>
+                {hasActiveFilters && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />
+                )}
               </button>
             </div>
           </div>
+
+          {/* Advanced Filters Panel */}
+          {showFilters && (
+            <div className="px-6 py-4 border-b border-nilin-border/20 bg-nilin-blush/10">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                {/* Price range */}
+                <div>
+                  <p className="text-xs font-medium text-nilin-warmGray mb-1.5">Min Price</p>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={filters.minPrice}
+                    onChange={e => setFilters(f => ({ ...f, minPrice: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-nilin-border/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral/50 bg-white"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-nilin-warmGray mb-1.5">Max Price</p>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Any"
+                    value={filters.maxPrice}
+                    onChange={e => setFilters(f => ({ ...f, maxPrice: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-nilin-border/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral/50 bg-white"
+                  />
+                </div>
+                {/* Min rating */}
+                <div>
+                  <p className="text-xs font-medium text-nilin-warmGray mb-1.5">Min Rating</p>
+                  <select
+                    value={filters.minRating}
+                    onChange={e => setFilters(f => ({ ...f, minRating: Number(e.target.value) }))}
+                    className="w-full px-3 py-2 text-sm border border-nilin-border/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral/50 bg-white"
+                  >
+                    <option value={0}>Any rating</option>
+                    <option value={3}>3+ stars</option>
+                    <option value={4}>4+ stars</option>
+                    <option value={4.5}>4.5+ stars</option>
+                  </select>
+                </div>
+                {/* Tier */}
+                <div>
+                  <p className="text-xs font-medium text-nilin-warmGray mb-1.5">Tier</p>
+                  <select
+                    value={filters.tier}
+                    onChange={e => setFilters(f => ({ ...f, tier: e.target.value as FilterState['tier'] }))}
+                    className="w-full px-3 py-2 text-sm border border-nilin-border/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral/50 bg-white"
+                  >
+                    <option value="all">All tiers</option>
+                    <option value="standard">Standard</option>
+                    <option value="premium">Premium</option>
+                    <option value="elite">Elite</option>
+                  </select>
+                </div>
+                {/* Verified only */}
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={filters.verifiedOnly}
+                      onChange={e => setFilters(f => ({ ...f, verifiedOnly: e.target.checked }))}
+                      className="w-4 h-4 rounded accent-nilin-coral"
+                    />
+                    <span className="text-sm text-nilin-charcoal font-medium">Verified only</span>
+                  </label>
+                </div>
+                {/* Reset filters */}
+                {hasActiveFilters && (
+                  <div className="flex items-end pb-1">
+                    <button
+                      onClick={() => setFilters(DEFAULT_FILTERS)}
+                      className="text-sm text-nilin-coral hover:text-nilin-rose font-medium transition-colors"
+                    >
+                      Reset filters
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Body content */}
           <div className="px-6 py-5 overflow-y-auto" style={{ maxHeight: `calc(90vh - ${HEADER_HEIGHT}px)` }}>
@@ -1066,17 +1251,17 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
             {!loading && error && (
               <ErrorState
                 message={error}
-                onRetry={fetchPros}
+                onRetry={() => fetchPros()}
                 onLogin={error.includes('sign in') ? () => { onOpenChange?.(false); navigate('/login'); } : undefined}
               />
             )}
 
-            {/* Empty state */}
-            {!loading && !error && pros.length === 0 && (
+            {/* Empty state — only when BOTH pros and recentlyUsed are empty */}
+            {!loading && !error && pros.length === 0 && recentlyUsed.length === 0 && (
               <EmptyState onBrowse={handleBrowseAll} onClose={() => onOpenChange?.(false)} />
             )}
 
-            {/* Recently Booked / Book Again section - Featured cards */}
+            {/* Recently Booked / Book Again section */}
             {!loading && !error && recentlyUsed.length > 0 && (
               <div className="mb-8">
                 <div className="flex items-center gap-3 mb-4">
@@ -1101,19 +1286,24 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
               </div>
             )}
 
-            {/* Filtered results info */}
-            {!loading && !error && filteredPros.length > 0 && (searchQuery || selectedCategory !== 'all') && (
+            {/* Active filter / search result summary */}
+            {!loading && !error && (searchQuery || selectedCategory !== 'all' || hasActiveFilters) && (
               <div className="mb-4 flex items-center justify-between">
                 <p className="text-sm text-nilin-warmGray">
-                  Showing <span className="font-semibold text-nilin-charcoal">{filteredPros.length}</span> result{filteredPros.length !== 1 ? 's' : ''}
-                  {searchQuery && <> for "<span className="font-medium">{searchQuery}</span>"</>}
-                  {selectedCategory !== 'all' && <> in <span className="font-medium capitalize">{selectedCategory}</span></>}
+                  {filteredPros.length > 0 ? (
+                    <>Showing <span className="font-semibold text-nilin-charcoal">{filteredPros.length}</span> result{filteredPros.length !== 1 ? 's' : ''}
+                      {searchQuery && <> for "<span className="font-medium">{searchQuery}</span>"</>}
+                      {selectedCategory !== 'all' && <> in <span className="font-medium capitalize">{selectedCategory}</span></>}
+                    </>
+                  ) : (
+                    'No matches for current filters'
+                  )}
                 </p>
                 <button
-                  onClick={() => { setSearchQuery(''); setSelectedCategory('all'); }}
-                  className="text-sm text-nilin-coral hover:text-nilin-rose font-medium"
+                  onClick={() => { setSearchQuery(''); setSelectedCategory('all'); setFilters(DEFAULT_FILTERS); }}
+                  className="text-sm text-nilin-coral hover:text-nilin-rose font-medium transition-colors"
                 >
-                  Clear filters
+                  Clear all
                 </button>
               </div>
             )}
@@ -1121,7 +1311,6 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
             {/* Pros grid */}
             {!loading && !error && filteredPros.length > 0 && (
               <>
-                {/* Results header */}
                 {!recentlyUsed.length && (
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
@@ -1137,7 +1326,6 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
                   </div>
                 )}
 
-                {/* Grid - 2 columns on larger screens */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {filteredPros.map((pro) => (
                     <ProCard
@@ -1149,22 +1337,34 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
                   ))}
                 </div>
 
-                {/* View all button */}
-                {pros.length >= limit && (
-                  <div className="mt-8 pt-6 border-t border-nilin-border/20 text-center">
+                {/* Load More / View All */}
+                <div className="mt-8 pt-6 border-t border-nilin-border/20 flex items-center justify-center gap-3">
+                  {hasMore && (
                     <button
-                      onClick={handleBrowseAll}
-                      className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-2xl text-sm font-semibold hover:shadow-xl hover:shadow-nilin-coral/30 transition-all duration-300 transform hover:scale-105 active:scale-95"
+                      onClick={() => fetchPros(true)}
+                      disabled={loadingMore}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 border border-nilin-coral/40 text-nilin-coral rounded-xl text-sm font-semibold hover:bg-nilin-blush/30 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <span>View All Professionals</span>
-                      <ChevronRight className="w-5 h-5" />
+                      {loadingMore ? (
+                        <span className="inline-block w-4 h-4 border-2 border-nilin-coral/40 border-t-nilin-coral rounded-full animate-spin" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4" />
+                      )}
+                      {loadingMore ? 'Loading…' : 'Load More'}
                     </button>
-                  </div>
-                )}
+                  )}
+                  <button
+                    onClick={handleBrowseAll}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl text-sm font-semibold hover:shadow-lg hover:shadow-nilin-coral/30 transition-all duration-200 transform hover:scale-105 active:scale-95"
+                  >
+                    <span>Browse All</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
               </>
             )}
 
-            {/* No results after filtering */}
+            {/* No results after filtering — but pros exist */}
             {!loading && !error && pros.length > 0 && filteredPros.length === 0 && (
               <div className="rounded-2xl border border-nilin-border/30 bg-nilin-blush/20 p-10 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-nilin-coral/10 mx-auto mb-4 flex items-center justify-center">
@@ -1175,7 +1375,7 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
                   Try adjusting your search or filters
                 </p>
                 <button
-                  onClick={() => { setSearchQuery(''); setSelectedCategory('all'); }}
+                  onClick={() => { setSearchQuery(''); setSelectedCategory('all'); setFilters(DEFAULT_FILTERS); }}
                   className="px-5 py-2.5 bg-nilin-coral text-white rounded-xl hover:bg-nilin-rose transition-colors text-sm font-medium"
                 >
                   Clear Filters

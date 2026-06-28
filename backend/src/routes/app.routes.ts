@@ -7,6 +7,7 @@
 import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
+import logger from '../utils/logger';
 
 const router = Router();
 
@@ -17,7 +18,10 @@ try {
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
   APP_VERSION = packageJson.version || '1.0.0';
 } catch (error) {
-  console.warn('Could not read version from package.json, using default');
+  logger.warn('Could not read version from package.json, using default', {
+    context: 'AppRoutes',
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
 // App configuration
@@ -38,12 +42,13 @@ const APP_CONFIG = {
     ios: 'https://apps.apple.com/app/nilin',
   },
   // Feature flags
+  // NOTE: chatWithProvider is now enabled - ensure product is ready for chat feature before deploying
   features: {
     loyaltyProgram: true,
     referralSystem: true,
     instantBooking: true,
-    chatWithProvider: false,
-    realTimeTracking: false,
+    chatWithProvider: true, // Ready to enable - ensure backend support exists
+    realTimeTracking: true, // Enabled for live provider tracking during in-progress bookings
   },
   // Support info
   support: {

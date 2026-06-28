@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Ticket,
@@ -82,12 +83,14 @@ const dashboardApi = {
   },
 
   async getAgentPerformance(): Promise<AgentPerformance[]> {
-    // Mock data for agent performance
-    return [
-      { agentId: '1', agentName: 'Sarah Johnson', activeChats: 3, resolvedToday: 12, avgResponseTime: 45, rating: 4.8 },
-      { agentId: '2', agentName: 'Mike Chen', activeChats: 2, resolvedToday: 15, avgResponseTime: 38, rating: 4.9 },
-      { agentId: '3', agentName: 'Emma Wilson', activeChats: 4, resolvedToday: 10, avgResponseTime: 52, rating: 4.7 },
-    ];
+    try {
+      const response = await authService.get<{ success: boolean; data: AgentPerformance[] }>(
+        '/support/admin/agents/performance'
+      );
+      return response.data || [];
+    } catch {
+      return [];
+    }
   },
 
   async getRecentTickets(limit: number = 5): Promise<Array<{
@@ -487,7 +490,7 @@ export const SupportDashboard: React.FC<SupportDashboardProps> = ({
       setLastRefresh(new Date());
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
-      setError('Failed to load dashboard data. Please try again.');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

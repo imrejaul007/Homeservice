@@ -1,14 +1,6 @@
-import axios from 'axios';
-import { API_BASE_URL } from '@/config/api';
+import { api } from './api';
 
-// API client for managed contracts
-const api = axios.create({
-  baseURL: `${API_BASE_URL}/provider/managed-contracts`,
-  timeout: 15000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+const BASE_PATH = '/provider/managed-contracts';
 
 // ============================================
 // Type Definitions
@@ -268,7 +260,7 @@ export const managedContractApi = {
    * POST /api/provider/managed-contracts
    */
   createContract: async (input: CreateContractInput): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post('/', input);
+    const response = await api.post(BASE_PATH, input);
     return response.data;
   },
 
@@ -277,7 +269,7 @@ export const managedContractApi = {
    * GET /api/provider/managed-contracts
    */
   getContracts: async (filters?: ContractFilters): Promise<PaginatedResponse<ManagedContract>> => {
-    const response = await api.get('/', { params: filters });
+    const response = await api.get(BASE_PATH, { params: filters });
     return response.data;
   },
 
@@ -286,7 +278,7 @@ export const managedContractApi = {
    * GET /api/provider/managed-contracts/:id
    */
   getContractById: async (id: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.get(`/${id}`);
+    const response = await api.get(`${BASE_PATH}/${id}`);
     return response.data;
   },
 
@@ -295,7 +287,7 @@ export const managedContractApi = {
    * GET /api/provider/managed-contracts/number/:contractNumber
    */
   getContractByNumber: async (contractNumber: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.get(`/number/${contractNumber}`);
+    const response = await api.get(`${BASE_PATH}/number/${contractNumber}`);
     return response.data;
   },
 
@@ -304,7 +296,7 @@ export const managedContractApi = {
    * PUT /api/provider/managed-contracts/:id
    */
   updateContract: async (id: string, input: UpdateContractInput): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.put(`/${id}`, input);
+    const response = await api.put(`${BASE_PATH}/${id}`, input);
     return response.data;
   },
 
@@ -313,7 +305,7 @@ export const managedContractApi = {
    * DELETE /api/provider/managed-contracts/:id
    */
   deleteContract: async (id: string): Promise<ApiResponse<null>> => {
-    const response = await api.delete(`/${id}`);
+    const response = await api.delete(`${BASE_PATH}/${id}`);
     return response.data;
   },
 
@@ -326,7 +318,7 @@ export const managedContractApi = {
    * POST /api/provider/managed-contracts/:id/activate
    */
   activateContract: async (id: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post(`/${id}/activate`);
+    const response = await api.post(`${BASE_PATH}/${id}/activate`);
     return response.data;
   },
 
@@ -335,7 +327,7 @@ export const managedContractApi = {
    * POST /api/provider/managed-contracts/:id/suspend
    */
   suspendContract: async (id: string, reason?: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post(`/${id}/suspend`, { reason });
+    const response = await api.post(`${BASE_PATH}/${id}/suspend`, { reason });
     return response.data;
   },
 
@@ -344,7 +336,7 @@ export const managedContractApi = {
    * POST /api/provider/managed-contracts/:id/terminate
    */
   terminateContract: async (id: string, reason: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post(`/${id}/terminate`, { reason });
+    const response = await api.post(`${BASE_PATH}/${id}/terminate`, { reason });
     return response.data;
   },
 
@@ -357,7 +349,7 @@ export const managedContractApi = {
    * POST /api/provider/managed-contracts/:id/team
    */
   addTeamMember: async (contractId: string, input: AddTeamMemberInput): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post(`/${contractId}/team`, input);
+    const response = await api.post(`${BASE_PATH}/${contractId}/team`, input);
     return response.data;
   },
 
@@ -370,7 +362,7 @@ export const managedContractApi = {
     email: string,
     updates: Partial<AddTeamMemberInput>
   ): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.put(`/${contractId}/team/${encodeURIComponent(email)}`, updates);
+    const response = await api.put(`${BASE_PATH}/${contractId}/team/${encodeURIComponent(email)}`, updates);
     return response.data;
   },
 
@@ -379,7 +371,7 @@ export const managedContractApi = {
    * DELETE /api/provider/managed-contracts/:id/team/:email
    */
   removeTeamMember: async (contractId: string, email: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.delete(`/${contractId}/team/${encodeURIComponent(email)}`);
+    const response = await api.delete(`${BASE_PATH}/${contractId}/team/${encodeURIComponent(email)}`);
     return response.data;
   },
 
@@ -388,7 +380,7 @@ export const managedContractApi = {
    * POST /api/provider/managed-contracts/:id/team/:email/primary
    */
   setPrimaryContact: async (contractId: string, email: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post(`/${contractId}/team/${encodeURIComponent(email)}/primary`);
+    const response = await api.post(`${BASE_PATH}/${contractId}/team/${encodeURIComponent(email)}/primary`);
     return response.data;
   },
 
@@ -413,7 +405,7 @@ export const managedContractApi = {
     };
     lastCalculatedAt: string;
   }>> => {
-    const response = await api.post(`/${id}/sla/calculate`);
+    const response = await api.post(`${BASE_PATH}/${id}/sla/calculate`);
     return response.data;
   },
 
@@ -430,7 +422,7 @@ export const managedContractApi = {
     startDate?: string,
     endDate?: string
   ): Promise<ApiResponse<ContractReport>> => {
-    const response = await api.get(`/${id}/report`, {
+    const response = await api.get(`${BASE_PATH}/${id}/report`, {
       params: { startDate, endDate },
     });
     return response.data;
@@ -445,7 +437,7 @@ export const managedContractApi = {
    * GET /api/provider/managed-contracts/stats
    */
   getStats: async (): Promise<ApiResponse<ContractStats>> => {
-    const response = await api.get('/stats');
+    const response = await api.get(`${BASE_PATH}/stats`);
     return response.data;
   },
 
@@ -462,7 +454,7 @@ export const managedContractApi = {
       complianceRate: number;
     };
   }>> => {
-    const response = await api.get(`/${id}/summary`);
+    const response = await api.get(`${BASE_PATH}/${id}/summary`);
     return response.data;
   },
 
@@ -475,7 +467,7 @@ export const managedContractApi = {
    * GET /api/provider/managed-contracts/active
    */
   getActiveContracts: async (): Promise<ApiResponse<ManagedContract[]>> => {
-    const response = await api.get('/active');
+    const response = await api.get(`${BASE_PATH}/active`);
     return response.data;
   },
 
@@ -484,7 +476,7 @@ export const managedContractApi = {
    * GET /api/provider/managed-contracts/expiring
    */
   getExpiringContracts: async (days: number = 30): Promise<ApiResponse<ManagedContract[]>> => {
-    const response = await api.get('/expiring', { params: { days } });
+    const response = await api.get(`${BASE_PATH}/expiring`, { params: { days } });
     return response.data;
   },
 
@@ -500,7 +492,7 @@ export const managedContractApi = {
     contractId: string,
     document: { name: string; url: string; type: string }
   ): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.post(`/${contractId}/documents`, document);
+    const response = await api.post(`${BASE_PATH}/${contractId}/documents`, document);
     return response.data;
   },
 
@@ -509,7 +501,7 @@ export const managedContractApi = {
    * DELETE /api/provider/managed-contracts/:id/documents/:name
    */
   removeDocument: async (contractId: string, documentName: string): Promise<ApiResponse<ManagedContract>> => {
-    const response = await api.delete(`/${contractId}/documents/${encodeURIComponent(documentName)}`);
+    const response = await api.delete(`${BASE_PATH}/${contractId}/documents/${encodeURIComponent(documentName)}`);
     return response.data;
   },
 };

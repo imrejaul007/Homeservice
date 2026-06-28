@@ -31,53 +31,41 @@ import { DashboardBubbleButton } from '../components/ui/DashboardBubbleButton';
 import ExperienceSection from '../components/experience/ExperienceSection';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 import PopularServiceCard from '../components/home/PopularServiceCard';
+import { homeTrendingApi } from '../services/homeTrendingApi';
+import { useHeroSlides } from '../hooks/useHeroSlides';
+import LazyInViewport from '../components/common/LazyInViewport';
 
-// UNIFIED HERO CAROUSEL - Merged with hero
-const HERO_SLIDES = [
-  {
-    image: 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1400&q=80&fit=crop',
-    badge: 'Hair & Styling',
-    title: 'Transform Your Look',
-    subtitle: 'Expert hair styling from verified professionals',
-    cta: 'Book Hair Services',
-    ctaLink: '/category/hair',
-  },
-  {
-    image: 'https://images.unsplash.com/photo-1487412912498-0447578fcca8?w=1400&q=80&fit=crop',
-    badge: 'Bridal Services',
-    title: 'Bridal & Special Days',
-    subtitle: 'Look stunning on your special occasions',
-    cta: 'View Packages',
-    ctaLink: '/category/makeup',
-  },
-  {
-    image: 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=1400&q=80&fit=crop',
-    badge: 'Spa & Wellness',
-    title: 'Relax & Rejuvenate',
-    subtitle: 'Premium spa treatments in your home',
-    cta: 'Book Massage',
-    ctaLink: '/category/massage-body',
-  },
-];
+const formatHappyClients = (count: number): string => {
+  if (count <= 0) return '0';
+  return `${count.toLocaleString()}+`;
+};
 
-const CATEGORIES = [
-  { name: 'Hair', image: 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400&q=80', link: '/category/hair' },
-  { name: 'Makeup', image: 'https://images.unsplash.com/photo-1487412912498-0447578fcca8?w=400&q=80', link: '/category/makeup' },
-  { name: 'Nails', image: 'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=400&q=80', link: '/category/nails' },
-  { name: 'Spa', image: 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=400&q=80', link: '/category/massage-body' },
-  { name: 'Skincare', image: 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=400&q=80', link: '/category/skin-aesthetics' },
-  { name: 'Eyes', image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400&q=80', link: '/category/personal-care' },
-];
-
+// UNIFIED HERO CAROUSEL - loaded from API with static fallback
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const { isAuthenticated, user } = useAuthStore();
   const { selectedCity, currentLocation } = useLocationStore();
   const { convert, format, currency } = usePriceConversion();
+  const { slides: heroSlides } = useHeroSlides();
   const [popularServices, setPopularServices] = useState<Service[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [platformStats, setPlatformStats] = useState({
+    happyClients: 0,
+    averageRating: 0,
+    totalReviews: 0,
+    verifiedProfessionals: 0,
+    serviceCategories: 0,
+  });
   const popularScrollRef = useRef<HTMLDivElement>(null);
+
+  const activeSlide = heroSlides[currentSlide] ?? heroSlides[0];
+
+  useEffect(() => {
+    if (currentSlide >= heroSlides.length) {
+      setCurrentSlide(0);
+    }
+  }, [heroSlides.length, currentSlide]);
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -86,9 +74,15 @@ const HomePage: React.FC = () => {
     const fetchServices = async () => {
       try {
         setIsLoading(true);
-        const popularRes = await searchApi.searchServices({ limit: 8, sortBy: 'popularity' }, abortController.signal);
+        const [popularRes, statsRes] = await Promise.all([
+          searchApi.searchServices({ limit: 8, sortBy: 'popularity' }, abortController.signal),
+          homeTrendingApi.getPlatformStats(abortController.signal).catch(() => null),
+        ]);
         if (popularRes.success && popularRes.data.services && isMounted) {
           setPopularServices(popularRes.data.services);
+        }
+        if (statsRes && isMounted) {
+          setPlatformStats(statsRes);
         }
       } catch (error) {
         // Ignore abort/cancel errors — expected on unmount or rapid navigation
@@ -104,7 +98,7 @@ const HomePage: React.FC = () => {
 
     fetchServices();
     const interval = setInterval(() => {
-      setCurrentSlide((prev) => (prev + 1) % HERO_SLIDES.length);
+      setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
     }, 6000);
 
     // FIX: Proper cleanup order - abort request BEFORE clearing interval
@@ -114,7 +108,7 @@ const HomePage: React.FC = () => {
       abortController.abort(); // Abort first to stop in-flight requests
       clearInterval(interval); // Then clear the interval
     };
-  }, []);
+  }, [heroSlides.length]);
 
   const handleServiceClick = (serviceId: string) => {
     navigate(`/services/${serviceId}`);
@@ -148,38 +142,50 @@ const HomePage: React.FC = () => {
         : '/customer/dashboard';
 
   const heroCard = (
-    <div className="bg-white/50 backdrop-blur-md rounded-3xl p-8 shadow-xl shadow-white/20 w-full">
-      <div className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/80 backdrop-blur-sm rounded-full mb-8 animate-nilin-in border border-white/50" style={{ animationDelay: '0.1s' }}>
-        <Sparkles className="w-4 h-4 text-nilin-coral" />
-        <span className="text-sm text-nilin-charcoal font-bold tracking-wider uppercase">{HERO_SLIDES[currentSlide].badge}</span>
+    <div className="bg-black/40 md:bg-white/50 md:backdrop-blur-md rounded-2xl sm:rounded-3xl shadow-xl shadow-black/10 md:shadow-white/20 w-full min-w-0 overflow-hidden p-4 sm:p-6 md:p-8">
+      <div className="inline-flex items-center gap-2 px-3 sm:px-5 py-2 sm:py-2.5 bg-black/30 md:bg-white/80 md:backdrop-blur-sm rounded-full mb-4 sm:mb-6 md:mb-8 animate-nilin-in border border-white/20 md:border-white/50 max-w-full" style={{ animationDelay: '0.1s' }}>
+        <Sparkles className="w-4 h-4 text-nilin-coral flex-shrink-0" />
+        <span className="text-xs sm:text-sm text-white md:text-nilin-charcoal font-bold tracking-wider uppercase truncate">{activeSlide?.badge}</span>
       </div>
 
-      <h1 className="text-5xl md:text-6xl lg:text-7xl font-serif font-bold text-nilin-charcoal mb-6 animate-nilin-in drop-shadow-lg whitespace-nowrap" style={{ animationDelay: '0.2s' }}>
-        {HERO_SLIDES[currentSlide].title}
+      <h1 className="font-serif font-bold text-white md:text-nilin-charcoal animate-nilin-in drop-shadow-lg leading-[1.1] break-words text-3xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl mb-4 sm:mb-6" style={{ animationDelay: '0.2s' }}>
+        {activeSlide?.title}
       </h1>
-      <p className="text-2xl text-nilin-charcoal/80 mb-10 max-w-xl font-medium animate-nilin-in" style={{ animationDelay: '0.3s' }}>
-        {HERO_SLIDES[currentSlide].subtitle}
+      <p className="text-white/90 md:text-nilin-charcoal/80 max-w-xl font-medium animate-nilin-in text-base sm:text-lg md:text-xl lg:text-2xl mb-4 sm:mb-6 md:mb-8" style={{ animationDelay: '0.3s' }}>
+        {activeSlide?.subtitle}
       </p>
 
-      <div className="flex flex-wrap gap-4 mb-12 animate-nilin-in" style={{ animationDelay: '0.4s' }}>
+      {isAuthenticated && (
         <button
-          onClick={() => navigate(HERO_SLIDES[currentSlide].ctaLink)}
-          className="btn-frosted-light inline-flex items-center gap-2 px-10 py-5 rounded-nilin text-nilin-charcoal font-medium text-lg"
+          type="button"
+          onClick={() => navigate(dashboardPath)}
+          className="lg:hidden mb-4 sm:mb-6 w-full min-h-[44px] btn-nilin flex items-center justify-center gap-2 rounded-nilin text-base font-medium animate-nilin-in"
+          style={{ animationDelay: '0.35s' }}
         >
-          {HERO_SLIDES[currentSlide].cta}
+          Go to Dashboard
+          <ArrowRight className="w-5 h-5" aria-hidden="true" />
+        </button>
+      )}
+
+      <div className="flex flex-col sm:flex-row flex-wrap gap-3 sm:gap-4 animate-nilin-in mb-8 sm:mb-10 md:mb-12" style={{ animationDelay: '0.4s' }}>
+        <button
+          onClick={() => activeSlide && navigate(activeSlide.ctaLink)}
+          className="btn-frosted-light inline-flex items-center justify-center gap-2 w-full sm:w-auto min-h-[44px] px-6 sm:px-10 py-4 sm:py-5 rounded-nilin text-nilin-charcoal font-medium text-base sm:text-lg"
+        >
+          {activeSlide?.cta}
           <ArrowRight className="w-5 h-5" />
         </button>
         <button
           onClick={() => navigate('/register/provider')}
-          className="glass-light inline-flex items-center gap-2 px-10 py-5 rounded-nilin text-nilin-charcoal font-medium text-lg hover:border-nilin-coral/30 hover-lift"
+          className="glass-light inline-flex items-center justify-center gap-2 w-full sm:w-auto min-h-[44px] px-6 sm:px-10 py-4 sm:py-5 rounded-nilin text-nilin-charcoal font-medium text-base sm:text-lg hover:border-nilin-coral/30 hover-lift"
         >
           Become a Pro
         </button>
       </div>
 
-      <div className="flex items-center gap-10 mb-8 animate-nilin-in" style={{ animationDelay: '0.5s' }}>
-        <div className="flex items-center gap-2">
-          <div className="flex -space-x-3">
+      <div className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center gap-4 sm:gap-6 md:gap-10 mb-6 sm:mb-8 animate-nilin-in" style={{ animationDelay: '0.5s' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex -space-x-2 sm:-space-x-3 flex-shrink-0">
             {[
               { name: 'Sarah', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop' },
               { name: 'Amira', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop' },
@@ -188,7 +194,7 @@ const HomePage: React.FC = () => {
             ].map((person, i) => (
               <div
                 key={i}
-                className="w-10 h-10 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-coral border-2 border-white flex items-center justify-center overflow-hidden hover:scale-110 transition-transform cursor-pointer"
+                className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-coral border-2 border-white flex items-center justify-center overflow-hidden hover:scale-110 transition-transform cursor-pointer"
                 title={person.name}
               >
                 <img
@@ -204,24 +210,33 @@ const HomePage: React.FC = () => {
               </div>
             ))}
           </div>
-          <div className="text-base text-nilin-charcoal">
-            <p className="font-semibold text-lg">20,510+</p>
+          <div className="text-sm sm:text-base text-nilin-charcoal min-w-0">
+            <p className="font-semibold text-base sm:text-lg">{formatHappyClients(platformStats.happyClients)}</p>
             <p className="text-nilin-warm-gray">Happy Clients</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Star key={i} className="w-6 h-6 text-yellow-400 fill-yellow-400" />
-          ))}
-          <span className="ml-1 text-nilin-charcoal font-semibold text-lg">4.9</span>
-        </div>
+        {platformStats.averageRating > 0 && (
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <Star
+                key={i}
+                className={`w-5 h-5 sm:w-6 sm:h-6 ${
+                  i <= Math.round(platformStats.averageRating)
+                    ? 'text-yellow-400 fill-yellow-400'
+                    : 'text-yellow-400/30 fill-yellow-400/30'
+                }`}
+              />
+            ))}
+            <span className="ml-1 text-nilin-charcoal font-semibold text-base sm:text-lg">{platformStats.averageRating}</span>
+          </div>
+        )}
       </div>
 
-      <div className="mt-8 animate-nilin-in" style={{ animationDelay: '0.6s' }}>
+      <div className="animate-nilin-in w-full min-w-0 mt-4 sm:mt-6 md:mt-8" style={{ animationDelay: '0.6s' }}>
         <HeroSearchBar
           variant="hero"
           placeholder="What service are you looking for?"
-          className="max-w-2xl"
+          className="w-full max-w-2xl"
         />
       </div>
     </div>
@@ -233,31 +248,48 @@ const HomePage: React.FC = () => {
 
       <PageErrorBoundary pageName="Home">
         {/* UNIFIED HERO SECTION */}
-      <section className="relative h-[100vh] min-h-[850px] overflow-hidden animate-nilin-in pt-24 md:pt-28">
-        {/* No vignette needed - navbar floats above hero */}
+      <section className="relative overflow-hidden animate-nilin-in h-[100dvh] min-h-[640px] max-h-[100dvh]">
+        {/* Full-viewport hero — image fills screen; content centered; trending below fold */}
 
-        {/* Background Slides */}
-        {HERO_SLIDES.map((slide, index) => (
-          <div
-            key={index}
-            className={`absolute inset-0 transition-opacity duration-1000 ${
-              index === currentSlide ? 'opacity-100 z-10' : 'opacity-0 z-0'
-            }`}
-          >
-            <img src={slide.image} alt={slide.title} className="w-full h-full object-cover" />
-            <div className="absolute inset-0 bg-gradient-to-b from-white/70 via-white/30 to-white/10" />
-          </div>
-        ))}
+        {/* Background Slides — only mount current + adjacent images */}
+        {heroSlides.map((slide, index) => {
+          const slideCount = heroSlides.length;
+          const prevIndex = (currentSlide - 1 + slideCount) % slideCount;
+          const nextIndex = (currentSlide + 1) % slideCount;
+          const isAdjacent = index === currentSlide || index === prevIndex || index === nextIndex;
+          if (!isAdjacent) return null;
 
-        {/* Content Overlay — card centered on page; button bottom aligns with card bottom */}
-        <div className="absolute inset-0 z-20 flex items-center px-8 lg:px-16">
-          <div className="flex w-full items-end justify-between gap-6 lg:gap-8">
-            <div className="flex-1 max-w-3xl">
+          const isActive = index === currentSlide;
+
+          return (
+            <div
+              key={index}
+              className={`absolute inset-0 transition-opacity duration-1000 ${
+                isActive ? 'opacity-100 z-10' : 'opacity-0 z-0'
+              }`}
+            >
+              <img
+                src={slide.image}
+                alt={slide.title}
+                loading={isActive ? 'eager' : 'lazy'}
+                fetchPriority={isActive ? 'high' : 'auto'}
+                decoding="async"
+                className="absolute inset-0 w-full h-full object-cover object-center"
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-white/80 via-white/40 to-transparent md:from-white/70 md:via-white/30 md:to-transparent" />
+            </div>
+          );
+        })}
+
+        {/* Content overlay — CTA left, dashboard right, vertically centered on hero image */}
+        <div className="absolute inset-0 z-20 flex items-start lg:items-center overflow-y-auto overscroll-contain px-4 sm:px-6 lg:px-12 xl:px-16 pt-20 sm:pt-24 pb-8 sm:pb-10">
+          <div className="flex w-full max-w-7xl mx-auto items-center justify-between gap-6 lg:gap-10">
+            <div className="flex-1 min-w-0 max-w-3xl">
               {heroCard}
             </div>
 
             {isAuthenticated && (
-              <div className="hidden lg:flex flex-shrink-0 self-end">
+              <div className="hidden lg:flex flex-shrink-0">
                 <DashboardBubbleButton
                   variant="hero"
                   text="Go to Dashboard"
@@ -269,15 +301,20 @@ const HomePage: React.FC = () => {
         </div>
 
         {/* Slide Indicators */}
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-30 flex gap-3">
-          {HERO_SLIDES.map((_, index) => (
+        <div className="absolute bottom-6 sm:bottom-10 left-1/2 -translate-x-1/2 z-30 flex gap-1 sm:gap-2 px-4">
+          {heroSlides.map((_, index) => (
             <button
               key={index}
               onClick={() => setCurrentSlide(index)}
-              className={`h-1.5 rounded-nilin transition-all hover-lift ${
-                index === currentSlide ? 'w-12 bg-nilin-coral' : 'w-4 bg-nilin-charcoal/30 hover:bg-nilin-charcoal/50'
-              }`}
-            />
+              aria-label={`Go to slide ${index + 1}`}
+              className="min-h-11 min-w-11 flex items-center justify-center rounded-nilin transition-all hover-lift"
+            >
+              <span
+                className={`block h-1.5 rounded-nilin transition-all ${
+                  index === currentSlide ? 'w-12 bg-nilin-coral' : 'w-4 bg-nilin-charcoal/30'
+                }`}
+              />
+            </button>
           ))}
         </div>
       </section>
@@ -294,20 +331,22 @@ const HomePage: React.FC = () => {
 
       {/* Active bookings — shown early when user has in-progress or today's appointments */}
       {isAuthenticated && (
-        <OngoingBookings limit={3} showViewAll={true} />
+        <LazyInViewport minHeight={120}>
+          <OngoingBookings limit={3} showViewAll={true} />
+        </LazyInViewport>
       )}
 
       {/* Popular Services */}
       <section className="py-12 px-4 animate-nilin-in">
         <div className="max-w-7xl mx-auto">
-          <div className="flex items-end justify-between mb-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4 mb-6 sm:mb-8">
             <div>
-              <h2 className="text-3xl font-serif text-nilin-charcoal mb-2">Popular Services</h2>
-              <p className="text-nilin-warmGray">Most booked this week</p>
+              <h2 className="text-2xl sm:text-3xl font-serif text-nilin-charcoal mb-2">Popular Services</h2>
+              <p className="text-sm sm:text-base text-nilin-warmGray">Most booked this week</p>
             </div>
             <button
               onClick={() => navigate('/search')}
-              className="btn-nilin px-6 py-3 rounded-nilin text-sm text-white hover-lift"
+              className="btn-nilin px-5 sm:px-6 py-2.5 sm:py-3 rounded-nilin text-sm text-white hover-lift w-full sm:w-auto"
             >
               View All
             </button>
@@ -321,7 +360,7 @@ const HomePage: React.FC = () => {
             <div className="relative">
               <button
                 onClick={() => popularScrollRef.current?.scrollBy({ left: -360, behavior: 'smooth' })}
-                className="absolute left-0 top-1/2 -translate-y-1/2 z-10 glass-nilin w-12 h-12 rounded-nilin flex items-center justify-center shadow-nilin -ml-4 hover-lift"
+                className="hidden md:flex absolute left-0 top-1/2 -translate-y-1/2 z-10 glass-nilin w-12 h-12 rounded-nilin items-center justify-center shadow-nilin -ml-4 hover-lift"
               >
                 <ChevronLeft className="w-6 h-6 text-nilin-charcoal" />
               </button>
@@ -349,7 +388,7 @@ const HomePage: React.FC = () => {
 
               <button
                 onClick={() => popularScrollRef.current?.scrollBy({ left: 360, behavior: 'smooth' })}
-                className="absolute right-0 top-1/2 -translate-y-1/2 z-10 glass-nilin w-12 h-12 rounded-nilin flex items-center justify-center shadow-nilin -mr-4 hover-lift"
+                className="hidden md:flex absolute right-0 top-1/2 -translate-y-1/2 z-10 glass-nilin w-12 h-12 rounded-nilin items-center justify-center shadow-nilin -mr-4 hover-lift"
               >
                 <ChevronRight className="w-6 h-6 text-nilin-charcoal" />
               </button>
@@ -369,28 +408,40 @@ const HomePage: React.FC = () => {
 
       {/* Recommended Professionals Section - Only show for logged-in users */}
       {isAuthenticated && (
-        <RecommendedProsSection limit={6} showViewAll={true} />
+        <LazyInViewport minHeight={200}>
+          <RecommendedProsSection limit={6} showViewAll={true} />
+        </LazyInViewport>
       )}
 
       {/* 3D Parallax Service Slider - For You Section */}
-      <ParallaxServiceSlider limit={6} />
+      <LazyInViewport minHeight={320}>
+        <ParallaxServiceSlider limit={6} services={popularServices} />
+      </LazyInViewport>
 
       {/* Personal Dashboard Sections - Only for logged-in users */}
       {isAuthenticated && (
         <>
           {/* Packages Section */}
-          <PackagesSection limit={3} showViewAll={true} />
+          <LazyInViewport minHeight={200}>
+            <PackagesSection limit={3} showViewAll={true} />
+          </LazyInViewport>
 
           {/* Recent Activity */}
-          <RecentActivity limit={5} showViewAll={true} />
+          <LazyInViewport minHeight={200}>
+            <RecentActivity limit={5} showViewAll={true} />
+          </LazyInViewport>
         </>
       )}
 
       {/* NILIN Experience Section */}
-      <ExperienceSection />
+      <LazyInViewport minHeight={240}>
+        <ExperienceSection />
+      </LazyInViewport>
 
       {/* Curated Reels */}
-      <CuratedReels />
+      <LazyInViewport minHeight={200}>
+        <CuratedReels />
+      </LazyInViewport>
 
       {/* Why NILIN */}
       <WhyNilin />

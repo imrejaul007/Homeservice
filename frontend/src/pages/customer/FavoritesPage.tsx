@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Heart, Star, MapPin, Clock, Trash2, ChevronRight, AlertCircle } from 'lucide-react';
+import { Heart, Star, MapPin, Clock, Trash2, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
+import CustomerHubNav from '../../components/customer/CustomerHubNav';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
+import { Skeleton } from '../../components/common/SkeletonLoader';
 import { useAuthStore } from '../../stores/authStore';
 import { favoritesApi, type FavoriteProvider } from '../../services/favoritesApi';
 import { toast } from 'react-hot-toast';
@@ -14,6 +16,8 @@ const FavoritesPage: React.FC = () => {
   const [favorites, setFavorites] = useState<FavoriteProvider[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const previousFavoritesRef = useRef<FavoriteProvider[]>([]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -33,7 +37,7 @@ const FavoritesPage: React.FC = () => {
         (f: any) => f && f.providerId
       );
       setFavorites(validFavorites);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to load favorites');
     } finally {
       setIsLoading(false);
@@ -41,12 +45,24 @@ const FavoritesPage: React.FC = () => {
   };
 
   const handleRemoveFavorite = async (providerId: string) => {
+    // Store previous state for rollback
+    previousFavoritesRef.current = favorites;
+    const previousFavorites = favorites;
+
+    // Optimistic update - immediately remove from UI
+    setFavorites(prev => prev.filter(f => f.providerId !== providerId));
+    setRemovingId(providerId);
+
     try {
       await favoritesApi.removeFavorite(providerId);
-      setFavorites(prev => prev.filter(f => f.providerId !== providerId));
       toast.success('Provider removed from favorites');
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to remove favorite');
+    } catch (err) {
+      // Rollback on failure
+      setFavorites(previousFavorites);
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      toast.error(axiosErr.response?.data?.message || 'Failed to remove favorite. Please try again.');
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -58,8 +74,37 @@ const FavoritesPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="w-10 h-10 border-2 border-nilin-coral border-t-transparent rounded-full animate-spin" />
+        <CustomerHubNav />
+        <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <Breadcrumb />
+        </div>
+        <div className="flex-1">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="mb-8">
+              <div className="flex items-center gap-3 mb-2">
+                <Skeleton className="w-12 h-12 rounded-full" />
+                <Skeleton className="h-9 w-40" />
+              </div>
+              <Skeleton className="h-5 w-64" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className="glass-nilin rounded-nilin-lg p-6">
+                  <div className="flex items-start gap-4">
+                    <Skeleton className="w-16 h-16 rounded-full" />
+                    <div className="flex-1 space-y-3">
+                      <Skeleton className="h-5 w-3/4" />
+                      <Skeleton className="h-4 w-1/2" />
+                      <div className="flex gap-2 pt-2">
+                        <Skeleton className="h-6 w-16" />
+                        <Skeleton className="h-6 w-16" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
         <Footer />
       </div>
@@ -69,6 +114,7 @@ const FavoritesPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <CustomerHubNav />
 
       <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
@@ -228,9 +274,15 @@ const FavoritesPage: React.FC = () => {
                           e.stopPropagation();
                           handleRemoveFavorite(favorite.providerId);
                         }}
-                        className="p-2 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition-colors"
+                        disabled={removingId === favorite.providerId}
+                        className="w-11 h-11 flex items-center justify-center rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        aria-label="Remove from favorites"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        {removingId === favorite.providerId ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </div>

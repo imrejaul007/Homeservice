@@ -2,11 +2,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
+import { ActivityTimeline } from '../../components/admin/ActivityTimeline';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import type { Activity, ActivityType } from '../../types/activity';
 import {
   Search,
   Filter,
-  ChevronLeft,
-  ChevronRight,
   AlertTriangle,
   Shield,
   ShieldAlert,
@@ -19,8 +20,6 @@ import {
   TrendingUp,
   TrendingDown,
   Users,
-  BarChart3,
-  Activity,
   Clock,
   DollarSign,
   Calendar,
@@ -29,6 +28,26 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  Download,
+  MapPin,
+  MapPinOff,
+  CreditCard,
+  RotateCcw,
+  Star,
+  User,
+  Tag,
+  MessageCircle,
+  LogIn,
+  LogOut,
+  CalendarPlus,
+  CalendarCheck,
+  CalendarX,
+  Send,
+  Mail,
+  Building,
+  Home,
+  Briefcase,
+  Activity as ActivityIcon,
 } from 'lucide-react';
 import {
   customerOpsApi,
@@ -42,9 +61,25 @@ import {
   bulkUserActionApi,
   exportUsersApi,
   BulkUserAction,
+  BookingStatus,
+  formatBookingStatus,
+  getBookingStatusColor,
+  CustomerAddress,
+  MaskedPaymentMethod,
+  formatPaymentMethod,
+  formatPaymentMethodExpiry,
+  ActivityItem,
+  formatActivityType,
+  Message,
 } from '../../services/customerOpsApi';
 import ErrorBoundary from '../../components/common/ErrorBoundary';
 import { useAuthStore } from '../../stores/authStore';
+import { ExportDropdown } from '../../components/admin/ExportDropdown';
+import { AdminPagination } from '../../components/admin/AdminPagination';
+import {
+  BulkActionToolbar,
+  type BulkAction,
+} from '../../components/admin/BulkActionToolbar';
 import type {
   CustomerListItem,
   CustomerMetrics,
@@ -55,6 +90,15 @@ import type {
   DashboardStats,
   TrustScoreBreakdown,
   CustomerDetailResponse,
+  BookingListResponse,
+  ActivityListResponse,
+  MessageListResponse,
+  RecentBooking,
+  CustomerAddress,
+  MaskedPaymentMethod,
+  ActivityItem,
+  BookingStatus,
+  Message,
 } from '../../services/customerOpsApi';
 
 // ============================================
@@ -156,9 +200,17 @@ const CustomerCard: React.FC<{
           />
         </div>
 
-        <div
+        <button
+          type="button"
           onClick={onClick}
-          className="flex items-start gap-4 flex-1 cursor-pointer"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onClick();
+            }
+          }}
+          aria-label={`View details for ${user.firstName} ${user.lastName}`}
+          className="flex items-start gap-4 flex-1 w-full text-left cursor-pointer hover:bg-gray-50 rounded-lg p-2 -m-2 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
         >
           <div className="relative">
             <div className="w-12 h-12 rounded-full bg-nilin-coral/10 flex items-center justify-center overflow-hidden">
@@ -206,7 +258,7 @@ const CustomerCard: React.FC<{
               </div>
             )}
           </div>
-        </div>
+        </button>
       </div>
     </div>
   );
@@ -424,16 +476,82 @@ const CustomerDetailModal: React.FC<{
   const [customer, setCustomer] = useState<CustomerDetailResponse | null>(null);
   const [trustScoreBreakdown, setTrustScoreBreakdown] = useState<TrustScoreBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'bookings' | 'abuse' | 'actions'>('overview');
+  type CustomerDetailTab = 'overview' | 'bookings' | 'addresses' | 'payments' | 'activity' | 'abuse' | 'actions';
+  const [activeTab, setActiveTab] = useState<CustomerDetailTab>('overview');
   const [actionLoading, setActionLoading] = useState(false);
   const [showFlagModal, setShowFlagModal] = useState(false);
   const [flagType, setFlagType] = useState<string>('');
   const [flagReason, setFlagReason] = useState('');
   const [blockReason, setBlockReason] = useState('');
+  const [showBlockConfirmModal, setShowBlockConfirmModal] = useState(false);
+
+  // Addresses state
+  const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
+  const [addressesLoading, setAddressesLoading] = useState(false);
+
+  // Payment methods state
+  const [paymentMethods, setPaymentMethods] = useState<MaskedPaymentMethod[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+
+  // Bookings state (paginated)
+  const [bookings, setBookings] = useState<RecentBooking[]>([]);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [bookingsPagination, setBookingsPagination] = useState({
+    page: 1,
+    pages: 1,
+    total: 0,
+    hasNext: false,
+    hasPrev: false,
+  });
+  const [bookingStatusFilter, setBookingStatusFilter] = useState<string>('');
+  const [bookingStartDate, setBookingStartDate] = useState<string>('');
+  const [bookingEndDate, setBookingEndDate] = useState<string>('');
+
+  // Activity state (paginated)
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [activitiesLoading, setActivitiesLoading] = useState(false);
+  const [activitiesPagination, setActivitiesPagination] = useState({
+    page: 1,
+    pages: 1,
+    total: 0,
+    hasNext: false,
+    hasPrev: false,
+  });
+
+  // Message state
+  const [showMessageModal, setShowMessageModal] = useState(false);
+  const [messageContent, setMessageContent] = useState('');
+  const [messageHistory, setMessageHistory] = useState<Message[]>([]);
+  const [messageLoading, setMessageLoading] = useState(false);
+  const [messageSending, setMessageSending] = useState(false);
 
   useEffect(() => {
     loadCustomerData();
   }, [customerId]);
+
+  useEffect(() => {
+    if (activeTab === 'addresses' && customerId) {
+      loadAddresses();
+    }
+  }, [activeTab, customerId]);
+
+  useEffect(() => {
+    if (activeTab === 'payments' && customerId) {
+      loadPaymentMethods();
+    }
+  }, [activeTab, customerId]);
+
+  useEffect(() => {
+    if (activeTab === 'bookings' && customerId) {
+      loadBookings(1);
+    }
+  }, [activeTab, customerId]);
+
+  useEffect(() => {
+    if (activeTab === 'activity' && customerId) {
+      loadActivities(1);
+    }
+  }, [activeTab, customerId]);
 
   const loadCustomerData = async () => {
     setLoading(true);
@@ -445,9 +563,145 @@ const CustomerDetailModal: React.FC<{
       setCustomer(detail);
       setTrustScoreBreakdown(breakdown);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load customer details');
+      // Detect network errors with timeout detection
+      const isNetworkError =
+        !navigator.onLine ||
+        error instanceof TypeError ||
+        (error as Error)?.message?.includes('NetworkError') ||
+        (error as Error)?.message?.includes('Failed to fetch') ||
+        (error as Error)?.message?.includes('timeout') ||
+        (error as { code?: string })?.code === 'ETIMEDOUT' ||
+        (error as { code?: string })?.code === 'ECONNABORTED';
+
+      // Retry logic for transient failures
+      const shouldRetry =
+        (error as { response?: { status?: number } })?.response?.status === 0 ||
+        ((error as { response?: { status?: number } })?.response?.status ?? 0) >= 500;
+
+      if (isNetworkError) {
+        toast.error('Connection error', { description: 'Please check your internet connection and try again' });
+      } else if (shouldRetry) {
+        toast.error('Server error', { description: 'Please try again in a moment' });
+      } else {
+        toast.error(error instanceof Error ? error.message : 'Failed to load customer details');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAddresses = async () => {
+    setAddressesLoading(true);
+    try {
+      const result = await customerOpsApi.getCustomerAddresses(customerId);
+      setAddresses(result);
+    } catch (error) {
+      toast.error('Failed to load addresses');
+    } finally {
+      setAddressesLoading(false);
+    }
+  };
+
+  const loadPaymentMethods = async () => {
+    setPaymentsLoading(true);
+    try {
+      const result = await customerOpsApi.getCustomerPaymentMethods(customerId);
+      setPaymentMethods(result);
+    } catch (error) {
+      toast.error('Failed to load payment methods');
+    } finally {
+      setPaymentsLoading(false);
+    }
+  };
+
+  const loadBookings = async (page: number = 1) => {
+    setBookingsLoading(true);
+    try {
+      const status = bookingStatusFilter ? bookingStatusFilter as BookingStatus : undefined;
+      const result = await customerOpsApi.getCustomerBookings(customerId, {
+        page,
+        limit: 10,
+        status,
+        startDate: bookingStartDate || undefined,
+        endDate: bookingEndDate || undefined,
+      });
+      setBookings(result.bookings);
+      setBookingsPagination({
+        page: result.pagination.page,
+        pages: result.pagination.pages,
+        total: result.pagination.total,
+        hasNext: result.pagination.hasNext,
+        hasPrev: result.pagination.hasPrev,
+      });
+    } catch (error) {
+      toast.error('Failed to load bookings');
+    } finally {
+      setBookingsLoading(false);
+    }
+  };
+
+  const loadActivities = async (page: number = 1) => {
+    setActivitiesLoading(true);
+    try {
+      const result = await customerOpsApi.getCustomerActivity(customerId, {
+        page,
+        limit: 15,
+      });
+      setActivities(result.activities);
+      setActivitiesPagination({
+        page: result.pagination.page,
+        pages: result.pagination.pages,
+        total: result.pagination.total,
+        hasNext: result.pagination.hasNext,
+        hasPrev: result.pagination.hasPrev,
+      });
+    } catch (error) {
+      toast.error('Failed to load activity');
+    } finally {
+      setActivitiesLoading(false);
+    }
+  };
+
+  const loadMessageHistory = async () => {
+    setMessageLoading(true);
+    try {
+      const result = await customerOpsApi.getCustomerMessages(customerId, { limit: 50 });
+      setMessageHistory(result.messages);
+    } catch (error) {
+      toast.error('Failed to load message history');
+    } finally {
+      setMessageLoading(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!messageContent.trim()) return;
+    setMessageSending(true);
+    try {
+      await customerOpsApi.sendCustomerMessage(customerId, messageContent);
+      toast.success('Message sent successfully');
+      setMessageContent('');
+      setShowMessageModal(false);
+      await loadMessageHistory();
+    } catch (error) {
+      toast.error('Failed to send message');
+    } finally {
+      setMessageSending(false);
+    }
+  };
+
+  const handleBookingFilterChange = (status: string) => {
+    setBookingStatusFilter(status);
+    if (activeTab === 'bookings') {
+      loadBookings(1);
+    }
+  };
+
+  const handleBookingDateChange = (startDate: string, endDate: string) => {
+    setBookingStartDate(startDate);
+    setBookingEndDate(endDate);
+    if (activeTab === 'bookings') {
+      loadBookings(1);
     }
   };
 
@@ -455,7 +709,7 @@ const CustomerDetailModal: React.FC<{
     if (!flagType || !flagReason) return;
     setActionLoading(true);
     try {
-      await customerOpsApi.addAbuseFlag(customerId, flagType as any, flagReason);
+      await customerOpsApi.addAbuseFlag(customerId, flagType as AbuseFlagType, flagReason);
       setShowFlagModal(false);
       setFlagType('');
       setFlagReason('');
@@ -572,27 +826,47 @@ const CustomerDetailModal: React.FC<{
               </div>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-nilin-warmGray" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setShowMessageModal(true);
+                loadMessageHistory();
+              }}
+              className="px-3 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose transition-colors flex items-center gap-2 text-sm"
+            >
+              <Mail className="w-4 h-4" />
+              Message
+            </button>
+            <button
+              onClick={onClose}
+              aria-label="Close customer details"
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-nilin-warmGray" />
+            </button>
+          </div>
         </div>
 
         {/* Tabs */}
-        <div className="border-b border-gray-100 px-6">
-          <div className="flex gap-6">
+        <div className="border-b border-gray-100 px-6 overflow-x-auto">
+          <div role="tablist" aria-label="Customer details tabs" className="flex gap-1 min-w-max">
             {[
               { id: 'overview', label: 'Overview' },
               { id: 'bookings', label: 'Bookings' },
-              { id: 'abuse', label: 'Abuse History' },
+              { id: 'addresses', label: 'Addresses' },
+              { id: 'payments', label: 'Payments' },
+              { id: 'activity', label: 'Activity' },
+              { id: 'abuse', label: 'Abuse' },
               { id: 'actions', label: 'Actions' },
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`py-3 text-sm font-medium border-b-2 transition-colors ${
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`customer-tab-${tab.id}`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onClick={() => setActiveTab(tab.id as CustomerDetailTab)}
+                className={`py-3 px-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                   activeTab === tab.id
                     ? 'border-nilin-coral text-nilin-coral'
                     : 'border-transparent text-nilin-warmGray hover:text-nilin-charcoal'
@@ -703,38 +977,260 @@ const CustomerDetailModal: React.FC<{
 
           {activeTab === 'bookings' && (
             <div className="space-y-4">
-              {recentBookings.length === 0 ? (
-                <p className="text-center text-nilin-warmGray py-8">No bookings found</p>
+              {/* Filters */}
+              <div className="bg-gray-50 rounded-xl p-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <label htmlFor="booking-status-filter" className="block text-sm font-medium text-nilin-charcoal mb-1">
+                      Status
+                    </label>
+                    <select
+                      id="booking-status-filter"
+                      value={bookingStatusFilter}
+                      onChange={(e) => handleBookingFilterChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-nilin-coral"
+                    >
+                      <option value="">All Statuses</option>
+                      <option value="pending">Pending</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="in_progress">In Progress</option>
+                      <option value="completed">Completed</option>
+                      <option value="cancelled">Cancelled</option>
+                      <option value="no_show">No Show</option>
+                      <option value="refunded">Refunded</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="booking-start-date" className="block text-sm font-medium text-nilin-charcoal mb-1">
+                      Start Date
+                    </label>
+                    <input
+                      id="booking-start-date"
+                      type="date"
+                      value={bookingStartDate}
+                      onChange={(e) => handleBookingDateChange(e.target.value, bookingEndDate)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-nilin-coral"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="booking-end-date" className="block text-sm font-medium text-nilin-charcoal mb-1">
+                      End Date
+                    </label>
+                    <input
+                      id="booking-end-date"
+                      type="date"
+                      value={bookingEndDate}
+                      onChange={(e) => handleBookingDateChange(bookingStartDate, e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-nilin-coral"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={() => {
+                        setBookingStatusFilter('');
+                        setBookingStartDate('');
+                        setBookingEndDate('');
+                        loadBookings(1);
+                      }}
+                      className="px-4 py-2 text-nilin-coral hover:bg-nilin-coral/10 rounded-lg transition-colors text-sm"
+                    >
+                      Clear Filters
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bookings count */}
+              <p className="text-sm text-nilin-warmGray">
+                {bookingsPagination.total} booking{bookingsPagination.total !== 1 ? 's' : ''} found
+              </p>
+
+              {bookingsLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
+                </div>
+              ) : bookings.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 rounded-xl">
+                  <Calendar className="w-12 h-12 text-nilin-warmGray mx-auto mb-4" />
+                  <p className="text-nilin-warmGray">No bookings found</p>
+                </div>
               ) : (
-                recentBookings.map((booking: any) => (
-                  <div key={booking.id} className="bg-gray-50 rounded-lg p-4">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="font-medium text-nilin-charcoal">{booking.service}</p>
-                        <p className="text-sm text-nilin-warmGray">{booking.provider}</p>
-                        <p className="text-sm text-nilin-warmGray">
-                          {new Date(booking.scheduledDate).toLocaleDateString()}
-                        </p>
+                <>
+                  <div className="space-y-3">
+                    {bookings.map((booking) => (
+                      <div key={booking.id} className="bg-gray-50 rounded-lg p-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="font-medium text-nilin-charcoal">{booking.service}</p>
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium ${getBookingStatusColor(booking.status)}`}>
+                                {formatBookingStatus(booking.status)}
+                              </span>
+                            </div>
+                            <p className="text-sm text-nilin-warmGray">{booking.provider}</p>
+                            <p className="text-sm text-nilin-warmGray">
+                              {new Date(booking.scheduledDate).toLocaleDateString()}
+                              {booking.completedDate && ` - ${new Date(booking.completedDate).toLocaleDateString()}`}
+                            </p>
+                            {booking.bookingNumber && (
+                              <p className="text-xs text-nilin-warmGray mt-1">#{booking.bookingNumber}</p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold text-nilin-charcoal">
+                              {booking.totalAmount} {booking.currency || 'AED'}
+                            </p>
+                            {booking.paymentStatus && (
+                              <p className="text-xs text-nilin-warmGray mt-1">
+                                Payment: {booking.paymentStatus}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {booking.notes && (
+                          <p className="text-xs text-nilin-warmGray mt-2 italic">{booking.notes}</p>
+                        )}
                       </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-nilin-charcoal">{booking.totalAmount} AED</p>
-                        <span
-                          className={`inline-block px-2 py-1 rounded text-xs font-medium ${
-                            booking.status === 'completed'
-                              ? 'bg-green-100 text-green-700'
-                              : booking.status === 'cancelled'
-                              ? 'bg-red-100 text-red-700'
-                              : booking.status === 'no_show'
-                              ? 'bg-amber-100 text-amber-700'
-                              : 'bg-blue-100 text-blue-700'
-                          }`}
-                        >
-                          {booking.status}
+                    ))}
+                  </div>
+
+                  {/* Pagination */}
+                  {bookingsPagination.pages > 1 && (
+                    <div className="flex items-center justify-center gap-2 pt-4">
+                      <button
+                        onClick={() => loadBookings(1)}
+                        disabled={!bookingsPagination.hasPrev}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        First
+                      </button>
+                      <button
+                        onClick={() => loadBookings(bookingsPagination.page - 1)}
+                        disabled={!bookingsPagination.hasPrev}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Previous
+                      </button>
+                      <span className="px-4 py-1 text-sm text-nilin-charcoal">
+                        Page {bookingsPagination.page} of {bookingsPagination.pages}
+                      </span>
+                      <button
+                        onClick={() => loadBookings(bookingsPagination.page + 1)}
+                        disabled={!bookingsPagination.hasNext}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Next
+                      </button>
+                      <button
+                        onClick={() => loadBookings(bookingsPagination.pages)}
+                        disabled={!bookingsPagination.hasNext}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Last
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Addresses Tab */}
+          {activeTab === 'addresses' && (
+            <div className="space-y-4">
+              {addressesLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
+                </div>
+              ) : addresses.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 rounded-xl">
+                  <MapPin className="w-12 h-12 text-nilin-warmGray mx-auto mb-4" />
+                  <p className="text-nilin-warmGray">No saved addresses</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {addresses.map((address) => (
+                    <div key={address.id} className="bg-gray-50 rounded-xl p-4 relative">
+                      {address.isDefault && (
+                        <span className="absolute top-2 right-2 px-2 py-0.5 bg-nilin-coral/10 text-nilin-coral rounded text-xs font-medium">
+                          Default
                         </span>
+                      )}
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-100 text-blue-600">
+                          {address.type === 'home' ? <Home className="w-5 h-5" /> : address.type === 'work' ? <Briefcase className="w-5 h-5" /> : <Building className="w-5 h-5" />}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-nilin-charcoal">{address.label}</span>
+                            <span className="text-xs text-nilin-warmGray capitalize">({address.type})</span>
+                          </div>
+                          <p className="text-sm text-nilin-warmGray">{address.address}</p>
+                          {(address.building || address.apartment || address.floor) && (
+                            <p className="text-sm text-nilin-warmGray mt-1">
+                              {[address.building && `Bldg ${address.building}`, address.apartment && `Apt ${address.apartment}`, address.floor && `Floor ${address.floor}`].filter(Boolean).join(', ')}
+                            </p>
+                          )}
+                          {address.instructions && (
+                            <p className="text-xs text-nilin-warmGray mt-2 italic">{address.instructions}</p>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Payments Tab */}
+          {activeTab === 'payments' && (
+            <div className="space-y-4">
+              {paymentsLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
+                </div>
+              ) : paymentMethods.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 rounded-xl">
+                  <CreditCard className="w-12 h-12 text-nilin-warmGray mx-auto mb-4" />
+                  <p className="text-nilin-warmGray">No payment methods saved</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {paymentMethods.map((method) => (
+                    <div key={method.id} className="bg-gray-50 rounded-xl p-4 relative">
+                      {method.isDefault && (
+                        <span className="absolute top-2 right-2 px-2 py-0.5 bg-nilin-coral/10 text-nilin-coral rounded text-xs font-medium">
+                          Default
+                        </span>
+                      )}
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-green-100 text-green-600">
+                          <CreditCard className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-nilin-charcoal capitalize">{method.type}</span>
+                            {method.brand && (
+                              <span className="text-xs text-nilin-warmGray">{method.brand}</span>
+                            )}
+                          </div>
+                          <p className="text-lg font-mono text-nilin-charcoal">
+                            **** **** **** {method.last4}
+                          </p>
+                          {method.expiryMonth && method.expiryYear && (
+                            <p className="text-sm text-nilin-warmGray mt-1">
+                              Expires: {formatPaymentMethodExpiry(method)}
+                            </p>
+                          )}
+                          <p className="text-xs text-nilin-warmGray mt-2">
+                            Added: {new Date(method.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
@@ -813,6 +1309,96 @@ const CustomerDetailModal: React.FC<{
             </div>
           )}
 
+          {activeTab === 'activity' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-nilin-charcoal">Activity History</h3>
+                <p className="text-sm text-nilin-warmGray">
+                  {activitiesPagination.total} activit{activitiesPagination.total !== 1 ? 'ies' : 'y'} recorded
+                </p>
+              </div>
+
+              {activitiesLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
+                </div>
+              ) : activities.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 rounded-xl">
+                  <ActivityIcon className="w-12 h-12 text-nilin-warmGray mx-auto mb-4" />
+                  <p className="text-nilin-warmGray">No activity recorded for this customer</p>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    {activities.map((activity) => (
+                      <div key={activity.id} className="flex items-start gap-4 bg-gray-50 rounded-lg p-4">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                          activity.type.includes('login') ? 'bg-blue-100 text-blue-600' :
+                          activity.type.includes('booking') ? 'bg-purple-100 text-purple-600' :
+                          activity.type.includes('payment') || activity.type.includes('refund') ? 'bg-green-100 text-green-600' :
+                          activity.type.includes('review') ? 'bg-yellow-100 text-yellow-600' :
+                          activity.type.includes('flag') ? 'bg-red-100 text-red-600' :
+                          'bg-gray-100 text-gray-600'
+                        }`}>
+                          <ActivityIcon className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-medium text-nilin-charcoal">{activity.title}</p>
+                            <span className="text-xs text-nilin-warmGray whitespace-nowrap">
+                              {new Date(activity.timestamp).toLocaleDateString()} {new Date(activity.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-sm text-nilin-warmGray mt-1">{activity.description}</p>
+                          {activity.ipAddress && (
+                            <p className="text-xs text-nilin-warmGray mt-1">IP: {activity.ipAddress}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Pagination */}
+                  {activitiesPagination.pages > 1 && (
+                    <div className="flex items-center justify-center gap-2 pt-4">
+                      <button
+                        onClick={() => loadActivities(1)}
+                        disabled={!activitiesPagination.hasPrev}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        First
+                      </button>
+                      <button
+                        onClick={() => loadActivities(activitiesPagination.page - 1)}
+                        disabled={!activitiesPagination.hasPrev}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Previous
+                      </button>
+                      <span className="px-4 py-1 text-sm text-nilin-charcoal">
+                        Page {activitiesPagination.page} of {activitiesPagination.pages}
+                      </span>
+                      <button
+                        onClick={() => loadActivities(activitiesPagination.page + 1)}
+                        disabled={!activitiesPagination.hasNext}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Next
+                      </button>
+                      <button
+                        onClick={() => loadActivities(activitiesPagination.pages)}
+                        disabled={!activitiesPagination.hasNext}
+                        className="px-3 py-1 rounded border border-gray-200 disabled:opacity-50 hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Last
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           {activeTab === 'actions' && (
             <div className="space-y-6">
               {/* Add Flag */}
@@ -854,16 +1440,12 @@ const CustomerDetailModal: React.FC<{
                   </button>
                 ) : (
                   <div className="space-y-3">
-                    <input
-                      type="text"
-                      value={blockReason}
-                      onChange={(e) => setBlockReason(e.target.value)}
-                      placeholder="Reason for blocking..."
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                    />
+                    <p className="text-sm text-nilin-warmGray mb-2">
+                      Blocking will prevent this customer from accessing their account.
+                    </p>
                     <button
-                      onClick={handleBlockCustomer}
-                      disabled={actionLoading || !blockReason}
+                      onClick={() => setShowBlockConfirmModal(true)}
+                      disabled={actionLoading}
                       className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
                     >
                       Block Customer
@@ -952,6 +1534,178 @@ const CustomerDetailModal: React.FC<{
           </div>
         </div>
       )}
+
+      {/* Message Modal */}
+      {showMessageModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl p-6 max-w-lg w-full max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-nilin-charcoal">Message Customer</h3>
+              <button
+                onClick={() => setShowMessageModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-nilin-warmGray" />
+              </button>
+            </div>
+
+            {/* Message History */}
+            {messageLoading ? (
+              <div className="flex justify-center py-4">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-nilin-coral"></div>
+              </div>
+            ) : messageHistory.length > 0 ? (
+              <div className="flex-1 overflow-y-auto mb-4 max-h-48 bg-gray-50 rounded-lg p-3 space-y-3">
+                {messageHistory.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`p-3 rounded-lg ${
+                      msg.senderType === 'admin'
+                        ? 'bg-nilin-coral/10 ml-8'
+                        : 'bg-white mr-8 border border-gray-200'
+                    }`}
+                  >
+                    <p className="text-sm text-nilin-charcoal">{msg.content}</p>
+                    <p className="text-xs text-nilin-warmGray mt-1">
+                      {msg.senderType === 'admin' ? 'You' : 'Customer'} - {new Date(msg.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {/* Message Input */}
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="message-content" className="block text-sm font-medium text-nilin-charcoal mb-2">
+                  Your Message
+                </label>
+                <textarea
+                  id="message-content"
+                  value={messageContent}
+                  onChange={(e) => setMessageContent(e.target.value)}
+                  placeholder="Type your message here..."
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-nilin-coral"
+                />
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowMessageModal(false);
+                    setMessageContent('');
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSendMessage}
+                  disabled={messageSending || !messageContent.trim()}
+                  className="flex-1 px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                >
+                  {messageSending ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      Send
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Block Confirmation Modal */}
+      {showBlockConfirmModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div
+            className="bg-white rounded-xl p-6 max-w-md w-full animate-scale-in shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="block-confirm-title"
+          >
+            {/* Warning Icon */}
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-100 flex items-center justify-center">
+              <AlertTriangle className="w-8 h-8 text-red-600" />
+            </div>
+
+            {/* Title */}
+            <h3
+              id="block-confirm-title"
+              className="text-lg font-semibold text-nilin-charcoal text-center mb-2"
+            >
+              Block Customer?
+            </h3>
+
+            {/* Description */}
+            <p className="text-sm text-nilin-warmGray text-center mb-4">
+              This will prevent {user.firstName} {user.lastName} from accessing their account.
+              You can unblock them at any time.
+            </p>
+
+            {/* Reason Input */}
+            <div className="mb-6">
+              <label
+                htmlFor="block-reason-input"
+                className="block text-sm font-medium text-nilin-charcoal mb-2"
+              >
+                Reason for blocking <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                id="block-reason-input"
+                value={blockReason}
+                onChange={(e) => setBlockReason(e.target.value)}
+                placeholder="Enter the reason for blocking this customer..."
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-nilin-coral focus:border-transparent resize-none"
+                autoFocus
+              />
+              {!blockReason && (
+                <p className="mt-1.5 text-sm text-red-500" role="alert">
+                  Please provide a reason for blocking this customer.
+                </p>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowBlockConfirmModal(false);
+                  setBlockReason('');
+                }}
+                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBlockCustomer}
+                disabled={actionLoading || !blockReason.trim()}
+                className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {actionLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Blocking...
+                  </>
+                ) : (
+                  <>
+                    <Ban className="w-4 h-4" />
+                    Block Customer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -983,8 +1737,6 @@ const CustomerManagement: React.FC = () => {
   // Bulk selection state
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
-  const [showBulkActionModal, setShowBulkActionModal] = useState(false);
-  const [pendingBulkAction, setPendingBulkAction] = useState<BulkUserAction | null>(null);
 
   // Toggle user selection
   const toggleUserSelection = (userId: string) => {
@@ -1000,26 +1752,72 @@ const CustomerManagement: React.FC = () => {
   };
 
   // Select all visible users
+  // Use stable user.id (not array index) so re-renders with shuffled data
+  // don't deselect the wrong rows.
+  const visibleUserIds = useMemo(
+    () => customers.map((c) => c.user.id).filter((id): id is string => Boolean(id)),
+    [customers]
+  );
+
+  const allVisibleSelected = useMemo(
+    () => visibleUserIds.length > 0 && visibleUserIds.every((id) => selectedUserIds.has(id)),
+    [visibleUserIds, selectedUserIds]
+  );
+
   const selectAllVisibleUsers = () => {
-    if (selectedUserIds.size === customers.length) {
-      setSelectedUserIds(new Set());
+    if (allVisibleSelected) {
+      // Only deselect the currently visible users; preserve any selection
+      // that exists outside the current page (e.g., a future multi-page select).
+      setSelectedUserIds((prev) => {
+        const next = new Set(prev);
+        visibleUserIds.forEach((id) => next.delete(id));
+        return next;
+      });
     } else {
-      setSelectedUserIds(new Set(customers.map((c) => c.user.id || (c.user as any)._id)));
+      setSelectedUserIds((prev) => {
+        const next = new Set(prev);
+        visibleUserIds.forEach((id) => next.add(id));
+        return next;
+      });
     }
   };
 
+  // Define bulk actions
+  const bulkActions: BulkAction[] = [
+    {
+      id: 'activate',
+      label: 'Activate',
+      icon: <CheckCircle className="w-4 h-4" />,
+      variant: 'success',
+    },
+    {
+      id: 'deactivate',
+      label: 'Deactivate',
+      icon: <Ban className="w-4 h-4" />,
+      variant: 'warning',
+    },
+    {
+      id: 'suspend',
+      label: 'Suspend',
+      icon: <UserX className="w-4 h-4" />,
+      variant: 'danger',
+      requiresConfirm: true,
+      confirmTitle: 'Confirm Suspension',
+      confirmDescription: 'Suspended users will not be able to access their accounts.',
+    },
+  ];
+
   // Handle bulk action
-  const handleBulkAction = async () => {
-    if (!pendingBulkAction || selectedUserIds.size === 0) return;
+  const handleBulkAction = async (actionId: string) => {
+    if (selectedUserIds.size === 0) return;
 
     setBulkActionLoading(true);
     try {
       const result = await bulkUserActionApi(
-        pendingBulkAction,
+        actionId as BulkUserAction,
         Array.from(selectedUserIds)
       );
       if (result.success) {
-        toast.success(`Bulk action completed successfully on ${Array.from(selectedUserIds).length} customers`);
         setSelectedUserIds(new Set());
         await loadCustomers();
       } else {
@@ -1029,20 +1827,26 @@ const CustomerManagement: React.FC = () => {
       toast.error(error instanceof Error ? error.message : 'Bulk action failed. Please try again.');
     } finally {
       setBulkActionLoading(false);
-      setShowBulkActionModal(false);
-      setPendingBulkAction(null);
     }
   };
 
-  // Export users to CSV
-  const handleExportUsers = async () => {
+  // Export users state
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Export users
+  const handleExportUsers = async (format: 'csv' | 'excel' | 'pdf') => {
+    setIsExporting(true);
     try {
       await exportUsersApi({
+        format,
         status: filters.isBlocked === undefined ? undefined : filters.isBlocked ? 'suspended' : 'active',
         role: 'customer',
       });
+      toast.success(`Export started as ${format.toUpperCase()}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Export failed. Please try again.');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -1112,135 +1916,86 @@ const CustomerManagement: React.FC = () => {
   };
 
   return (
-    <ErrorBoundary>
-    <div className="min-h-screen bg-nilin-cream">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-nilin-charcoal mb-2">Customer Management</h1>
-          <p className="text-nilin-warmGray">
-            Monitor customer trust scores, detect abuse patterns, and manage customer tiers
-          </p>
-        </div>
-
-        {/* Quick Stats */}
-        {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-white rounded-xl p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Users className="w-5 h-5 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-nilin-warmGray">Total Customers</p>
-                  <p className="text-xl font-bold text-nilin-charcoal">
-                    {stats.totalCustomers.toLocaleString()}
-                  </p>
-                </div>
+    <AdminPageShell
+      title="Customer Management"
+      subtitle="Monitor customer trust scores, detect abuse patterns, and manage customer tiers"
+      wideLayout={true}
+    >
+      {/* Quick Stats */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                <Users className="w-5 h-5 text-blue-600" />
               </div>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                  <Shield className="w-5 h-5 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-nilin-warmGray">Avg Trust Score</p>
-                  <p className="text-xl font-bold text-nilin-charcoal">{stats.averageTrustScore}</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
-                  <AlertTriangle className="w-5 h-5 text-amber-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-nilin-warmGray">Flagged</p>
-                  <p className="text-xl font-bold text-nilin-charcoal">
-                    {stats.tierDistribution.flagged || 0}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
-                  <ShieldAlert className="w-5 h-5 text-red-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-nilin-warmGray">High Risk</p>
-                  <p className="text-xl font-bold text-nilin-charcoal">
-                    {(stats.riskDistribution.high || 0) + (stats.riskDistribution.critical || 0)}
-                  </p>
-                </div>
+              <div>
+                <p className="text-sm text-nilin-warmGray">Total Customers</p>
+                <p className="text-xl font-bold text-nilin-charcoal">
+                  {stats.totalCustomers.toLocaleString()}
+                </p>
               </div>
             </div>
           </div>
-        )}
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                <Shield className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm text-nilin-warmGray">Avg Trust Score</p>
+                <p className="text-xl font-bold text-nilin-charcoal">{stats.averageTrustScore}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <p className="text-sm text-nilin-warmGray">Flagged</p>
+                <p className="text-xl font-bold text-nilin-charcoal">
+                  {stats.tierDistribution.flagged || 0}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
+                <ShieldAlert className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <p className="text-sm text-nilin-warmGray">High Risk</p>
+                <p className="text-xl font-bold text-nilin-charcoal">
+                  {(stats.riskDistribution.high || 0) + (stats.riskDistribution.critical || 0)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-        {/* Filters */}
-        <FiltersPanel
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          stats={stats}
-        />
-
+      
         {/* Bulk Action Toolbar */}
         {selectedUserIds.size > 0 && (
-          <div className="bg-nilin-coral/10 border border-nilin-coral/20 rounded-xl p-4 mb-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="text-nilin-charcoal font-medium">
-                  {selectedUserIds.size} user{selectedUserIds.size !== 1 ? 's' : ''} selected
-                </span>
-                <button
-                  onClick={() => setSelectedUserIds(new Set())}
-                  className="text-sm text-nilin-warmGray hover:text-nilin-charcoal"
-                >
-                  Clear selection
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    setPendingBulkAction('activate');
-                    setShowBulkActionModal(true);
-                  }}
-                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
-                >
-                  <UserCheck className="w-4 h-4" />
-                  Activate
-                </button>
-                <button
-                  onClick={() => {
-                    setPendingBulkAction('deactivate');
-                    setShowBulkActionModal(true);
-                  }}
-                  className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center gap-2"
-                >
-                  <Ban className="w-4 h-4" />
-                  Deactivate
-                </button>
-                <button
-                  onClick={() => {
-                    setPendingBulkAction('suspend');
-                    setShowBulkActionModal(true);
-                  }}
-                  className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-2"
-                >
-                  <UserX className="w-4 h-4" />
-                  Suspend
-                </button>
-              </div>
-            </div>
-          </div>
+          <BulkActionToolbar
+            selectedItems={customers.filter(c => selectedUserIds.has(c.user.id))}
+            totalCount={pagination.total}
+            entityName="customers"
+            actions={bulkActions}
+            onAction={handleBulkAction}
+            onClear={() => setSelectedUserIds(new Set())}
+            getItemId={(c) => c.user.id}
+            className="mb-6"
+          />
         )}
 
         {/* Customer List */}
         {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral"></div>
+          <div className="fixed inset-0 bg-white/70 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral" />
           </div>
         ) : customers.length === 0 ? (
           <div className="bg-white rounded-xl p-8 text-center">
@@ -1257,23 +2012,20 @@ const CustomerManagement: React.FC = () => {
               <div className="flex items-center gap-3">
                 <input
                   type="checkbox"
-                  checked={selectedUserIds.size === customers.length && customers.length > 0}
+                  checked={allVisibleSelected}
                   onChange={selectAllVisibleUsers}
+                  aria-label="Select all customers on this page"
                   className="w-5 h-5 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral cursor-pointer"
                 />
                 <span className="text-sm text-nilin-warmGray">
-                  {selectedUserIds.size === customers.length && customers.length > 0
-                    ? 'Deselect all'
-                    : 'Select all on this page'}
+                  {allVisibleSelected ? 'Deselect all' : 'Select all on this page'}
                 </span>
               </div>
-              <button
-                onClick={handleExportUsers}
-                className="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
-              >
-                <BarChart3 className="w-4 h-4" />
-                Export CSV
-              </button>
+              <ExportDropdown
+                onExport={handleExportUsers}
+                formats={['csv', 'excel', 'pdf']}
+                loading={isExporting}
+              />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1289,33 +2041,17 @@ const CustomerManagement: React.FC = () => {
             </div>
 
             {/* Pagination */}
-            {pagination.pages > 1 && (
-              <div className="mt-6 flex items-center justify-between">
-                <p className="text-sm text-nilin-warmGray">
-                  Showing {(pagination.page - 1) * 20 + 1} to{' '}
-                  {Math.min(pagination.page * 20, pagination.total)} of {pagination.total} customers
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handlePageChange(pagination.page - 1)}
-                    disabled={pagination.page === 1}
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <span className="px-4 py-2 text-sm text-nilin-charcoal">
-                    Page {pagination.page} of {pagination.pages}
-                  </span>
-                  <button
-                    onClick={() => handlePageChange(pagination.page + 1)}
-                    disabled={pagination.page === pagination.pages}
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-            )}
+            <AdminPagination
+              page={pagination.page}
+              totalPages={pagination.pages}
+              total={pagination.total}
+              pageSize={20}
+              onPageChange={handlePageChange}
+              showPageNumbers
+              showTotal
+              className="mt-6"
+              ariaLabel="Customer list pagination"
+            />
           </>
         )}
       </div>
@@ -1327,69 +2063,6 @@ const CustomerManagement: React.FC = () => {
           onClose={() => setSelectedCustomerId(null)}
           onRefresh={loadCustomers}
         />
-      )}
-
-      {/* Bulk Action Confirmation Modal */}
-      {showBulkActionModal && pendingBulkAction && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 max-w-md w-full">
-            <div className="flex items-center gap-3 mb-4">
-              {pendingBulkAction === 'activate' && (
-                <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-                  <UserCheck className="w-5 h-5 text-green-600" />
-                </div>
-              )}
-              {pendingBulkAction === 'deactivate' && (
-                <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
-                  <Ban className="w-5 h-5 text-amber-600" />
-                </div>
-              )}
-              {pendingBulkAction === 'suspend' && (
-                <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
-                  <UserX className="w-5 h-5 text-red-600" />
-                </div>
-              )}
-              <h3 className="text-lg font-semibold text-nilin-charcoal">
-                Confirm {pendingBulkAction.charAt(0).toUpperCase() + pendingBulkAction.slice(1)}
-              </h3>
-            </div>
-            <p className="text-nilin-warmGray mb-6">
-              Are you sure you want to {pendingBulkAction}{' '}
-              <span className="font-semibold text-nilin-charcoal">{selectedUserIds.size}</span> selected
-              user{selectedUserIds.size !== 1 ? 's' : ''}?
-              {pendingBulkAction === 'suspend' && (
-                <span className="block mt-2 text-amber-600">
-                  Suspended users will not be able to access their accounts.
-                </span>
-              )}
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setShowBulkActionModal(false);
-                  setPendingBulkAction(null);
-                }}
-                disabled={bulkActionLoading}
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleBulkAction}
-                disabled={bulkActionLoading}
-                className={`flex-1 px-4 py-2 text-white rounded-lg transition-colors disabled:opacity-50 ${
-                  pendingBulkAction === 'activate'
-                    ? 'bg-green-500 hover:bg-green-600'
-                    : pendingBulkAction === 'deactivate'
-                    ? 'bg-amber-500 hover:bg-amber-600'
-                    : 'bg-red-500 hover:bg-red-600'
-                }`}
-              >
-                {bulkActionLoading ? 'Processing...' : 'Confirm'}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
     </ErrorBoundary>

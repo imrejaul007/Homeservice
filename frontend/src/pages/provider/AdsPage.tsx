@@ -58,6 +58,249 @@ interface AdFormError {
   general?: string;
 }
 
+// Ad Form Modal Component
+interface AdFormModalProps {
+  title: string;
+  formData: AdFormData;
+  setFormData: React.Dispatch<React.SetStateAction<AdFormData>>;
+  formError: AdFormError | null;
+  isSubmitting: boolean;
+  onSubmit: () => void;
+  onClose: () => void;
+  submitLabel: string;
+}
+
+const AdFormModal: React.FC<AdFormModalProps> = ({
+  title,
+  formData,
+  setFormData,
+  formError,
+  isSubmitting,
+  onSubmit,
+  onClose,
+  submitLabel,
+}) => {
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="ads-modal-title">
+      <div className="bg-white rounded-nilin-lg max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-6">
+          <h2 id="ads-modal-title" className="text-xl font-serif text-nilin-charcoal">{title}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close modal"
+            className="w-11 h-11 flex items-center justify-center hover:bg-nilin-muted rounded-nilin transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+          >
+            <X className="h-5 w-5 text-nilin-warmGray" />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {/* General Error */}
+          {formError?.general && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-nilin flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+              <p className="text-sm text-red-700">{formError.general}</p>
+            </div>
+          )}
+
+          {/* Ad Name */}
+          <div>
+            <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              Ad Campaign Name *
+            </label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="e.g., Summer Cleaning Special"
+              maxLength={100}
+              className={`w-full px-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 ${
+                formError?.name ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
+              }`}
+            />
+            {formError?.name && (
+              <p className="text-xs text-red-500 mt-1">{formError.name}</p>
+            )}
+            <p className="text-xs text-nilin-warmGray mt-1">{formData.name.length}/100 characters</p>
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+              Description (Optional)
+            </label>
+            <textarea
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="Brief description of your ad campaign..."
+              rows={2}
+              maxLength={500}
+              className="w-full px-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 resize-none"
+            />
+          </div>
+
+          {/* Budget */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Total Budget (AED) *
+              </label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray text-sm">AED</span>
+                <input
+                  type="number"
+                  value={formData.budgetTotal}
+                  onChange={(e) => setFormData({ ...formData, budgetTotal: e.target.value })}
+                  placeholder="100"
+                  min="1"
+                  className={`w-full pl-12 pr-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 ${
+                    formError?.budgetTotal ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
+                  }`}
+                />
+              </div>
+              {formError?.budgetTotal && (
+                <p className="text-xs text-red-500 mt-1">{formError.budgetTotal}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Daily Budget (AED)
+              </label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray text-sm">AED</span>
+                <input
+                  type="number"
+                  value={formData.budgetDaily}
+                  onChange={(e) => setFormData({ ...formData, budgetDaily: e.target.value })}
+                  placeholder="Optional"
+                  min="1"
+                  className="w-full pl-12 pr-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Ad Content Section */}
+          <div className="pt-4 border-t border-nilin-border">
+            <h3 className="text-sm font-medium text-nilin-charcoal mb-4">Ad Content</h3>
+
+            {/* Title */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Ad Title *
+              </label>
+              <input
+                type="text"
+                value={formData.contentTitle}
+                onChange={(e) => setFormData({ ...formData, contentTitle: e.target.value })}
+                placeholder="e.g., Professional Cleaning Services"
+                maxLength={60}
+                className={`w-full px-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 ${
+                  formError?.contentTitle ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
+                }`}
+              />
+              {formError?.contentTitle && (
+                <p className="text-xs text-red-500 mt-1">{formError.contentTitle}</p>
+              )}
+              <p className="text-xs text-nilin-warmGray mt-1">{formData.contentTitle.length}/60 characters</p>
+            </div>
+
+            {/* Description */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Ad Description *
+              </label>
+              <textarea
+                value={formData.contentDescription}
+                onChange={(e) => setFormData({ ...formData, contentDescription: e.target.value })}
+                placeholder="Describe what makes your service special..."
+                rows={3}
+                maxLength={200}
+                className={`w-full px-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 resize-none ${
+                  formError?.contentDescription ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
+                }`}
+              />
+              {formError?.contentDescription && (
+                <p className="text-xs text-red-500 mt-1">{formError.contentDescription}</p>
+              )}
+              <p className="text-xs text-nilin-warmGray mt-1">{formData.contentDescription.length}/200 characters</p>
+            </div>
+
+            {/* Image URL */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Image URL (Optional)
+              </label>
+              <input
+                type="url"
+                value={formData.contentImageUrl}
+                onChange={(e) => setFormData({ ...formData, contentImageUrl: e.target.value })}
+                placeholder="https://example.com/image.jpg"
+                className="w-full px-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20"
+              />
+            </div>
+
+            {/* CTA Text */}
+            <div>
+              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                Call to Action
+              </label>
+              <input
+                type="text"
+                value={formData.contentCtaText}
+                onChange={(e) => setFormData({ ...formData, contentCtaText: e.target.value })}
+                placeholder="Book Now"
+                maxLength={20}
+                className="w-full px-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20"
+              />
+              <p className="text-xs text-nilin-warmGray mt-1">{formData.contentCtaText.length}/20 characters</p>
+            </div>
+          </div>
+
+          {/* Info Box */}
+          <div className="p-4 bg-blue-50 rounded-nilin">
+            <div className="flex items-start gap-3">
+              <Target className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-blue-900">Deploy when ready</p>
+                <p className="text-xs text-blue-700 mt-1">
+                  New campaigns are saved as drafts. Use the play button to deploy and start tracking views and clicks.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3 pt-4">
+            <button
+              onClick={onSubmit}
+              disabled={isSubmitting}
+              className="flex-1 btn-nilin flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                submitLabel
+              )}
+            </button>
+            <button
+              onClick={onClose}
+              disabled={isSubmitting}
+              className="px-6 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AdsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
@@ -140,7 +383,7 @@ const AdsPage: React.FC = () => {
       setAds(result.ads);
       setTotalPages(result.pagination.pages);
       setTotalAds(result.pagination.total);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch ads:', err);
       // Handle network errors vs API errors
       if (!err.response) {
@@ -168,7 +411,7 @@ const AdsPage: React.FC = () => {
     try {
       const result = await providerAdApi.getAdStats();
       setStats(result);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch ad stats:', err);
       // Stats are non-critical - don't show error, just log
     }
@@ -233,7 +476,7 @@ const AdsPage: React.FC = () => {
       toast.success('Ad paused');
       await fetchAds(true);
       await fetchStats();
-    } catch (err: any) {
+    } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to pause ad';
       setError(msg);
       toast.error(msg);
@@ -247,7 +490,7 @@ const AdsPage: React.FC = () => {
       toast.success('Ad resumed');
       await fetchAds(true);
       await fetchStats();
-    } catch (err: any) {
+    } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to resume ad';
       setError(msg);
       toast.error(msg);
@@ -261,7 +504,7 @@ const AdsPage: React.FC = () => {
       toast.success('Ad submitted for review — you will be notified when approved');
       await fetchAds(true);
       await fetchStats();
-    } catch (err: any) {
+    } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to launch ad';
       setError(msg);
       toast.error(msg);
@@ -279,7 +522,7 @@ const AdsPage: React.FC = () => {
       toast.success('Ad deleted');
       await fetchAds(true);
       await fetchStats();
-    } catch (err: any) {
+    } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to delete ad';
       setError(msg);
       toast.error(msg);
@@ -375,7 +618,7 @@ const AdsPage: React.FC = () => {
       resetForm();
       await fetchAds(true);
       await fetchStats();
-    } catch (err: any) {
+    } catch (err) {
       setFormError({
         general: err.response?.data?.message || err.message || 'Failed to create ad',
       });
@@ -416,7 +659,7 @@ const AdsPage: React.FC = () => {
       resetForm();
       await fetchAds(true);
       await fetchStats();
-    } catch (err: any) {
+    } catch (err) {
       setFormError({
         general: err.response?.data?.message || err.message || 'Failed to update ad',
       });
@@ -538,11 +781,26 @@ const AdsPage: React.FC = () => {
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isRefreshing ? 'Refreshing ad data...' : ''}
+        {isSubmitting ? 'Submitting ad...' : ''}
+        {error ? `Error: ${error}` : ''}
+      </div>
+
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
           <div className="mb-8">
@@ -886,7 +1144,7 @@ const AdsPage: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
+      </main>
 
       {/* Create Ad Modal */}
       {showCreateModal && (
@@ -939,248 +1197,6 @@ const AdsPage: React.FC = () => {
   );
 };
 
-// Ad Form Modal Component
-interface AdFormModalProps {
-  title: string;
-  formData: AdFormData;
-  setFormData: React.Dispatch<React.SetStateAction<AdFormData>>;
-  formError: AdFormError | null;
-  isSubmitting: boolean;
-  onSubmit: () => void;
-  onClose: () => void;
-  submitLabel: string;
-}
-
-const AdFormModal: React.FC<AdFormModalProps> = ({
-  title,
-  formData,
-  setFormData,
-  formError,
-  isSubmitting,
-  onSubmit,
-  onClose,
-  submitLabel,
-}) => {
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-nilin-lg max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-serif text-nilin-charcoal">{title}</h2>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-nilin-muted rounded-nilin transition-colors"
-          >
-            <X className="h-5 w-5 text-nilin-warmGray" />
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          {/* General Error */}
-          {formError?.general && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-nilin flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-              <p className="text-sm text-red-700">{formError.general}</p>
-            </div>
-          )}
-
-          {/* Ad Name */}
-          <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-              Ad Campaign Name *
-            </label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="e.g., Summer Cleaning Special"
-              maxLength={100}
-              className={`w-full px-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 ${
-                formError?.name ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
-              }`}
-            />
-            {formError?.name && (
-              <p className="text-xs text-red-500 mt-1">{formError.name}</p>
-            )}
-            <p className="text-xs text-nilin-warmGray mt-1">{formData.name.length}/100 characters</p>
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-              Description (Optional)
-            </label>
-            <textarea
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Brief description of your ad campaign..."
-              rows={2}
-              maxLength={500}
-              className="w-full px-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 resize-none"
-            />
-          </div>
-
-          {/* Budget */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Total Budget (AED) *
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray text-sm">AED</span>
-                <input
-                  type="number"
-                  value={formData.budgetTotal}
-                  onChange={(e) => setFormData({ ...formData, budgetTotal: e.target.value })}
-                  placeholder="100"
-                  min="1"
-                  className={`w-full pl-12 pr-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 ${
-                    formError?.budgetTotal ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
-                  }`}
-                />
-              </div>
-              {formError?.budgetTotal && (
-                <p className="text-xs text-red-500 mt-1">{formError.budgetTotal}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Daily Budget (AED)
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-nilin-warmGray text-sm">AED</span>
-                <input
-                  type="number"
-                  value={formData.budgetDaily}
-                  onChange={(e) => setFormData({ ...formData, budgetDaily: e.target.value })}
-                  placeholder="Optional"
-                  min="1"
-                  className="w-full pl-12 pr-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Ad Content Section */}
-          <div className="pt-4 border-t border-nilin-border">
-            <h3 className="text-sm font-medium text-nilin-charcoal mb-4">Ad Content</h3>
-
-            {/* Title */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Ad Title *
-              </label>
-              <input
-                type="text"
-                value={formData.contentTitle}
-                onChange={(e) => setFormData({ ...formData, contentTitle: e.target.value })}
-                placeholder="e.g., Professional Cleaning Services"
-                maxLength={60}
-                className={`w-full px-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 ${
-                  formError?.contentTitle ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
-                }`}
-              />
-              {formError?.contentTitle && (
-                <p className="text-xs text-red-500 mt-1">{formError.contentTitle}</p>
-              )}
-              <p className="text-xs text-nilin-warmGray mt-1">{formData.contentTitle.length}/60 characters</p>
-            </div>
-
-            {/* Description */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Ad Description *
-              </label>
-              <textarea
-                value={formData.contentDescription}
-                onChange={(e) => setFormData({ ...formData, contentDescription: e.target.value })}
-                placeholder="Describe what makes your service special..."
-                rows={3}
-                maxLength={200}
-                className={`w-full px-4 py-2.5 rounded-nilin border text-sm text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/20 resize-none ${
-                  formError?.contentDescription ? 'border-red-500 focus:border-red-500' : 'border-nilin-border focus:border-nilin-coral'
-                }`}
-              />
-              {formError?.contentDescription && (
-                <p className="text-xs text-red-500 mt-1">{formError.contentDescription}</p>
-              )}
-              <p className="text-xs text-nilin-warmGray mt-1">{formData.contentDescription.length}/200 characters</p>
-            </div>
-
-            {/* Image URL */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Image URL (Optional)
-              </label>
-              <input
-                type="url"
-                value={formData.contentImageUrl}
-                onChange={(e) => setFormData({ ...formData, contentImageUrl: e.target.value })}
-                placeholder="https://example.com/image.jpg"
-                className="w-full px-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20"
-              />
-            </div>
-
-            {/* CTA Text */}
-            <div>
-              <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Call to Action
-              </label>
-              <input
-                type="text"
-                value={formData.contentCtaText}
-                onChange={(e) => setFormData({ ...formData, contentCtaText: e.target.value })}
-                placeholder="Book Now"
-                maxLength={20}
-                className="w-full px-4 py-2.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20"
-              />
-              <p className="text-xs text-nilin-warmGray mt-1">{formData.contentCtaText.length}/20 characters</p>
-            </div>
-          </div>
-
-          {/* Info Box */}
-          <div className="p-4 bg-blue-50 rounded-nilin">
-            <div className="flex items-start gap-3">
-              <Target className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-medium text-blue-900">Deploy when ready</p>
-                <p className="text-xs text-blue-700 mt-1">
-                  New campaigns are saved as drafts. Use the play button to deploy and start tracking views and clicks.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex gap-3 pt-4">
-            <button
-              onClick={onSubmit}
-              disabled={isSubmitting}
-              className="flex-1 btn-nilin flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSubmitting ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                submitLabel
-              )}
-            </button>
-            <button
-              onClick={onClose}
-              disabled={isSubmitting}
-              className="px-6 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // Analytics Modal Component
 interface AdAnalyticsModalProps {
   ad: ProviderAd;
@@ -1198,7 +1214,7 @@ const AdAnalyticsModal: React.FC<AdAnalyticsModalProps> = ({ ad, onClose }) => {
         setError(null);
         const result = await providerAdApi.getAdAnalytics(ad._id);
         setAnalytics(result);
-      } catch (err: any) {
+      } catch (err) {
         console.error('Failed to fetch analytics:', err);
         setError(err.response?.data?.message || err.message || 'Failed to load analytics');
       } finally {
@@ -1210,13 +1226,14 @@ const AdAnalyticsModal: React.FC<AdAnalyticsModalProps> = ({ ad, onClose }) => {
   }, [ad._id]);
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="ad-analytics-modal-title">
       <div className="bg-white rounded-nilin-lg max-w-2xl w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-serif text-nilin-charcoal">Ad Analytics</h2>
+          <h2 id="ad-analytics-modal-title" className="text-xl font-serif text-nilin-charcoal">Ad Analytics</h2>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-nilin-muted rounded-nilin transition-colors"
+            aria-label="Close analytics modal"
+            className="w-11 h-11 flex items-center justify-center hover:bg-nilin-muted rounded-nilin transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
           >
             <X className="h-5 w-5 text-nilin-warmGray" />
           </button>

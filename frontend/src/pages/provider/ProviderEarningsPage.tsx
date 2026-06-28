@@ -32,6 +32,7 @@ import type { Wallet as WalletType, WalletTransaction, EarningsSummary } from '.
 import { socketService } from '../../services/socket';
 import { formatPrice } from '../../utils/currency';
 import { EmptyState } from '../../components/common/EmptyState';
+import ProviderHubNav from '../../components/provider/ProviderHubNav';
 
 // Security: HTML entity escaping to prevent XSS
 const escapeHtml = (text: string): string => {
@@ -227,7 +228,7 @@ const ProviderEarningsPage: React.FC = () => {
       } else if (monthlyRes.status === 'rejected') {
         console.error('Failed to fetch monthly summary:', monthlyRes.reason);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch wallet data:', err);
       setError({
         message: err.response?.data?.message || err.message || err.toString() || 'Failed to load wallet data',
@@ -295,6 +296,10 @@ const ProviderEarningsPage: React.FC = () => {
     ? ((monthlyChange) / (monthlySummary.earnings / 4)) * 100
     : 0;
 
+  const monthlyGoal = monthlySummary
+    ? Math.max(1000, Math.ceil(monthlySummary.earnings / 0.75 / 500) * 500)
+    : null;
+
   // Handle withdrawal
   const handleWithdraw = async () => {
     const amount = parseFloat(withdrawalForm.amount);
@@ -350,7 +355,7 @@ const ProviderEarningsPage: React.FC = () => {
           withdrawalTimeoutRef.current = null;
         }, 2000);
       }
-    } catch (err: any) {
+    } catch (err) {
       setWithdrawalError(err.response?.data?.message || err.message || 'Failed to process withdrawal');
     } finally {
       setIsWithdrawing(false);
@@ -457,6 +462,7 @@ const ProviderEarningsPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
+      <ProviderHubNav />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <div className="w-12 h-12 border-4 border-nilin-coral border-t-transparent rounded-full animate-spin mx-auto mb-4" />
@@ -472,6 +478,7 @@ const ProviderEarningsPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
+      <ProviderHubNav />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-md mx-auto px-4">
             <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
@@ -496,12 +503,28 @@ const ProviderEarningsPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <ProviderHubNav />
+
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isRefreshing ? 'Refreshing earnings data...' : ''}
+        {withdrawalSuccess ? 'Withdrawal submitted successfully' : ''}
+        {withdrawalError ? `Error: ${withdrawalError}` : ''}
+      </div>
 
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
           <div className="mb-8">
@@ -688,25 +711,31 @@ const ProviderEarningsPage: React.FC = () => {
 
             <div className="glass-nilin rounded-nilin-lg p-6 hover-lift">
               <h3 className="text-sm font-medium text-nilin-warmGray mb-4">Earnings Goal</h3>
-              <div className="mb-2">
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-nilin-charcoal">Monthly Target: {formatPrice(5000, wallet?.currency)}</span>
-                  <span className="text-nilin-warmGray">
-                    {monthlySummary ? `${((monthlySummary.earnings / 5000) * 100).toFixed(0)}%` : '0%'}
-                  </span>
-                </div>
-                <div className="h-3 bg-nilin-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-nilin-coral to-nilin-rose rounded-full transition-all"
-                    style={{ width: `${monthlySummary ? Math.min((monthlySummary.earnings / 5000) * 100, 100) : 0}%` }}
-                  />
-                </div>
-              </div>
-              <p className="text-sm text-nilin-warmGray">
-                {monthlySummary
-                  ? `${formatPrice(5000 - monthlySummary.earnings, wallet?.currency)} more to reach your goal`
-                  : 'Set your monthly earnings goal'}
-              </p>
+              {monthlyGoal && monthlySummary ? (
+                <>
+                  <div className="mb-2">
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-nilin-charcoal">Monthly Target: {formatPrice(monthlyGoal, wallet?.currency)}</span>
+                      <span className="text-nilin-warmGray">
+                        {`${Math.min((monthlySummary.earnings / monthlyGoal) * 100, 100).toFixed(0)}%`}
+                      </span>
+                    </div>
+                    <div className="h-3 bg-nilin-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-nilin-coral to-nilin-rose rounded-full transition-all"
+                        style={{ width: `${Math.min((monthlySummary.earnings / monthlyGoal) * 100, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-sm text-nilin-warmGray">
+                    {monthlySummary.earnings >= monthlyGoal
+                      ? 'Goal reached this month!'
+                      : `${formatPrice(Math.max(0, monthlyGoal - monthlySummary.earnings), wallet?.currency)} more to reach your goal`}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-nilin-warmGray">Earnings goal will appear once you have monthly activity.</p>
+              )}
             </div>
           </div>
 
@@ -836,7 +865,7 @@ const ProviderEarningsPage: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
+      </main>
 
       {/* Withdraw Modal */}
       {showWithdrawModal && (
@@ -855,7 +884,8 @@ const ProviderEarningsPage: React.FC = () => {
                   setWithdrawalError(null);
                   setWithdrawalSuccess(false);
                 }}
-                className="p-2 hover:bg-nilin-muted rounded-nilin transition-colors"
+                aria-label="Close withdrawal modal"
+                className="w-11 h-11 flex items-center justify-center hover:bg-nilin-muted rounded-nilin transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 <X className="h-5 w-5 text-nilin-warmGray" />
               </button>

@@ -6,6 +6,7 @@ import mongoose, { Document, Schema, Model, Types } from 'mongoose';
 
 export type DisputeStatus = 'open' | 'under_review' | 'resolved' | 'escalated' | 'closed';
 export type ResolutionType = 'refund' | 'partial_refund' | 'no_action' | 'provider_warning' | 'provider_suspended';
+export type AppealStatus = 'none' | 'pending' | 'approved' | 'rejected';
 export type EvidenceType = 'image' | 'document' | 'text';
 export type UserRole = 'customer' | 'provider';
 
@@ -44,6 +45,22 @@ export interface IDisputeTimeline {
   details?: string;
   previousStatus?: DisputeStatus;
   newStatus?: DisputeStatus;
+}
+
+export interface IDisputeAppeal {
+  status: AppealStatus;
+  reason: string;
+  submittedBy: Types.ObjectId;
+  submittedAt: Date;
+  deadline: Date;
+  reviewedBy?: Types.ObjectId;
+  reviewedAt?: Date;
+  reviewNotes?: string;
+  originalResolution?: {
+    type: ResolutionType;
+    amount?: number;
+    reason: string;
+  };
 }
 
 export interface IDispute extends Document {
@@ -100,6 +117,9 @@ export interface IDispute extends Document {
   reopenedAt?: Date;
   reopenedBy?: Types.ObjectId;
   reopenedReason?: string;
+
+  // Appeal (for resolved disputes)
+  appeal?: IDisputeAppeal;
 
   // Timeline/Audit Trail
   timeline: IDisputeTimeline[];
@@ -356,6 +376,39 @@ const disputeSchema = new Schema<IDispute>(
 
     reopenedReason: String,
 
+    // Appeal fields
+    appeal: {
+      status: {
+        type: String,
+        enum: ['none', 'pending', 'approved', 'rejected'],
+        default: 'none',
+      },
+      reason: {
+        type: String,
+        maxlength: [2000, 'Appeal reason cannot exceed 2000 characters'],
+      },
+      submittedBy: {
+        type: Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      submittedAt: Date,
+      deadline: Date,
+      reviewedBy: {
+        type: Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      reviewedAt: Date,
+      reviewNotes: String,
+      originalResolution: {
+        type: {
+          type: String,
+          enum: ['refund', 'partial_refund', 'no_action', 'provider_warning', 'provider_suspended'],
+        },
+        amount: Number,
+        reason: String,
+      },
+    },
+
     timeline: [{
       action: {
         type: String,
@@ -419,6 +472,10 @@ disputeSchema.index({ isDeleted: 1, status: 1 });
 
 // FIX: Compound index on bookingId for efficient queries and cascade operations
 disputeSchema.index({ bookingId: 1, status: 1 });
+
+// Appeal indexes for efficient queries
+disputeSchema.index({ 'appeal.status': 1, createdAt: -1 });
+disputeSchema.index({ 'appeal.deadline': 1, 'appeal.status': 1 });
 
 // Text index for search
 disputeSchema.index({ disputeNumber: 'text', reason: 'text', description: 'text' });

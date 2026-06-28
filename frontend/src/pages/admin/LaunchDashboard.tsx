@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Rocket,
   Users,
   TrendingUp,
   DollarSign,
@@ -27,6 +26,7 @@ import {
 import { demoApi, type LaunchReadiness, type ReadinessItem, type UserOnboardingFunnel, type ConversionData } from '../../services/demoApi';
 import { useAuthStore } from '../../stores/authStore';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 
 // ============================================
 // Types
@@ -260,16 +260,20 @@ const LaunchDashboard: React.FC = () => {
       setFunnelData(funnelRes);
       setConversionData(conversionRes);
 
-      // Generate mock KPIs from readiness data
+      const funnelTotal = funnelRes?.steps?.reduce((sum, step) => sum + (step.count || 0), 0) ?? 0;
+      const lastStep = funnelRes?.steps?.[funnelRes.steps.length - 1];
+      const conversionRate =
+        funnelTotal > 0 && lastStep ? Number(((lastStep.count / funnelTotal) * 100).toFixed(1)) : 0;
+
       setKpis({
-        totalUsers: 312,
-        activeProviders: 48,
-        totalBookings: 1247,
-        monthlyRevenue: 186500,
-        conversionRate: 3.2,
-        avgBookingValue: 149,
-        providerGrowthRate: 15.4,
-        customerGrowthRate: 22.8,
+        totalUsers: readinessRes?.metrics?.totalUsers ?? 0,
+        activeProviders: readinessRes?.metrics?.activeProviders ?? 0,
+        totalBookings: readinessRes?.metrics?.totalBookings ?? funnelTotal,
+        monthlyRevenue: readinessRes?.metrics?.monthlyRevenue ?? 0,
+        conversionRate: conversionRes?.overallConversion ?? conversionRate,
+        avgBookingValue: readinessRes?.metrics?.avgBookingValue ?? 0,
+        providerGrowthRate: readinessRes?.metrics?.providerGrowthRate ?? 0,
+        customerGrowthRate: readinessRes?.metrics?.customerGrowthRate ?? 0,
       });
 
       setLastUpdated(new Date());
@@ -329,354 +333,345 @@ const LaunchDashboard: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        {/* Header */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg">
-                <Rocket className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Launch Dashboard</h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Track launch readiness and platform metrics
-                  {lastUpdated && (
-                    <span className="ml-2">
-                      Last updated: {lastUpdated.toLocaleTimeString()}
-                    </span>
-                  )}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleExport}
-                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 text-gray-700 dark:text-gray-300"
-              >
-                <Download className="w-4 h-4" />
-                Export
-              </button>
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="px-4 sm:px-6 lg:px-8">
-          <div className="flex gap-1 overflow-x-auto">
-            {[
-              { id: 'overview', label: 'Overview', icon: BarChart3 },
-              { id: 'readiness', label: 'Readiness', icon: Target },
-              { id: 'funnel', label: 'Onboarding Funnel', icon: PieChart },
-              { id: 'conversions', label: 'Conversions', icon: TrendingUp },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 whitespace-nowrap transition-colors ${
-                  activeTab === tab.id
-                    ? 'border-indigo-600 text-indigo-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
-              >
-                <tab.icon className="w-4 h-4" />
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="p-4 sm:p-6 lg:p-8">
-        {isLoading ? (
-          <div className="flex justify-center py-16">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-          </div>
-        ) : (
+      <AdminPageShell
+        title="Launch Dashboard"
+        subtitle={lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString()}` : 'Track launch readiness and platform metrics'}
+        showSidebar={false}
+        wideLayout
+        headerActions={
           <>
-            {/* Overview Tab */}
-            {activeTab === 'overview' && (
-              <div className="space-y-6">
-                {/* Launch Score */}
-                {readiness && (
-                  <div className="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-xl p-6 text-white">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h2 className="text-lg font-medium opacity-90">Launch Readiness Score</h2>
-                        <p className="text-sm opacity-75 mt-1">
-                          {readiness.score >= 80
-                            ? 'Excellent! Platform is ready for launch'
-                            : readiness.score >= 60
-                            ? 'Good progress. Some items need attention'
-                            : 'Additional work required before launch'}
-                        </p>
-                        {readiness.estimatedLaunchDate && (
-                          <p className="text-sm opacity-75 mt-2">
-                            Estimated Launch: {new Date(readiness.estimatedLaunchDate).toLocaleDateString('en-US', { dateStyle: 'long' })}
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 border border-nilin-border rounded-xl hover:bg-nilin-blush/50 flex items-center gap-2 text-nilin-charcoal focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+            >
+              <Download className="w-5 h-5" />
+              <span className="hidden sm:inline">Export</span>
+            </button>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="px-4 py-2 bg-nilin-coral text-white rounded-xl hover:opacity-90 disabled:opacity-50 flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+            >
+              <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </>
+        }
+      >
+        {/* Skip Link */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+        >
+          Skip to main content
+        </a>
+
+        <main id="main-content">
+          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <strong>Demo data:</strong> Launch readiness metrics come from demo endpoints and do not reflect production readiness. Use Operations and Analytics dashboards for live platform data.
+          </div>
+          {/* Tab Navigation */}
+          <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 mb-6 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8">
+            <div className="flex gap-1 overflow-x-auto">
+              {[
+                { id: 'overview', label: 'Overview', icon: BarChart3 },
+                { id: 'readiness', label: 'Readiness', icon: Target },
+                { id: 'funnel', label: 'Onboarding Funnel', icon: PieChart },
+                { id: 'conversions', label: 'Conversions', icon: TrendingUp },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                  className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
+                    activeTab === tab.id
+                      ? 'border-nilin-coral text-nilin-coral'
+                      : 'border-transparent text-nilin-warmGray hover:text-nilin-charcoal'
+                  }`}
+                >
+                  <tab.icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {isLoading ? (
+            <div className="flex justify-center py-16">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral"></div>
+            </div>
+          ) : (
+            <>
+              {/* Overview Tab */}
+              {activeTab === 'overview' && (
+                <div className="space-y-6">
+                  {/* Launch Score */}
+                  {readiness && (
+                    <div className="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-xl p-6 text-white">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h2 className="text-lg font-medium opacity-90">Launch Readiness Score</h2>
+                          <p className="text-sm opacity-75 mt-1">
+                            {readiness.score >= 80
+                              ? 'Excellent! Platform is ready for launch'
+                              : readiness.score >= 60
+                              ? 'Good progress. Some items need attention'
+                              : 'Additional work required before launch'}
                           </p>
-                        )}
-                      </div>
-                      <ScoreCircle score={readiness.score} size="lg" />
-                    </div>
-
-                    {/* Blockers */}
-                    {readiness.blockers.length > 0 && (
-                      <div className="mt-6 bg-white/10 rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <AlertTriangle className="w-5 h-5" />
-                          <h3 className="font-semibold">Blockers ({readiness.blockers.length})</h3>
+                          {readiness.estimatedLaunchDate && (
+                            <p className="text-sm opacity-75 mt-2">
+                              Estimated Launch: {new Date(readiness.estimatedLaunchDate).toLocaleDateString('en-US', { dateStyle: 'long' })}
+                            </p>
+                          )}
                         </div>
-                        <ul className="space-y-1">
-                          {readiness.blockers.map((blocker, idx) => (
-                            <li key={idx} className="text-sm flex items-start gap-2">
-                              <span className="mt-1.5 w-1.5 h-1.5 bg-white rounded-full flex-shrink-0" />
-                              {blocker}
-                            </li>
-                          ))}
-                        </ul>
+                        <ScoreCircle score={readiness.score} size="lg" />
                       </div>
-                    )}
-                  </div>
-                )}
 
-                {/* KPI Cards */}
-                {kpis && (
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    <MetricCard
-                      title="Total Users"
-                      value={kpis.totalUsers.toLocaleString()}
-                      change={kpis.customerGrowthRate}
-                      icon={<Users className="w-5 h-5 text-blue-600" />}
-                      color="bg-blue-100"
-                      subtitle="customers"
-                    />
-                    <MetricCard
-                      title="Active Providers"
-                      value={kpis.activeProviders}
-                      change={kpis.providerGrowthRate}
-                      icon={<Zap className="w-5 h-5 text-amber-600" />}
-                      color="bg-amber-100"
-                      subtitle="verified"
-                    />
-                    <MetricCard
-                      title="Total Bookings"
-                      value={kpis.totalBookings.toLocaleString()}
-                      change={8.2}
-                      icon={<Calendar className="w-5 h-5 text-green-600" />}
-                      color="bg-green-100"
-                    />
-                    <MetricCard
-                      title="Monthly Revenue"
-                      value={formatCurrency(kpis.monthlyRevenue)}
-                      change={12.5}
-                      icon={<DollarSign className="w-5 h-5 text-purple-600" />}
-                      color="bg-purple-100"
-                    />
-                  </div>
-                )}
-
-                {/* Additional KPIs */}
-                {kpis && (
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    <MetricCard
-                      title="Conversion Rate"
-                      value={`${kpis.conversionRate}%`}
-                      change={0.3}
-                      icon={<Target className="w-5 h-5 text-indigo-600" />}
-                      color="bg-indigo-100"
-                      subtitle="visitors to customers"
-                    />
-                    <MetricCard
-                      title="Avg. Booking Value"
-                      value={formatCurrency(kpis.avgBookingValue)}
-                      change={-2.1}
-                      icon={<BarChart3 className="w-5 h-5 text-rose-600" />}
-                      color="bg-rose-100"
-                    />
-                    <MetricCard
-                      title="Provider Growth"
-                      value={`+${kpis.providerGrowthRate}%`}
-                      icon={<TrendingUp className="w-5 h-5 text-teal-600" />}
-                      color="bg-teal-100"
-                      subtitle="month over month"
-                    />
-                    <MetricCard
-                      title="Customer Growth"
-                      value={`+${kpis.customerGrowthRate}%`}
-                      icon={<Users className="w-5 h-5 text-cyan-600" />}
-                      color="bg-cyan-100"
-                      subtitle="month over month"
-                    />
-                  </div>
-                )}
-
-                {/* Quick Actions */}
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Actions</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                      <div className="p-3 bg-indigo-100 dark:bg-indigo-900/30 rounded-full">
-                        <Eye className="w-5 h-5 text-indigo-600" />
-                      </div>
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">View Demo</span>
-                    </button>
-                    <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                      <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-full">
-                        <Play className="w-5 h-5 text-green-600" />
-                      </div>
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Start Scenario</span>
-                    </button>
-                    <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                      <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-full">
-                        <Settings className="w-5 h-5 text-amber-600" />
-                      </div>
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Configure</span>
-                    </button>
-                    <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                      <div className="p-3 bg-purple-100 dark:bg-purple-900/30 rounded-full">
-                        <Download className="w-5 h-5 text-purple-600" />
-                      </div>
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Export Report</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Readiness Tab */}
-            {activeTab === 'readiness' && readiness && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <ReadinessCategory
-                    title="Technical"
-                    icon={<Zap className="w-5 h-5 text-indigo-600" />}
-                    data={readiness.categories.technical}
-                    color="bg-indigo-100 dark:bg-indigo-900/30"
-                  />
-                  <ReadinessCategory
-                    title="Business"
-                    icon={<DollarSign className="w-5 h-5 text-green-600" />}
-                    data={readiness.categories.business}
-                    color="bg-green-100 dark:bg-green-900/30"
-                  />
-                  <ReadinessCategory
-                    title="Marketing"
-                    icon={<TrendingUp className="w-5 h-5 text-pink-600" />}
-                    data={readiness.categories.marketing}
-                    color="bg-pink-100 dark:bg-pink-900/30"
-                  />
-                  <ReadinessCategory
-                    title="Operations"
-                    icon={<Settings className="w-5 h-5 text-amber-600" />}
-                    data={readiness.categories.operations}
-                    color="bg-amber-100 dark:bg-amber-900/30"
-                  />
-                </div>
-
-                {/* Recommendations */}
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recommendations</h3>
-                  <div className="space-y-3">
-                    {readiness.recommendations.map((rec, idx) => (
-                      <div key={idx} className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                        <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
-                        <p className="text-sm text-gray-700 dark:text-gray-300">{rec}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Funnel Tab */}
-            {activeTab === 'funnel' && (
-              <div className="space-y-6">
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">User Onboarding Funnel (Last 30 Days)</h3>
-                  {funnelData.length > 0 ? (
-                    <FunnelChart data={funnelData} />
-                  ) : (
-                    <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-                      <BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                      <p>No funnel data available yet</p>
+                      {/* Blockers */}
+                      {readiness.blockers.length > 0 && (
+                        <div className="mt-6 bg-white/10 rounded-lg p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <AlertTriangle className="w-5 h-5" />
+                            <h3 className="font-semibold">Blockers ({readiness.blockers.length})</h3>
+                          </div>
+                          <ul className="space-y-1">
+                            {readiness.blockers.map((blocker, idx) => (
+                              <li key={idx} className="text-sm flex items-start gap-2">
+                                <span className="mt-1.5 w-1.5 h-1.5 bg-white rounded-full flex-shrink-0" />
+                                {blocker}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
 
-                {/* Funnel Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-5">
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total Visitors</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {funnelData.reduce((sum, d) => sum + d.visitors, 0).toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-5">
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total Signups</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {funnelData.reduce((sum, d) => sum + d.signups, 0).toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-5">
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total Bookings</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {funnelData.reduce((sum, d) => sum + d.bookings, 0).toLocaleString()}
-                    </p>
+                  {/* KPI Cards */}
+                  {kpis && (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                      <MetricCard
+                        title="Total Users"
+                        value={kpis.totalUsers.toLocaleString()}
+                        change={kpis.customerGrowthRate}
+                        icon={<Users className="w-5 h-5 text-blue-600" />}
+                        color="bg-blue-100"
+                        subtitle="customers"
+                      />
+                      <MetricCard
+                        title="Active Providers"
+                        value={kpis.activeProviders}
+                        change={kpis.providerGrowthRate}
+                        icon={<Zap className="w-5 h-5 text-amber-600" />}
+                        color="bg-amber-100"
+                        subtitle="verified"
+                      />
+                      <MetricCard
+                        title="Total Bookings"
+                        value={kpis.totalBookings.toLocaleString()}
+                        change={8.2}
+                        icon={<Calendar className="w-5 h-5 text-green-600" />}
+                        color="bg-green-100"
+                      />
+                      <MetricCard
+                        title="Monthly Revenue"
+                        value={formatCurrency(kpis.monthlyRevenue)}
+                        change={12.5}
+                        icon={<DollarSign className="w-5 h-5 text-purple-600" />}
+                        color="bg-purple-100"
+                      />
+                    </div>
+                  )}
+
+                  {/* Additional KPIs */}
+                  {kpis && (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                      <MetricCard
+                        title="Conversion Rate"
+                        value={`${kpis.conversionRate}%`}
+                        change={0.3}
+                        icon={<Target className="w-5 h-5 text-indigo-600" />}
+                        color="bg-indigo-100"
+                        subtitle="visitors to customers"
+                      />
+                      <MetricCard
+                        title="Avg. Booking Value"
+                        value={formatCurrency(kpis.avgBookingValue)}
+                        change={-2.1}
+                        icon={<BarChart3 className="w-5 h-5 text-rose-600" />}
+                        color="bg-rose-100"
+                      />
+                      <MetricCard
+                        title="Provider Growth"
+                        value={`+${kpis.providerGrowthRate}%`}
+                        icon={<TrendingUp className="w-5 h-5 text-teal-600" />}
+                        color="bg-teal-100"
+                        subtitle="month over month"
+                      />
+                      <MetricCard
+                        title="Customer Growth"
+                        value={`+${kpis.customerGrowthRate}%`}
+                        icon={<Users className="w-5 h-5 text-cyan-600" />}
+                        color="bg-cyan-100"
+                        subtitle="month over month"
+                      />
+                    </div>
+                  )}
+
+                  {/* Quick Actions */}
+                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Actions</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <div className="p-3 bg-indigo-100 dark:bg-indigo-900/30 rounded-full">
+                          <Eye className="w-5 h-5 text-indigo-600" />
+                        </div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">View Demo</span>
+                      </button>
+                      <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-full">
+                          <Play className="w-5 h-5 text-green-600" />
+                        </div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Start Scenario</span>
+                      </button>
+                      <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-full">
+                          <Settings className="w-5 h-5 text-amber-600" />
+                        </div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Configure</span>
+                      </button>
+                      <button className="flex flex-col items-center gap-2 p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <div className="p-3 bg-purple-100 dark:bg-purple-900/30 rounded-full">
+                          <Download className="w-5 h-5 text-purple-600" />
+                        </div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Export Report</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Conversions Tab */}
-            {activeTab === 'conversions' && (
-              <div className="space-y-6">
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">Conversion Metrics</h3>
-                  {conversionData.length > 0 ? (
-                    <div className="space-y-4">
-                      {conversionData.map((item, idx) => (
-                        <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                          <div>
-                            <p className="font-medium text-gray-900 dark:text-white">{item.metric}</p>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
-                              {item.trend === 'up' ? 'Increased' : item.trend === 'down' ? 'Decreased' : 'Stable'} by {Math.abs(item.change).toFixed(1)}%
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-2xl font-bold text-gray-900 dark:text-white">{item.value.toFixed(2)}%</p>
-                            <div className={`flex items-center justify-end text-sm ${item.trend === 'up' ? 'text-green-600' : item.trend === 'down' ? 'text-red-600' : 'text-gray-500'}`}>
-                              {item.trend === 'up' ? <ArrowUpRight className="w-4 h-4" /> : item.trend === 'down' ? <ArrowDownRight className="w-4 h-4" /> : null}
-                              {item.trend}
-                            </div>
-                          </div>
+              {/* Readiness Tab */}
+              {activeTab === 'readiness' && readiness && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <ReadinessCategory
+                      title="Technical"
+                      icon={<Zap className="w-5 h-5 text-indigo-600" />}
+                      data={readiness.categories.technical}
+                      color="bg-indigo-100 dark:bg-indigo-900/30"
+                    />
+                    <ReadinessCategory
+                      title="Business"
+                      icon={<DollarSign className="w-5 h-5 text-green-600" />}
+                      data={readiness.categories.business}
+                      color="bg-green-100 dark:bg-green-900/30"
+                    />
+                    <ReadinessCategory
+                      title="Marketing"
+                      icon={<TrendingUp className="w-5 h-5 text-pink-600" />}
+                      data={readiness.categories.marketing}
+                      color="bg-pink-100 dark:bg-pink-900/30"
+                    />
+                    <ReadinessCategory
+                      title="Operations"
+                      icon={<Settings className="w-5 h-5 text-amber-600" />}
+                      data={readiness.categories.operations}
+                      color="bg-amber-100 dark:bg-amber-900/30"
+                    />
+                  </div>
+
+                  {/* Recommendations */}
+                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recommendations</h3>
+                    <div className="space-y-3">
+                      {readiness.recommendations.map((rec, idx) => (
+                        <div key={idx} className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                          <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                          <p className="text-sm text-gray-700 dark:text-gray-300">{rec}</p>
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-                      <TrendingUp className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                      <p>No conversion data available yet</p>
-                    </div>
-                  )}
+                  </div>
                 </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+              )}
+
+              {/* Funnel Tab */}
+              {activeTab === 'funnel' && (
+                <div className="space-y-6">
+                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">User Onboarding Funnel (Last 30 Days)</h3>
+                    {funnelData.length > 0 ? (
+                      <FunnelChart data={funnelData} />
+                    ) : (
+                      <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+                        <BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                        <p>No funnel data available yet</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Funnel Stats */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-5">
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total Visitors</p>
+                      <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {funnelData.reduce((sum, d) => sum + d.visitors, 0).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-5">
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total Signups</p>
+                      <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {funnelData.reduce((sum, d) => sum + d.signups, 0).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-5">
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total Bookings</p>
+                      <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {funnelData.reduce((sum, d) => sum + d.bookings, 0).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Conversions Tab */}
+              {activeTab === 'conversions' && (
+                <div className="space-y-6">
+                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-nilin-border p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">Conversion Metrics</h3>
+                    {conversionData.length > 0 ? (
+                      <div className="space-y-4">
+                        {conversionData.map((item, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                            <div>
+                              <p className="font-medium text-gray-900 dark:text-white">{item.metric}</p>
+                              <p className="text-sm text-gray-500 dark:text-gray-400">
+                                {item.trend === 'up' ? 'Increased' : item.trend === 'down' ? 'Decreased' : 'Stable'} by {Math.abs(item.change).toFixed(1)}%
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-2xl font-bold text-gray-900 dark:text-white">{item.value.toFixed(2)}%</p>
+                              <div className={`flex items-center justify-end text-sm ${item.trend === 'up' ? 'text-green-600' : item.trend === 'down' ? 'text-red-600' : 'text-gray-500'}`}>
+                                {item.trend === 'up' ? <ArrowUpRight className="w-4 h-4" /> : item.trend === 'down' ? <ArrowDownRight className="w-4 h-4" /> : null}
+                                {item.trend}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+                        <TrendingUp className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                        <p>No conversion data available yet</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </main>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

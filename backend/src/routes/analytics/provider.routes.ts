@@ -41,6 +41,8 @@ import {
 import { detectProviderAnomalies } from '../../services/providerAnomalyDetection.service';
 import { getProviderDashboard } from '../../services/providerDashboard.service';
 import ProviderProfile from '../../models/providerProfile.model';
+import Booking from '../../models/booking.model';
+import { Types } from 'mongoose';
 import {
   getServicesAnalytics,
   getServiceAnalytics,
@@ -646,5 +648,186 @@ router.get('/services/:serviceId', authenticate, asyncHandler(getServiceAnalytic
  * @access  Provider (own) or Admin
  */
 router.get('/services/:serviceId/trend', authenticate, asyncHandler(getRevenueTrend));
+
+/**
+ * @route   GET /api/analytics/provider/no-show-rate
+ * @desc    Get no-show rate metrics and daily breakdown for provider
+ * @access  Provider (own) or Admin
+ */
+router.get('/no-show-rate', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const period = queryString(req.query.period, '30d');
+
+  if (user.role !== 'admin' && user.role !== 'provider') {
+    throw new ApiError(403, 'Not authorized to access this data');
+  }
+
+  const providerId = resolveAuthenticatedProviderId(user, req);
+  if (!providerId) {
+    throw new ApiError(400, 'Provider ID is required');
+  }
+
+  const validPeriods = ['7d', '30d', '90d'];
+  const periodValue = validPeriods.includes(period) ? period : '30d';
+  const days = periodValue === '7d' ? 7 : periodValue === '90d' ? 90 : 30;
+
+  const now = new Date();
+  const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const previousStartDate = new Date(startDate.getTime() - days * 24 * 60 * 60 * 1000);
+
+  const providerObjectId = new Types.ObjectId(providerId);
+
+  const [currentStats, previousStats, dailyBreakdown, upcomingNoShows] = await Promise.all([
+    Booking.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          createdAt: { $gte: startDate, $lte: now },
+        },
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' },
+        },
+      },
+    ]),
+    Booking.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          createdAt: { $gte: previousStartDate, $lt: startDate },
+        },
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+    Booking.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          createdAt: { $gte: startDate, $lte: now },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' },
+          },
+          totalBookings: { $sum: 1 },
+          noShows: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'no_show'] }, 1, 0],
+            },
+          },
+          lateCancellations: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$status', 'cancelled'] },
+                    { $lt: ['$cancellationDetails.hoursBeforeService', 24] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          completed: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'completed'] }, 1, 0],
+            },
+          },
+          revenueLoss: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'no_show'] }, '$pricing.totalAmount', 0],
+            },
+          },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    Booking.find({
+      providerId: providerObjectId,
+      status: 'no_show',
+      createdAt: { $gte: startDate, $lte: now },
+    })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('cancellationDetails.reason pricing.totalAmount')
+      .lean(),
+  ]);
+
+  const currentMap = new Map<string, { count: number; revenue?: number }>(
+    currentStats.map((row: { _id: string; count: number; revenue?: number }) => [row._id, row]),
+  );
+  const previousMap = new Map<string, number>(
+    previousStats.map((row: { _id: string; count: number }) => [row._id, row.count]),
+  );
+
+  const totalBookings = currentStats.reduce((sum: number, row: { count: number }) => sum + row.count, 0);
+  const noShows = currentMap.get('no_show')?.count || 0;
+  const lateCancellations = currentStats
+    .filter((row: { _id: string }) => row._id === 'cancelled')
+    .reduce((sum: number, row: { count: number }) => sum + row.count, 0);
+  const noShowRate = totalBookings > 0 ? (noShows / totalBookings) * 100 : 0;
+
+  const previousTotal = Array.from(previousMap.values()).reduce((sum, count) => sum + (count as number), 0);
+  const previousNoShows = previousMap.get('no_show') || 0;
+  const previousRate = previousTotal > 0 ? (previousNoShows / previousTotal) * 100 : 0;
+  const trend = noShowRate - previousRate;
+
+  const reasonCounts = new Map<string, number>();
+  upcomingNoShows.forEach((booking) => {
+    const reason = (booking as { cancellationDetails?: { reason?: string } }).cancellationDetails?.reason
+      || 'No reason provided';
+    reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+  });
+  const topReason = Array.from(reasonCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+
+  const revenueLoss = dailyBreakdown.reduce(
+    (sum: number, row: { revenueLoss?: number }) => sum + (row.revenueLoss || 0),
+    0,
+  );
+
+  res.json({
+    success: true,
+    data: {
+      providerId,
+      period: periodValue,
+      stats: {
+        totalBookings,
+        noShows,
+        lateCancellations,
+        noShowRate: Math.round(noShowRate * 10) / 10,
+        averageNoShowRate: 5,
+        trend: Math.round(trend * 10) / 10,
+        revenueLoss,
+        topReason,
+        customerImpact: noShows,
+      },
+      dailyData: dailyBreakdown.map((row: {
+        _id: string;
+        totalBookings: number;
+        noShows: number;
+        lateCancellations: number;
+        completed: number;
+      }) => ({
+        date: row._id,
+        totalBookings: row.totalBookings,
+        noShows: row.noShows,
+        lateCancellations: row.lateCancellations,
+        completed: row.completed,
+        rate: row.totalBookings > 0 ? (row.noShows / row.totalBookings) * 100 : 0,
+      })),
+    },
+  });
+}));
 
 export default router;

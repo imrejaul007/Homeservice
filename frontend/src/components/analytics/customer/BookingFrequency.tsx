@@ -11,8 +11,9 @@ import {
   LineChart,
   Line,
 } from 'recharts';
-import { TrendingUp, TrendingDown, Calendar, Loader } from 'lucide-react';
+import { TrendingUp, TrendingDown, Calendar, Loader, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface BookingFrequencyProps {
   customerId?: string;
@@ -37,43 +38,14 @@ interface FrequencyStats {
   peakHours: string;
 }
 
-const MOCK_DATA: Record<string, FrequencyData[]> = {
-  '7d': [
-    { date: 'Mon', bookings: 2, revenue: 450, avgValue: 225 },
-    { date: 'Tue', bookings: 1, revenue: 180, avgValue: 180 },
-    { date: 'Wed', bookings: 3, revenue: 620, avgValue: 207 },
-    { date: 'Thu', bookings: 1, revenue: 200, avgValue: 200 },
-    { date: 'Fri', bookings: 2, revenue: 380, avgValue: 190 },
-    { date: 'Sat', bookings: 4, revenue: 890, avgValue: 223 },
-    { date: 'Sun', bookings: 1, revenue: 150, avgValue: 150 },
-  ],
-  '30d': [
-    { date: 'Week 1', bookings: 8, revenue: 1650, avgValue: 206 },
-    { date: 'Week 2', bookings: 12, revenue: 2400, avgValue: 200 },
-    { date: 'Week 3', bookings: 7, revenue: 1420, avgValue: 203 },
-    { date: 'Week 4', bookings: 15, revenue: 3150, avgValue: 210 },
-  ],
-  '90d': [
-    { date: 'Jan', bookings: 28, revenue: 5600, avgValue: 200 },
-    { date: 'Feb', bookings: 35, revenue: 7350, avgValue: 210 },
-    { date: 'Mar', bookings: 42, revenue: 8820, avgValue: 210 },
-  ],
-  '1y': [
-    { date: 'Q1', bookings: 85, revenue: 17850, avgValue: 210 },
-    { date: 'Q2', bookings: 112, revenue: 23520, avgValue: 210 },
-    { date: 'Q3', bookings: 98, revenue: 20580, avgValue: 210 },
-    { date: 'Q4', bookings: 145, revenue: 30450, avgValue: 210 },
-  ],
-};
-
-const MOCK_STATS: FrequencyStats = {
-  totalBookings: 440,
-  avgPerWeek: 3.5,
-  avgPerMonth: 14.2,
-  trend: 12.5,
-  trendDirection: 'up',
-  mostActiveDay: 'Saturday',
-  peakHours: '10 AM - 2 PM',
+const EMPTY_STATS: FrequencyStats = {
+  totalBookings: 0,
+  avgPerWeek: 0,
+  avgPerMonth: 0,
+  trend: 0,
+  trendDirection: 'stable',
+  mostActiveDay: 'N/A',
+  peakHours: 'N/A',
 };
 
 export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
@@ -82,23 +54,41 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
   onPeriodChange,
 }) => {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<FrequencyData[]>([]);
-  const [stats, setStats] = useState<FrequencyStats>(MOCK_STATS);
+  const [stats, setStats] = useState<FrequencyStats>(EMPTY_STATS);
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [chartType, setChartType] = useState<'bar' | 'line'>('bar');
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      setError(null);
 
-      // In production, fetch from API:
-      // const response = await fetch(`/api/analytics/customer/${customerId}/booking-frequency?range=${selectedRange}`);
-      // const result = await response.json();
+      try {
+        const apiData = await analyticsApi.getCustomerBookingFrequency(selectedRange, customerId);
+        const weeksInPeriod =
+          selectedRange === '7d' ? 1 : selectedRange === '30d' ? 4 : selectedRange === '90d' ? 13 : 52;
 
-      setData(MOCK_DATA[selectedRange] || []);
-      setLoading(false);
+        setData(apiData.timeSeries || []);
+        setStats({
+          totalBookings: apiData.totalBookings,
+          avgPerWeek: weeksInPeriod > 0
+            ? Math.round((apiData.totalBookings / weeksInPeriod) * 10) / 10
+            : 0,
+          avgPerMonth: apiData.averageBookingsPerMonth,
+          trend: apiData.trend,
+          trendDirection: apiData.trendDirection,
+          mostActiveDay: apiData.mostActiveDay,
+          peakHours: apiData.peakHours,
+        });
+      } catch (err) {
+        setData([]);
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load booking frequency data');
+      } finally {
+        setLoading(false);
+      }
     };
 
     fetchData();
@@ -147,7 +137,6 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
       animate={{ opacity: 1, y: 0 }}
       className="bg-white rounded-xl shadow-sm border border-gray-200 p-6"
     >
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -159,7 +148,6 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
           </p>
         </div>
 
-        {/* Time Range Selector */}
         <div className="flex items-center gap-2">
           {timeRanges.map((range) => (
             <button
@@ -177,7 +165,13 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {error && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-gray-50 rounded-lg p-4">
           <p className="text-sm text-gray-500 mb-1">Total Bookings</p>
@@ -220,11 +214,8 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
         </div>
       </div>
 
-      {/* Chart Type Toggle */}
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-gray-500">
-          Bookings over time
-        </p>
+        <p className="text-sm text-gray-500">Bookings over time</p>
         <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
           <button
             onClick={() => setChartType('bar')}
@@ -249,10 +240,17 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
         </div>
       </div>
 
-      {/* Chart */}
       {loading ? (
         <div className="h-64 flex items-center justify-center">
           <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+        </div>
+      ) : data.length === 0 ? (
+        <div className="h-64 flex flex-col items-center justify-center text-center">
+          <Calendar className="h-10 w-10 text-gray-300 mb-3" />
+          <p className="text-sm font-medium text-gray-700">No booking activity yet</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Your booking frequency chart will appear after your first booking.
+          </p>
         </div>
       ) : (
         <div className="h-64">
@@ -270,15 +268,9 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
                   tick={{ fontSize: 12, fill: '#6B7280' }}
                   axisLine={{ stroke: '#E5E7EB' }}
                   tickLine={{ stroke: '#E5E7EB' }}
-                  tickFormatter={(value) => `${value}`}
                 />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar
-                  dataKey="bookings"
-                  fill="#2563EB"
-                  radius={[4, 4, 0, 0]}
-                  name="Bookings"
-                />
+                <Bar dataKey="bookings" fill="#2563EB" radius={[4, 4, 0, 0]} name="Bookings" />
               </BarChart>
             ) : (
               <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -293,7 +285,6 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
                   tick={{ fontSize: 12, fill: '#6B7280' }}
                   axisLine={{ stroke: '#E5E7EB' }}
                   tickLine={{ stroke: '#E5E7EB' }}
-                  tickFormatter={(value) => `${value}`}
                 />
                 <Tooltip content={<CustomTooltip />} />
                 <Line
@@ -311,33 +302,34 @@ export const BookingFrequency: React.FC<BookingFrequencyProps> = ({
         </div>
       )}
 
-      {/* Insights */}
-      <div className="mt-6 pt-6 border-t border-gray-200">
-        <h4 className="text-sm font-medium text-gray-900 mb-3">Insights</h4>
-        <div className="space-y-2">
-          <div className="flex items-start gap-2 text-sm">
-            <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5" />
-            <p className="text-gray-600">
-              Your booking frequency has increased by{' '}
-              <span className="font-medium text-gray-900">{stats.trend}%</span> compared to the previous period.
-            </p>
-          </div>
-          <div className="flex items-start gap-2 text-sm">
-            <div className="w-2 h-2 rounded-full bg-green-600 mt-1.5" />
-            <p className="text-gray-600">
-              You tend to book the most on{' '}
-              <span className="font-medium text-gray-900">{stats.mostActiveDay}</span>.
-            </p>
-          </div>
-          <div className="flex items-start gap-2 text-sm">
-            <div className="w-2 h-2 rounded-full bg-purple-600 mt-1.5" />
-            <p className="text-gray-600">
-              Peak booking hours are between{' '}
-              <span className="font-medium text-gray-900">{stats.peakHours}</span>.
-            </p>
+      {!loading && stats.totalBookings > 0 && (
+        <div className="mt-6 pt-6 border-t border-gray-200">
+          <h4 className="text-sm font-medium text-gray-900 mb-3">Insights</h4>
+          <div className="space-y-2">
+            <div className="flex items-start gap-2 text-sm">
+              <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5" />
+              <p className="text-gray-600">
+                Your booking frequency has {stats.trend >= 0 ? 'increased' : 'decreased'} by{' '}
+                <span className="font-medium text-gray-900">{Math.abs(stats.trend)}%</span> compared to the previous period.
+              </p>
+            </div>
+            <div className="flex items-start gap-2 text-sm">
+              <div className="w-2 h-2 rounded-full bg-green-600 mt-1.5" />
+              <p className="text-gray-600">
+                You tend to book the most on{' '}
+                <span className="font-medium text-gray-900">{stats.mostActiveDay}</span>.
+              </p>
+            </div>
+            <div className="flex items-start gap-2 text-sm">
+              <div className="w-2 h-2 rounded-full bg-purple-600 mt-1.5" />
+              <p className="text-gray-600">
+                Peak booking hours are around{' '}
+                <span className="font-medium text-gray-900">{stats.peakHours}</span>.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </motion.div>
   );
 };

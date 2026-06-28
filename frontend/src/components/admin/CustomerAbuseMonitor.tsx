@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   UserX,
@@ -42,6 +43,9 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+
+/** Mutation endpoints are not implemented for this widget — actions are read-only. */
+const WIDGET_MUTATIONS_READ_ONLY = true;
 
 interface AbuseCase {
   id: string;
@@ -159,211 +163,10 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
         setCases(response.data.data.cases || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setCases([
-          {
-            id: 'cabuse-001',
-            customerId: 'cust-abuse-001',
-            customerName: 'John Smith',
-            customerEmail: 'john.smith@email.com',
-            customerPhone: '+971501234567',
-            type: 'refund_abuse',
-            severity: 'high',
-            status: 'investigating',
-            reportedAt: new Date(Date.now() - 3600000 * 48).toISOString(),
-            stats: {
-              totalBookings: 15,
-              completedBookings: 5,
-              cancelledBookings: 10,
-              refundRequests: 8,
-              approvedRefunds: 5,
-              rejectedRefunds: 3,
-              chargebacks: 0,
-              totalRefundAmount: 1250,
-              totalChargebackAmount: 0
-            },
-            evidence: {
-              descriptions: [
-                'Requested refund for service already completed',
-                'Claimed service was not performed after provider evidence showed otherwise',
-                'Multiple refund requests within short timeframe'
-              ],
-              bookingIds: ['booking-001', 'booking-002', 'booking-003'],
-              refundIds: ['ref-001', 'ref-002', 'ref-003'],
-              dates: [new Date(Date.now() - 3600000 * 72).toISOString()]
-            },
-            actions: [],
-            notes: [
-              { text: 'Reviewing provider evidence for these cases', author: 'investigator@nilin.com', createdAt: new Date(Date.now() - 3600000 * 24).toISOString() }
-            ],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 48).toISOString() },
-              { action: 'Assigned for investigation', by: 'investigator@nilin.com', at: new Date(Date.now() - 3600000 * 24).toISOString() }
-            ]
-          },
-          {
-            id: 'cabuse-002',
-            customerId: 'cust-abuse-002',
-            customerName: 'Sarah Johnson',
-            customerEmail: 'sarah.j@email.com',
-            customerPhone: '+971552345678',
-            type: 'chargeback_abuse',
-            severity: 'critical',
-            status: 'banned',
-            reportedAt: new Date(Date.now() - 3600000 * 120).toISOString(),
-            stats: {
-              totalBookings: 8,
-              completedBookings: 8,
-              cancelledBookings: 0,
-              refundRequests: 3,
-              approvedRefunds: 1,
-              rejectedRefunds: 2,
-              chargebacks: 4,
-              totalRefundAmount: 450,
-              totalChargebackAmount: 1800
-            },
-            evidence: {
-              descriptions: [
-                'Filed chargeback after service completion',
-                'Disputed legitimate transactions with bank',
-                'Multiple chargebacks from same payment method'
-              ],
-              bookingIds: ['booking-010', 'booking-011', 'booking-012'],
-              refundIds: [],
-              dates: [new Date(Date.now() - 3600000 * 168).toISOString()]
-            },
-            actions: [
-              { type: 'warning', description: 'First warning for chargeback abuse', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 96).toISOString() },
-              { type: 'account_ban', description: 'Account permanently banned for repeated chargeback abuse', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ],
-            notes: [],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 120).toISOString() },
-              { action: 'Warning issued', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 96).toISOString() },
-              { action: 'Account banned', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ]
-          },
-          {
-            id: 'cabuse-003',
-            customerId: 'cust-abuse-003',
-            customerName: 'Ahmed Hassan',
-            customerEmail: 'ahmed.h@email.com',
-            customerPhone: '+971504567890',
-            type: 'booking_abuse',
-            severity: 'medium',
-            status: 'restricted',
-            reportedAt: new Date(Date.now() - 3600000 * 96).toISOString(),
-            stats: {
-              totalBookings: 25,
-              completedBookings: 5,
-              cancelledBookings: 20,
-              refundRequests: 12,
-              approvedRefunds: 4,
-              rejectedRefunds: 8,
-              chargebacks: 0,
-              totalRefundAmount: 2100,
-              totalChargebackAmount: 0
-            },
-            evidence: {
-              descriptions: [
-                'High cancellation rate (80%)',
-                'Booking and cancelling multiple providers',
-                'Last-minute cancellations causing provider inconvenience'
-              ],
-              bookingIds: ['booking-020', 'booking-021', 'booking-022'],
-              refundIds: ['ref-010', 'ref-011'],
-              dates: [new Date(Date.now() - 3600000 * 144).toISOString()]
-            },
-            actions: [
-              { type: 'warning', description: 'Warning for excessive cancellations', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 72).toISOString() },
-              { type: 'restriction', description: 'Advance payment required for future bookings', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ],
-            notes: [],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 96).toISOString() },
-              { action: 'Warning issued', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 72).toISOString() },
-              { action: 'Restrictions applied', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ]
-          },
-          {
-            id: 'cabuse-004',
-            customerId: 'cust-abuse-004',
-            customerName: 'Emma Wilson',
-            customerEmail: 'emma.w@email.com',
-            customerPhone: '+971556789012',
-            type: 'promo_abuse',
-            severity: 'low',
-            status: 'actioned',
-            reportedAt: new Date(Date.now() - 3600000 * 72).toISOString(),
-            stats: {
-              totalBookings: 3,
-              completedBookings: 3,
-              cancelledBookings: 0,
-              refundRequests: 0,
-              approvedRefunds: 0,
-              rejectedRefunds: 0,
-              chargebacks: 0,
-              totalRefundAmount: 0,
-              totalChargebackAmount: 0
-            },
-            evidence: {
-              descriptions: [
-                'Created multiple accounts to use referral bonus multiple times',
-                'Used promo codes beyond allowed limit'
-              ],
-              bookingIds: [],
-              refundIds: [],
-              dates: [new Date(Date.now() - 3600000 * 96).toISOString()]
-            },
-            actions: [
-              { type: 'warning', description: 'Warning for promo code abuse', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() },
-              { type: 'promo_block', description: 'Blocked from using promotional offers', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ],
-            notes: [],
-            history: [
-              { action: 'Case opened', by: 'System', at: new Date(Date.now() - 3600000 * 72).toISOString() },
-              { action: 'Warning and promo block issued', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() }
-            ]
-          }
-        ]);
-        setStats({
-          totalCases: 67,
-          open: 8,
-          investigating: 15,
-          actioned: 22,
-          restricted: 12,
-          banned: 10,
-          refundAbuseCount: 28,
-          chargebackAbuseCount: 12,
-          totalAmountRecovered: 12500,
-          totalAmountLost: 8900,
-          byType: [
-            { type: 'Refund Abuse', count: 28, amount: 15600, color: '#EF4444' },
-            { type: 'Booking Abuse', count: 18, amount: 0, color: '#F59E0B' },
-            { type: 'Chargeback Abuse', count: 12, amount: 8900, color: '#DC2626' },
-            { type: 'Review Abuse', count: 5, amount: 0, color: '#8B5CF6' },
-            { type: 'Promo Abuse', count: 4, amount: 0, color: '#3B82F6' }
-          ],
-          bySeverity: { low: 18, medium: 25, high: 16, critical: 8 },
-          trend: [
-            { date: 'Mon', cases: 8, banned: 1, recovered: 1500 },
-            { date: 'Tue', cases: 10, banned: 2, recovered: 2200 },
-            { date: 'Wed', cases: 6, banned: 0, recovered: 1800 },
-            { date: 'Thu', cases: 12, banned: 1, recovered: 2500 },
-            { date: 'Fri', cases: 9, banned: 1, recovered: 2000 },
-            { date: 'Sat', cases: 5, banned: 0, recovered: 1200 },
-            { date: 'Sun', cases: 7, banned: 1, recovered: 1300 }
-          ],
-          topOffenders: [
-            { customerId: 'cust-abuse-002', customerName: 'Sarah Johnson', cases: 3, amount: 1800 },
-            { customerId: 'cust-abuse-005', customerName: 'Michael Brown', cases: 2, amount: 1200 },
-            { customerId: 'cust-abuse-001', customerName: 'John Smith', cases: 1, amount: 1250 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
-      console.error('Error fetching customer abuse data:', err);
-      setError('Failed to load customer abuse data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -380,6 +183,7 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
   };
 
   const handleUpdateStatus = async (caseId: string, newStatus: AbuseCase['status']) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(caseId);
     try {
       await api.patch(`/admin/customer-abuse/${caseId}`, { status: newStatus });
@@ -389,13 +193,14 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
           : c
       ));
     } catch (err) {
-      console.error('Error updating case:', err);
+      // Error state handled by getAdminFetchErrorMessage in caller
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleTakeAction = async (caseId: string, actionType: string, description: string) => {
+    if (WIDGET_MUTATIONS_READ_ONLY) return;
     setActionLoading(caseId);
     try {
       await api.post(`/admin/customer-abuse/${caseId}/actions`, { type: actionType, description });
@@ -409,14 +214,14 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
           : c
       ));
     } catch (err) {
-      console.error('Error taking action:', err);
+      // Error state handled by getAdminFetchErrorMessage in caller
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleAddNote = async (caseId: string) => {
-    if (!newNote.trim()) return;
+    if (WIDGET_MUTATIONS_READ_ONLY || !newNote.trim()) return;
 
     setActionLoading(caseId);
     try {
@@ -428,7 +233,7 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
       ));
       setNewNote('');
     } catch (err) {
-      console.error('Error adding note:', err);
+      // Error state handled by getAdminFetchErrorMessage in caller
     } finally {
       setActionLoading(null);
     }
@@ -708,21 +513,24 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
                       <>
                         <button
                           onClick={() => handleTakeAction(c.id, 'warning', 'Warning issued for policy violation')}
-                          disabled={actionLoading === c.id}
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Issue warning'}
                           className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors text-sm font-medium"
                         >
                           Warn
                         </button>
                         <button
                           onClick={() => handleUpdateStatus(c.id, 'restricted')}
-                          disabled={actionLoading === c.id}
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Restrict account'}
                           className="px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors text-sm font-medium"
                         >
                           Restrict
                         </button>
                         <button
                           onClick={() => handleUpdateStatus(c.id, 'banned')}
-                          disabled={actionLoading === c.id}
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Ban account'}
                           className="px-3 py-1.5 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors text-sm font-medium"
                         >
                           Ban
@@ -809,11 +617,12 @@ export const CustomerAbuseMonitor: React.FC<CustomerAbuseMonitorProps> = ({
                           onChange={(e) => setNewNote(e.target.value)}
                           placeholder="Add a note..."
                           className="flex-1 px-4 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 text-sm"
-                          onKeyPress={(e) => e.key === 'Enter' && handleAddNote(c.id)}
+                          onKeyPress={(e) => e.key === 'Enter' && !WIDGET_MUTATIONS_READ_ONLY && handleAddNote(c.id)}
                         />
                         <button
                           onClick={() => handleAddNote(c.id)}
-                          disabled={!newNote.trim() || actionLoading === c.id}
+                          disabled={WIDGET_MUTATIONS_READ_ONLY || !newNote.trim() || actionLoading === c.id}
+                          title={WIDGET_MUTATIONS_READ_ONLY ? 'Read-only' : 'Add note'}
                           className="px-4 py-2 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors text-sm disabled:opacity-50"
                         >
                           <MessageSquare className="w-4 h-4" />

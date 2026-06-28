@@ -22,7 +22,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
-import { api } from '../services/api';
+import { gdprApi } from '../services/gdprApi';
 
 interface Consent {
   type: 'terms' | 'privacy' | 'marketing' | 'cookies' | 'data_processing';
@@ -136,19 +136,30 @@ const PrivacySettings: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Load consents
-      const consentResponse = await api.get('/gdpr/consents');
-      if (consentResponse.data?.success) {
-        setConsents(consentResponse.data.data || []);
-      }
-
-      // Load data requests
-      const requestsResponse = await api.get('/gdpr/data-requests');
-      if (requestsResponse.data?.success) {
-        setDataRequests(requestsResponse.data.data || []);
-      }
+      const [consentsResult, requestsResult] = await Promise.all([
+        gdprApi.getConsents(),
+        gdprApi.getDataRequests(),
+      ]);
+      setConsents(
+        consentsResult.map((c) => ({
+          type: c.consentType as Consent['type'],
+          granted: c.granted,
+          version: c.version,
+          timestamp: c.grantedAt,
+          withdrawalDate: c.withdrawnAt,
+        }))
+      );
+      setDataRequests(
+        requestsResult.map((r) => ({
+          _id: r.requestId,
+          type: 'export' as const,
+          status: r.status === 'ready' ? 'completed' : r.status === 'failed' ? 'failed' : 'processing',
+          requestedAt: r.requestedAt,
+          completedAt: r.completedAt,
+        }))
+      );
     } catch (error) {
-      console.error('Failed to load privacy data:', error);
+      setNotification({ type: 'error', message: 'Failed to load privacy data' });
     } finally {
       setLoading(false);
     }
@@ -170,11 +181,11 @@ const PrivacySettings: React.FC = () => {
       const consentType = consentTypes.find(c => c.type === type);
       const version = consentType?.version || '1.0.0';
 
-      await api.post('/gdpr/consents', {
+      await gdprApi.recordConsentDetailed({
         type,
         granted,
         version,
-        method: 'web'
+        method: 'web',
       });
 
       // Update local state
@@ -203,7 +214,7 @@ const PrivacySettings: React.FC = () => {
           ? `${consentType?.title || type} consent granted`
           : `${consentType?.title || type} consent withdrawn`
       });
-    } catch (error: any) {
+    } catch (error) {
       setNotification({
         type: 'error',
         message: error.response?.data?.message || 'Failed to update consent'
@@ -216,30 +227,27 @@ const PrivacySettings: React.FC = () => {
   const requestDataExport = async () => {
     setSaving(true);
     try {
-      const response = await api.post('/gdpr/export', {
+      const request = await gdprApi.requestExportWithOptions({
         exportFormat,
-        exportDataTypes: selectedDataTypes
+        exportDataTypes: selectedDataTypes,
       });
 
-      if (response.data?.success) {
-        const newRequest: DataRequest = {
-          _id: response.data.data.requestId,
-          type: 'export',
-          status: 'pending',
-          requestedAt: new Date().toISOString()
-        };
-        setDataRequests(prev => [newRequest, ...prev]);
-        setShowExportModal(false);
+      const newRequest: DataRequest = {
+        _id: request.requestId,
+        type: 'export',
+        status: 'pending',
+        requestedAt: request.requestedAt || new Date().toISOString(),
+      };
+      setDataRequests(prev => [newRequest, ...prev]);
+      setShowExportModal(false);
 
-        setNotification({
-          type: 'success',
-          message: 'Data export request submitted. You will receive an email when ready.'
-        });
+      setNotification({
+        type: 'success',
+        message: 'Data export request submitted. You will receive an email when ready.',
+      });
 
-        // Start polling for progress
-        pollExportProgress(response.data.data.requestId);
-      }
-    } catch (error: any) {
+      pollExportProgress(request.requestId);
+    } catch (error) {
       setNotification({
         type: 'error',
         message: error.response?.data?.message || 'Failed to request data export'
@@ -252,32 +260,34 @@ const PrivacySettings: React.FC = () => {
   const pollExportProgress = async (requestId: string) => {
     const poll = async () => {
       try {
-        const response = await api.get(`/gdpr/export/${requestId}/progress`);
-        if (response.data?.success) {
-          setExportProgress(response.data.data);
+        const status = await gdprApi.getExportStatus(requestId);
+        setExportProgress({
+          status: status.status === 'ready' ? 'completed' : status.status,
+          progress: status.status === 'ready' ? 100 : status.status === 'processing' ? 50 : 0,
+          currentStep: status.status,
+          steps: [],
+        });
 
-          if (response.data.data.status === 'completed') {
-            setNotification({
-              type: 'success',
-              message: 'Your data export is ready for download!'
-            });
-            loadData(); // Refresh data requests
-            return;
-          }
-
-          if (response.data.data.status === 'failed') {
-            setNotification({
-              type: 'error',
-              message: 'Data export failed. Please try again.'
-            });
-            return;
-          }
-
-          // Continue polling
-          setTimeout(poll, 2000);
+        if (status.status === 'ready') {
+          setNotification({
+            type: 'success',
+            message: 'Your data export is ready for download!',
+          });
+          loadData();
+          return;
         }
-      } catch (error) {
-        console.error('Failed to poll export progress:', error);
+
+        if (status.status === 'failed') {
+          setNotification({
+            type: 'error',
+            message: 'Data export failed. Please try again.',
+          });
+          return;
+        }
+
+        setTimeout(poll, 2000);
+      } catch {
+        // Stop polling on error
       }
     };
 
@@ -295,9 +305,9 @@ const PrivacySettings: React.FC = () => {
 
     setSaving(true);
     try {
-      await api.post('/gdpr/delete', {
+      await gdprApi.requestAccountDeletion({
         deletionReason,
-        confirmation: true
+        confirmation: true,
       });
 
       setShowDeleteModal(false);
@@ -307,7 +317,7 @@ const PrivacySettings: React.FC = () => {
       });
 
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       setNotification({
         type: 'error',
         message: error.response?.data?.message || 'Failed to request account deletion'
@@ -319,13 +329,13 @@ const PrivacySettings: React.FC = () => {
 
   const cancelDataRequest = async (requestId: string) => {
     try {
-      await api.delete(`/gdpr/data-requests/${requestId}`);
+      await gdprApi.cancelDataRequest(requestId);
       setDataRequests(prev => prev.filter(r => r._id !== requestId));
       setNotification({
         type: 'success',
         message: 'Data request cancelled'
       });
-    } catch (error: any) {
+    } catch (error) {
       setNotification({
         type: 'error',
         message: 'Failed to cancel request'

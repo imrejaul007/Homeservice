@@ -3,6 +3,7 @@ import { Calendar, Clock, CheckCircle, AlertCircle, Loader2, RefreshCw } from 'l
 import axios, { type AxiosError } from 'axios';
 import { cn } from '../../lib/utils';
 import { API_BASE_URL } from '@/config/api';
+import { secureStorage } from '@/lib/security';
 
 // ============================================
 // Type Definitions
@@ -68,10 +69,10 @@ const availabilityApi = axios.create({
   timeout: 10000,
 });
 
-// Get auth tokens from sessionStorage
+// Get auth tokens from secureStorage (matches authStore / api.ts)
 const getAuthTokens = () => {
   try {
-    const stored = sessionStorage.getItem('auth-storage');
+    const stored = secureStorage.getItem('auth-storage');
     if (!stored) return null;
     const parsed = JSON.parse(stored);
     const tokens = parsed?.state?.tokens;
@@ -81,6 +82,33 @@ const getAuthTokens = () => {
     return null;
   } catch {
     return null;
+  }
+};
+
+const updateStoredTokens = (accessToken: string, refreshToken: string) => {
+  try {
+    const stored = secureStorage.getItem('auth-storage');
+    const parsed = stored ? JSON.parse(stored) : { state: {} };
+    parsed.state.tokens = { accessToken, refreshToken };
+    secureStorage.setItem('auth-storage', JSON.stringify(parsed));
+  } catch {
+    // Silent fail
+  }
+};
+
+const clearStoredAuth = () => {
+  try {
+    const stored = secureStorage.getItem('auth-storage');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.state) {
+        parsed.state.tokens = null;
+        parsed.state.isAuthenticated = false;
+        secureStorage.setItem('auth-storage', JSON.stringify(parsed));
+      }
+    }
+  } catch {
+    // Silent fail
   }
 };
 
@@ -114,26 +142,18 @@ availabilityApi.interceptors.response.use(
           if (refreshResponse.data?.success && refreshResponse.data?.data) {
             const { accessToken, refreshToken: newRefreshToken } = refreshResponse.data.data;
 
-            // Update stored tokens
-            const stored = sessionStorage.getItem('auth-storage');
-            if (stored) {
-              const parsed = JSON.parse(stored);
-              parsed.state.tokens = { accessToken, refreshToken: newRefreshToken };
-              sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
-            }
+            updateStoredTokens(accessToken, newRefreshToken);
 
             // Retry the original request with new token
             originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             return availabilityApi(originalRequest);
           }
         } catch {
-          // Refresh failed - clear auth and redirect to login
-          sessionStorage.removeItem('auth-storage');
+          clearStoredAuth();
           window.dispatchEvent(new CustomEvent('auth:expired'));
         }
       } else {
-        // No refresh token - clear auth and redirect
-        sessionStorage.removeItem('auth-storage');
+        clearStoredAuth();
         window.dispatchEvent(new CustomEvent('auth:expired'));
       }
     }

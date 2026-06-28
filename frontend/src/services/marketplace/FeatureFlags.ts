@@ -41,7 +41,7 @@ class FeatureFlagsService {
     'new_onboarding_flow': { key: 'new_onboarding_flow', enabled: true, rolloutPercentage: 100 },
     'show_trust_badges': { key: 'show_trust_badges', enabled: true },
     'show_referral_section': { key: 'show_referral_section', enabled: true },
-    'enable_ai_recommendations': { key: 'enable_ai_recommendations', enabled: true },
+    'ai_recommendations': { key: 'ai_recommendations', enabled: true },
     'show_milestones': { key: 'show_milestones', enabled: true },
 
     // Booking Features
@@ -52,7 +52,7 @@ class FeatureFlagsService {
 
     // Provider Features
     'provider_tiers': { key: 'provider_tiers', enabled: true },
-    'dynamic_pricing': { key: 'dynamic_pricing', enabled: false },
+    'smart_pricing': { key: 'smart_pricing', enabled: false },
     'provider_analytics': { key: 'provider_analytics', enabled: true },
 
     // Monetization

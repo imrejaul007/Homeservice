@@ -24,6 +24,7 @@ import {
   UserPlus
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 import NavigationHeader from '../layout/NavigationHeader';
 import Footer from '../layout/Footer';
 import Breadcrumb from '../common/Breadcrumb';
@@ -40,6 +41,10 @@ import offerService from '../../services/offerService';
 import SavedAddressSelector from './ui/SavedAddressSelector';
 import AddressForm from './ui/AddressForm';
 import { customerApi, type Address } from '../../services/customerApi';
+import { bookingService } from '../../services/BookingService';
+import { customerWalletApi } from '../../services/walletApi';
+import { StripePaymentWrapper } from '../payment/StripePaymentForm';
+import type { PaymentMethodType } from '../../services/PaymentService';
 
 // ============================================
 // Duplicate Submission Prevention
@@ -278,7 +283,7 @@ interface FormData {
   specialRequests: string;
 
   // Step 3: Payment
-  paymentMethod: 'apple_pay' | 'credit_card' | 'cash';
+  paymentMethod: 'apple_pay' | 'credit_card' | 'cash' | 'wallet';
   couponCode?: string; // Manual promo code entry
 
   // Guest info
@@ -375,6 +380,11 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   const [couponError, setCouponError] = useState<string | null>(null);
   const [preloadedOfferApplied, setPreloadedOfferApplied] = useState(false);
 
+  // Inline payment mode - when user selects card, we process payment within the wizard
+  const [inlinePaymentMode, setInlinePaymentMode] = useState(false);
+  const [inlinePaymentBookingId, setInlinePaymentBookingId] = useState<string | null>(null);
+  const [inlinePaymentComplete, setInlinePaymentComplete] = useState(false);
+
   const formatMoney = useCallback(
     (amount: number, sourceCurrency = 'AED') => format(convert(amount, sourceCurrency), currency),
     [convert, format, currency],
@@ -385,6 +395,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState<string | null>(null);
   const [showNewAddressForm, setShowNewAddressForm] = useState(false);
   const [saveAddressOnBooking, setSaveAddressOnBooking] = useState(false);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
 
   const parseDuration = (durationStr: string | number): number => {
     if (typeof durationStr === 'number') return durationStr;
@@ -724,6 +735,51 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     fetchSavedAddresses();
   }, [isAuthenticated, guestMode]);
 
+  useEffect(() => {
+    const fetchWalletBalance = async () => {
+      if (!isAuthenticated || guestMode) {
+        setWalletBalance(null);
+        return;
+      }
+
+      try {
+        const response = await customerWalletApi.getWallet();
+        setWalletBalance(response.data?.balance ?? 0);
+      } catch {
+        setWalletBalance(null);
+      }
+    };
+
+    fetchWalletBalance();
+  }, [isAuthenticated, guestMode]);
+
+  const getCheckoutTotal = useCallback((): number => {
+    const base = getCurrentPrice();
+    const discount = appliedCoupon?.discountAmount ?? 0;
+    const taxable = Math.max(0, base - discount);
+    return Math.round((taxable + taxable * 0.05) * 100) / 100;
+  }, [appliedCoupon, formData.selectedDuration, service]);
+
+  const processWalletPayment = async (bookingId: string, amount: number): Promise<boolean> => {
+    try {
+      const deductResult = await customerWalletApi.deductCredits({
+        amount,
+        reason: `Payment for booking ${bookingId}`,
+        reference: bookingId,
+        referenceType: 'booking',
+        idempotencyKey: `booking-wallet-${bookingId}`,
+      });
+
+      const transactionId = deductResult.data?.transactionId || `wallet-${bookingId}`;
+      await bookingService.confirmPayment(bookingId, transactionId);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Wallet payment failed';
+      showDeduplicatedError('Wallet payment failed', message);
+      return false;
+    }
+  };
+
   // Handle saved address selection
   const handleSavedAddressSelect = (address: Address | null) => {
     if (address) {
@@ -835,7 +891,6 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         country: formData.address.country || 'AE',
         isDefault: savedAddresses.length === 0, // First address is default
       });
-      console.log('[BookingFormWizard] Address saved successfully');
     } catch (err) {
       console.error('[BookingFormWizard] Failed to save address:', err);
       // Don't show error toast - the booking was successful, address save is optional
@@ -1062,13 +1117,8 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           || (service as any).provider?.id
           || providerId;
 
-        console.log('[GuestBooking] Service data:', {
-          _id: service._id,
-          providerId: serviceProviderId
-        });
-
         if (!serviceProviderId) {
-          toast.error('Unable to determine provider. Please try again.');
+          showDeduplicatedError('Unable to determine provider', 'Please try again.');
           clearPendingRequest(requestKey);
           finishSubmit();
           return;
@@ -1114,8 +1164,6 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           }
         };
 
-        console.log('[GuestBooking] Sending request...');
-
         const response = await api.post('/bookings/guest', guestBookingData, {
           timeout: 30000,
         });
@@ -1135,24 +1183,33 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           sessionStorage.removeItem(`booking_idempotency_${service._id}`);
           sessionStorage.removeItem(BOOKING_SESSION_STORAGE_KEY);
           setConfirmedSnapshot(buildConfirmedSnapshot(bookingData, formData, appliedCoupon));
-          setBookingConfirmed(true);
-          setConfirmedBookingId(null);
-          setConfirmedBookingNumber(bookingData?.bookingNumber || null);
-          setCurrentStep(4);
+
+          // For card payments, show inline payment form instead of going to confirmation
+          if (formData.paymentMethod === 'credit_card' || formData.paymentMethod === 'apple_pay') {
+            setInlinePaymentMode(true);
+            setInlinePaymentBookingId(bookingData?._id || bookingData?.id);
+            setInlinePaymentComplete(false);
+            setCurrentStep(3); // Stay on payment step but show payment form
+          } else {
+            // For cash payments, go directly to confirmation
+            setBookingConfirmed(true);
+            setConfirmedBookingId(null);
+            setConfirmedBookingNumber(bookingData?.bookingNumber || null);
+            setCurrentStep(4);
+          }
           // Note: Don't save address for guest users - they don't have an account
         } else {
           const errorMsg = result.message || result.errors?.[0]?.message || 'Failed to create booking.';
-          toast.error(errorMsg);
+          showDeduplicatedError('Failed to create booking', errorMsg);
           clearPendingRequest(requestKey);
         }
-      } catch (err: any) {
+      } catch (err) {
         clearPendingRequest(requestKey);
-        if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
-          console.error('[GuestBooking] Request timed out');
-          toast.error('Request timed out. Please try again.');
+        const error = err as { code?: string; message?: string };
+        if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+          showDeduplicatedError('Request timed out', 'Please try again.');
         } else {
-          console.error('[GuestBooking] Error:', err);
-          toast.error('Failed to create booking. Please try again.');
+          showDeduplicatedError('Failed to create booking', 'Please try again.');
         }
       } finally {
         finishSubmit();
@@ -1213,15 +1270,6 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         }
       } as CreateBookingData;
 
-      console.log('[Booking] Submitting authenticated booking', {
-        serviceId: bookingData.serviceId,
-        providerId: resolvedProviderId || '(auto-assign)',
-        scheduledDate: bookingData.scheduledDate,
-        scheduledTime: bookingData.scheduledTime,
-        locationType: bookingData.location?.type,
-        paymentMethod: bookingData.paymentMethod,
-      });
-
       const couponOk = await validateCouponBeforeBooking();
       if (!couponOk) {
         clearPendingRequest(requestKey);
@@ -1229,13 +1277,23 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         return;
       }
 
+      if (formData.paymentMethod === 'wallet') {
+        const requiredTotal = getCheckoutTotal();
+        if (walletBalance == null || walletBalance < requiredTotal) {
+          showDeduplicatedError(
+            'Insufficient wallet balance',
+            walletBalance != null
+              ? `You need AED ${requiredTotal.toFixed(2)} but have AED ${walletBalance.toFixed(2)}`
+              : 'Unable to load wallet balance'
+          );
+          clearPendingRequest(requestKey);
+          finishSubmit();
+          return;
+        }
+      }
+
       try {
         const booking = await createBooking(bookingData);
-        console.log('[Booking] Created successfully', {
-          bookingId: booking?._id,
-          bookingNumber: booking?.bookingNumber,
-          isDuplicate: booking?.isDuplicate,
-        });
 
         if (booking && booking._id) {
           clearPendingRequest(requestKey);
@@ -1268,12 +1326,33 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
               appliedCoupon
             )
           );
-          setBookingConfirmed(true);
-          setConfirmedBookingId(booking._id);
-          setConfirmedBookingNumber(booking.bookingNumber || null);
-          setCurrentStep(4);
-          // Save address if user checked the option
-          handleSaveAddressAfterBooking();
+
+          // Route by payment method after booking is created
+          if (formData.paymentMethod === 'credit_card' || formData.paymentMethod === 'apple_pay') {
+            setInlinePaymentMode(true);
+            setInlinePaymentBookingId(booking._id);
+            setInlinePaymentComplete(false);
+            setCurrentStep(3);
+          } else if (formData.paymentMethod === 'wallet') {
+            const totalAmount =
+              booking.pricing?.totalAmount ??
+              booking.pricing?.total ??
+              getCheckoutTotal();
+            const paid = await processWalletPayment(booking._id, totalAmount);
+            if (paid) {
+              setBookingConfirmed(true);
+              setConfirmedBookingId(booking._id);
+              setConfirmedBookingNumber(booking.bookingNumber || null);
+              setCurrentStep(4);
+              handleSaveAddressAfterBooking();
+            }
+          } else {
+            setBookingConfirmed(true);
+            setConfirmedBookingId(booking._id);
+            setConfirmedBookingNumber(booking.bookingNumber || null);
+            setCurrentStep(4);
+            handleSaveAddressAfterBooking();
+          }
         } else {
           clearPendingRequest(requestKey);
           toast.error('Failed to create booking. Please try again.');
@@ -1654,8 +1733,8 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
               </div>
             )}
 
-            {/* Step 3: Payment */}
-            {currentStep === 3 && !bookingConfirmed && (
+            {/* Step 3: Payment - Regular mode (when not processing card payment inline) */}
+            {currentStep === 3 && !bookingConfirmed && !inlinePaymentMode && (
               <div id="step-3-field" className="form-container">
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">Payment Authorization</h2>
                 <p className="text-nilin-warmGray mb-6">Select your preferred payment method</p>
@@ -1862,11 +1941,104 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                   <PaymentMethodSelector
                     selected={formData.paymentMethod}
                     onChange={(method) => setFormData({ ...formData, paymentMethod: method })}
+                    showWallet={isAuthenticated && !guestMode}
+                    walletBalance={walletBalance}
                   />
                 </div>
 
                 {/* Trust Badge */}
                 <TrustBadge type="verified" size="sm" />
+              </div>
+            )}
+
+            {/* Step 3: Inline Card Payment - Show when card is selected and we're processing */}
+            {inlinePaymentMode && inlinePaymentBookingId && !inlinePaymentComplete && (
+              <div id="step-3-payment-field" className="form-container">
+                {/* Back button to return to payment method selection */}
+                <button
+                  onClick={() => {
+                    setInlinePaymentMode(false);
+                    setInlinePaymentBookingId(null);
+                  }}
+                  className="flex items-center gap-2 text-nilin-warmGray hover:text-nilin-coral transition-colors mb-6 group"
+                >
+                  <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
+                  <span className="text-sm font-medium">Back to payment options</span>
+                </button>
+
+                <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">Complete Payment</h2>
+                <p className="text-nilin-warmGray mb-6">Enter your card details to complete your booking</p>
+
+                {/* Booking Summary */}
+                <div className="mb-6 card-nilin p-6 rounded-xl bg-nilin-blush/20">
+                  <h3 className="text-sm font-semibold text-nilin-charcoal mb-3">Booking Summary</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-nilin-warmGray">Service</span>
+                      <span className="font-medium">{service.name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-nilin-warmGray">Date & Time</span>
+                      <span className="font-medium">
+                        {formData.scheduledDate && new Date(formData.scheduledDate).toLocaleDateString('en-AE', { weekday: 'short', month: 'short', day: 'numeric' })}
+                        {' at '}
+                        {formData.scheduledTime}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-nilin-warmGray">Duration</span>
+                      <span className="font-medium">{formData.selectedDuration || service.duration} min</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-nilin-warmGray">Location</span>
+                      <span className="font-medium">{formData.locationType === 'at_home' ? 'At Home' : 'At Hotel'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stripe Payment Form */}
+                <StripePaymentWrapper
+                  bookingId={inlinePaymentBookingId}
+                  amount={getCurrentPrice()}
+                  currency="AED"
+                  paymentMethod="credit_card"
+                  couponCode={appliedCoupon?.code}
+                  onSuccess={async (paymentIntentId) => {
+                    // Confirm payment on backend (needed because webhooks don't fire locally)
+                    try {
+                      const result = await bookingService.confirmPayment(inlinePaymentBookingId, paymentIntentId);
+                      if (result && 'error' in result && !result.success) {
+                        throw new Error((result as any).error || 'Failed to confirm payment');
+                      }
+                      toast.success('Payment confirmed successfully!');
+                      setInlinePaymentComplete(true);
+                      setBookingConfirmed(true);
+                      setConfirmedBookingId(inlinePaymentBookingId);
+                      setConfirmedBookingNumber(null);
+                      setCurrentStep(4);
+                    } catch (err) {
+                      const message = err instanceof Error ? err.message : 'Payment may not have saved. Please contact support.';
+                      console.error('Payment confirmation failed:', err);
+                      toast.error('Payment Error', { description: message });
+                      // Store payment intent for reconciliation
+                      localStorage.setItem(`pending_confirmation_${paymentIntentId}`, JSON.stringify({
+                        bookingId: inlinePaymentBookingId,
+                        paymentIntentId,
+                        failedAt: new Date().toISOString()
+                      }));
+                      // Don't proceed to success - user needs to contact support
+                    }
+                  }}
+                  onError={(errorMessage) => {
+                    toast.error(errorMessage);
+                    setInlinePaymentMode(false);
+                    setInlinePaymentBookingId(null);
+                  }}
+                  onCancel={() => {
+                    setInlinePaymentMode(false);
+                    setInlinePaymentBookingId(null);
+                  }}
+                />
               </div>
             )}
 
@@ -2091,8 +2263,8 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
               </div>
             )}
 
-            {/* Navigation Buttons */}
-            {!bookingConfirmed && currentStep < 4 && (
+            {/* Navigation Buttons - Hide when in inline payment mode */}
+            {!bookingConfirmed && currentStep < 4 && !inlinePaymentMode && (
               <div className="flex items-center justify-between mt-8 pt-6 border-t border-nilin-border/30">
                 {currentStep > 1 ? (
                   <button

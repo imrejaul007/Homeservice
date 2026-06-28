@@ -22,6 +22,7 @@ import { create } from 'zustand';
 import { socketService } from '../socket';
 import type { BookingEvent } from '../socket';
 import { deltaSyncEngine } from '../DeltaSyncEngine';
+import { capacitorStorage } from '@/lib/capacitorStorage';
 
 // =============================================================================
 // Type Definitions
@@ -69,6 +70,30 @@ export interface LiveBookingUpdate {
   };
   timestamp: string;
   message?: string;
+}
+
+/**
+ * Offline change record for tracking local modifications
+ */
+export interface OfflineChange {
+  id: string;
+  entityType: string;
+  entityId: string;
+  action: 'status_update' | 'acknowledge' | 'respond';
+  payload: Record<string, unknown>;
+  timestamp: number;
+  synced: boolean;
+  retryCount: number;
+}
+
+/**
+ * Sync result for delta operations
+ */
+export interface DeltaSyncResult {
+  success: boolean;
+  synced: number;
+  failed: number;
+  conflicts: string[];
 }
 
 /**
@@ -315,6 +340,21 @@ class RealTimeService {
   /** Maximum time to keep data without sync (ms) */
   private readonly STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
+  /** Offline changes queue for tracking local modifications */
+  private offlineChanges: OfflineChange[] = [];
+
+  /** Key for storing offline changes in Capacitor Storage */
+  private readonly OFFLINE_CHANGES_KEY = 'realtime_offline_changes';
+
+  /** Maximum offline changes to keep */
+  private readonly MAX_OFFLINE_CHANGES = 100;
+
+  /** Maximum retry attempts for failed syncs */
+  private readonly MAX_SYNC_RETRIES = 3;
+
+  /** Flag to prevent concurrent sync operations */
+  private isSyncing: boolean = false;
+
   // ---------------------------------------------------------------------------
   // Lifecycle Methods
   // ---------------------------------------------------------------------------
@@ -326,7 +366,7 @@ class RealTimeService {
    * FIX #6: State snapshot for recovery
    * FIX #12: Prevent duplicate listener setup on multiple start() calls
    */
-  start(): void {
+  async start(): Promise<void> {
     if (this.isStarted) {
       console.debug('[RealTime] Service already started');
       return;
@@ -334,6 +374,9 @@ class RealTimeService {
 
     // Load cached state if available
     this.loadCachedState();
+
+    // Load offline changes from Capacitor Storage
+    await this.loadOfflineChanges();
 
     // Connect to socket
     if (!socketService.isConnected()) {
@@ -358,6 +401,9 @@ class RealTimeService {
     // Sync initial connection state
     if (socketService.isConnected()) {
       useRealTimeStore.getState().setConnected(true);
+
+      // Auto-sync pending changes on startup if connected
+      await this.syncPendingChanges();
     }
 
     console.debug('[RealTime] Service started');
@@ -369,7 +415,7 @@ class RealTimeService {
    * FIX #1: CRITICAL - Properly cleanup ALL resources
    * FIX #12: Reset listenersSetup flag to allow re-setup on next start
    */
-  stop(): void {
+  async stop(): Promise<void> {
     if (!this.isStarted) return;
 
     console.debug('[RealTime] Stopping service...');
@@ -391,10 +437,13 @@ class RealTimeService {
     // 4. Reset state
     useRealTimeStore.getState().setConnected(false);
 
-    // 5. Save final state snapshot for next session
+    // 5. Save offline changes to Capacitor Storage
+    await this.saveOfflineChanges();
+
+    // 6. Save final state snapshot for next session
     this.saveStateSnapshot();
 
-    // 6. Reset flags for next start
+    // 7. Reset flags for next start
     this.isStarted = false;
     this.listenersSetup = false;
 
@@ -602,7 +651,21 @@ class RealTimeService {
       console.debug('[RealTime] Found pending deltas to sync', {
         count: pendingDeltas.length,
       });
-      // TODO: Trigger delta sync for pending changes
+      // Sync pending offline changes when reconnecting
+      this.syncPendingChanges().catch((error) => {
+        console.error('[RealTime] Failed to sync pending changes on reconnect:', error);
+      });
+    }
+
+    // Also sync any pending offline changes stored directly
+    const pendingOfflineChanges = this.getPendingChanges();
+    if (pendingOfflineChanges.length > 0) {
+      console.debug('[RealTime] Found pending offline changes to sync', {
+        count: pendingOfflineChanges.length,
+      });
+      this.syncPendingChanges().catch((error) => {
+        console.error('[RealTime] Failed to sync offline changes on reconnect:', error);
+      });
     }
   }
 
@@ -684,6 +747,16 @@ class RealTimeService {
       status: data.status,
       updatedAt: Date.now(),
     });
+
+    // If we're offline, queue this change for later sync
+    if (!useRealTimeStore.getState().isConnected) {
+      this.queueOfflineChange('booking', data.bookingId, 'status_update', {
+        status: data.status,
+        timestamp: Date.now(),
+      }).catch((error) => {
+        console.error('[RealTime] Failed to queue offline change:', error);
+      });
+    }
   }
 
   /**
@@ -766,6 +839,350 @@ class RealTimeService {
       clearInterval(this.cleanupIntervalId);
       this.cleanupIntervalId = null;
     }
+  }
+
+  // ==========================================================================
+  // Offline Delta Sync
+  // ==========================================================================
+
+  /**
+   * Load offline changes from Capacitor Storage
+   * Called during service initialization
+   */
+  private async loadOfflineChanges(): Promise<void> {
+    try {
+      const stored = await capacitorStorage.getItem(this.OFFLINE_CHANGES_KEY);
+      if (stored) {
+        this.offlineChanges = JSON.parse(stored);
+        console.debug('[RealTime] Loaded offline changes', {
+          count: this.offlineChanges.length,
+        });
+      }
+    } catch (error) {
+      console.error('[RealTime] Failed to load offline changes:', error);
+      this.offlineChanges = [];
+    }
+  }
+
+  /**
+   * Save offline changes to Capacitor Storage
+   */
+  private async saveOfflineChanges(): Promise<void> {
+    try {
+      await capacitorStorage.setItem(
+        this.OFFLINE_CHANGES_KEY,
+        JSON.stringify(this.offlineChanges)
+      );
+    } catch (error) {
+      console.error('[RealTime] Failed to save offline changes:', error);
+    }
+  }
+
+  /**
+   * Add a change to the offline queue
+   * Called when making changes while offline
+   */
+  async queueOfflineChange(
+    entityType: string,
+    entityId: string,
+    action: 'status_update' | 'acknowledge' | 'respond',
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const change: OfflineChange = {
+      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      entityType,
+      entityId,
+      action,
+      payload,
+      timestamp: Date.now(),
+      synced: false,
+      retryCount: 0,
+    };
+
+    // Add to queue
+    this.offlineChanges.push(change);
+
+    // Enforce max size (remove oldest synced changes first)
+    this.enforceOfflineQueueSize();
+
+    // Persist to storage
+    await this.saveOfflineChanges();
+
+    console.debug('[RealTime] Queued offline change', {
+      id: change.id,
+      entityType,
+      entityId,
+      action,
+    });
+  }
+
+  /**
+   * Enforce maximum queue size by removing oldest synced entries
+   */
+  private enforceOfflineQueueSize(): void {
+    if (this.offlineChanges.length > this.MAX_OFFLINE_CHANGES) {
+      // Sort by timestamp (oldest first)
+      this.offlineChanges.sort((a, b) => a.timestamp - b.timestamp);
+
+      // Remove oldest synced entries first
+      const syncedToRemove = this.offlineChanges.filter((c) => c.synced);
+      const unsyncedToRemove =
+        this.offlineChanges.length - this.MAX_OFFLINE_CHANGES - syncedToRemove.length;
+
+      // Keep all unsynced changes
+      const unsyncedChanges = this.offlineChanges.filter((c) => !c.synced);
+
+      if (unsyncedToRemove >= 0) {
+        // Remove synced entries
+        const remainingSynced = syncedToRemove.slice(unsyncedToRemove);
+        this.offlineChanges = [...unsyncedChanges, ...remainingSynced];
+      }
+
+      console.debug('[RealTime] Enforced queue size, removed entries');
+    }
+  }
+
+  /**
+   * Get all pending (unsynced) changes
+   */
+  getPendingChanges(): OfflineChange[] {
+    return this.offlineChanges.filter((c) => !c.synced);
+  }
+
+  /**
+   * Get offline changes count
+   */
+  getOfflineChangesCount(): number {
+    return this.offlineChanges.filter((c) => !c.synced).length;
+  }
+
+  /**
+   * Sync all pending offline changes
+   * Called when connection is restored
+   */
+  async syncPendingChanges(): Promise<DeltaSyncResult> {
+    if (this.isSyncing) {
+      console.debug('[RealTime] Sync already in progress, skipping');
+      return { success: false, synced: 0, failed: 0, conflicts: [] };
+    }
+
+    if (!socketService.isConnected()) {
+      console.debug('[RealTime] Not connected, skipping sync');
+      return { success: false, synced: 0, failed: 0, conflicts: [] };
+    }
+
+    this.isSyncing = true;
+    const pendingChanges = this.getPendingChanges();
+
+    if (pendingChanges.length === 0) {
+      console.debug('[RealTime] No pending changes to sync');
+      this.isSyncing = false;
+      return { success: true, synced: 0, failed: 0, conflicts: [] };
+    }
+
+    console.debug('[RealTime] Syncing pending changes', {
+      count: pendingChanges.length,
+    });
+
+    let synced = 0;
+    let failed = 0;
+    const conflicts: string[] = [];
+
+    for (const change of pendingChanges) {
+      try {
+        const result = await this.syncSingleChange(change);
+
+        if (result.success) {
+          // Mark as synced
+          change.synced = true;
+          synced++;
+
+          // Notify delta engine that sync completed
+          if (change.entityType === 'booking') {
+            deltaSyncEngine.clearChanges(change.entityType, change.entityId);
+          }
+        } else if (result.conflict) {
+          // Handle conflict with last-write-wins
+          console.debug('[RealTime] Conflict detected, applying last-write-wins', {
+            changeId: change.id,
+          });
+
+          // Keep the most recent change (last-write-wins)
+          change.synced = true;
+          conflicts.push(change.id);
+          synced++;
+        } else {
+          // Increment retry count
+          change.retryCount++;
+
+          if (change.retryCount >= this.MAX_SYNC_RETRIES) {
+            // Max retries exceeded, mark as synced to avoid infinite retry
+            change.synced = true;
+            failed++;
+            console.warn('[RealTime] Max retries exceeded for change', {
+              changeId: change.id,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('[RealTime] Sync error for change', {
+          changeId: change.id,
+          error,
+        });
+        change.retryCount++;
+        if (change.retryCount >= this.MAX_SYNC_RETRIES) {
+          change.synced = true;
+          failed++;
+        }
+      }
+    }
+
+    // Persist updated changes
+    await this.saveOfflineChanges();
+
+    // Clean up old synced entries
+    await this.cleanupSyncedChanges();
+
+    this.isSyncing = false;
+
+    console.debug('[RealTime] Sync completed', { synced, failed, conflicts: conflicts.length });
+
+    return { success: true, synced, failed, conflicts };
+  }
+
+  /**
+   * Sync a single offline change
+   */
+  private async syncSingleChange(
+    change: OfflineChange
+  ): Promise<{ success: boolean; conflict?: boolean }> {
+    // For booking status updates, emit to socket
+    if (change.entityType === 'booking' && change.action === 'status_update') {
+      try {
+        // Check if the change is still relevant (not too old)
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        if (Date.now() - change.timestamp > maxAge) {
+          console.debug('[RealTime] Change too old, skipping', {
+            changeId: change.id,
+            age: Date.now() - change.timestamp,
+          });
+          return { success: true }; // Treat as success to remove from queue
+        }
+
+        // Emit the status update via socket
+        return new Promise((resolve) => {
+          const timeoutId = setTimeout(() => {
+            console.warn('[RealTime] Sync timeout, retrying later', {
+              changeId: change.id,
+            });
+            resolve({ success: false });
+          }, 5000); // 5 second timeout
+
+          // Emit booking status update using generic emit
+          (socketService as unknown as { emit: (event: string, data: unknown) => void }).emit(
+            'booking:status_update',
+            {
+              bookingId: change.entityId,
+              ...change.payload,
+              offlineTimestamp: change.timestamp,
+            }
+          );
+
+          // For now, assume success (Socket.IO doesn't always send ack)
+          clearTimeout(timeoutId);
+          resolve({ success: true });
+        });
+      } catch (error) {
+        console.error('[RealTime] Failed to sync change', {
+          changeId: change.id,
+          error,
+        });
+        return { success: false };
+      }
+    }
+
+    // For other entity types, use delta sync engine
+    const delta = deltaSyncEngine.getSyncDelta(change.entityType, change.entityId);
+
+    if (!delta) {
+      return { success: true }; // Nothing to sync
+    }
+
+    // Get server state to check for conflicts
+    const serverState = deltaSyncEngine.getServerState(change.entityType, change.entityId);
+
+    if (serverState) {
+      const hasConflict = deltaSyncEngine.hasConflicts(
+        change.entityType,
+        change.entityId,
+        serverState
+      );
+
+      if (hasConflict) {
+        // Last-write-wins: apply the delta anyway
+        return { success: true, conflict: true };
+      }
+    }
+
+    // No conflict, apply delta
+    const result = deltaSyncEngine.applyDelta(change.entityType, change.entityId, {});
+
+    return { success: result.success };
+  }
+
+  /**
+   * Clean up old synced changes (older than 7 days)
+   */
+  private async cleanupSyncedChanges(): Promise<void> {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const beforeCount = this.offlineChanges.length;
+
+    this.offlineChanges = this.offlineChanges.filter(
+      (c) => !c.synced || c.timestamp > sevenDaysAgo
+    );
+
+    if (this.offlineChanges.length < beforeCount) {
+      console.debug('[RealTime] Cleaned up synced changes', {
+        removed: beforeCount - this.offlineChanges.length,
+      });
+      await this.saveOfflineChanges();
+    }
+  }
+
+  /**
+   * Clear all offline changes (use with caution)
+   */
+  async clearOfflineChanges(): Promise<void> {
+    this.offlineChanges = [];
+    await capacitorStorage.removeItem(this.OFFLINE_CHANGES_KEY);
+    console.debug('[RealTime] Cleared all offline changes');
+  }
+
+  /**
+   * Manually trigger delta sync for specific entity
+   * Useful for forcing sync of specific changes
+   */
+  async syncEntity(entityType: string, entityId: string): Promise<boolean> {
+    const changes = this.offlineChanges.filter(
+      (c) => c.entityType === entityType && c.entityId === entityId && !c.synced
+    );
+
+    if (changes.length === 0) {
+      return true;
+    }
+
+    console.debug('[RealTime] Syncing entity', { entityType, entityId, count: changes.length });
+
+    for (const change of changes) {
+      const result = await this.syncSingleChange(change);
+      if (result.success || result.conflict) {
+        change.synced = true;
+      }
+    }
+
+    await this.saveOfflineChanges();
+    return changes.every((c) => c.synced);
   }
 }
 

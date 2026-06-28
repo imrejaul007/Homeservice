@@ -60,6 +60,11 @@ export type BookingStatus =
   | 'refunded'
   | 'rejected';
 
+export const BOOKING_STATUSES: BookingStatus[] = [
+  'pending', 'confirmed', 'in_progress', 'completed',
+  'cancelled', 'no_show', 'refunded', 'rejected'
+];
+
 export type PaymentStatus = 'pending' | 'completed' | 'refunded' | 'failed' | 'processed';
 
 // ==========================================
@@ -198,6 +203,11 @@ export interface Booking {
   paymentStatus: PaymentStatus;
   paymentMethod?: string;
 
+  // Review / experience state for customer UI
+  customerReview?: string;
+  providerReview?: string;
+  hasExperience?: boolean;
+
   // Service Info (populated)
   service?: {
     _id: string;
@@ -259,7 +269,7 @@ export interface Booking {
 
   // Provider Response
   providerResponse?: {
-    status: 'pending' | 'accepted' | 'rejected';
+    status: 'pending' | 'confirmed' | 'rejected';
     message?: string;
     estimatedArrival?: string;
     notes?: string;

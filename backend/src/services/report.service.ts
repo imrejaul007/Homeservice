@@ -133,6 +133,13 @@ const ScheduledReportModel = mongoose.model<ScheduledReport>('ScheduledReport', 
 // Scheduled Report Service Class
 // =============================================================================
 
+// Chart colors for report visualizations
+const CHART_COLORS = [
+  '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+  '#FF9F40', '#FF6384', '#C9CBCF', '#7CB342', '#5C6BC0',
+  '#26A69A', '#EF5350', '#AB47BC', '#42A5F5', '#66BB6A'
+];
+
 class ReportService {
   private readonly CACHE_PREFIX = 'report:';
   private readonly CACHE_TTL = 3600; // 1 hour
@@ -831,7 +838,249 @@ class ReportService {
       logger.error('Failed to clear report cache', { error });
     }
   }
+
+  // =============================================================================
+  // Custom Report Generation Methods
+  // =============================================================================
+
+  async generateReport(config: {
+    metrics: any;
+    dateRange: { startDate: Date; endDate: Date };
+    grouping: string;
+    chartType: string;
+  }): Promise<{
+    data: Array<{ label: string; value: number; color?: string }>;
+    chartConfig: any;
+    summary: Record<string, number | string>;
+    metadata: any;
+  }> {
+    const { metrics, dateRange, grouping, chartType } = config;
+    const startDate = new Date(dateRange.startDate);
+    const endDate = new Date(dateRange.endDate);
+
+    const data: Array<{ label: string; value: number; color?: string }> = [];
+    const summary: Record<string, number | string> = {};
+    const enabledMetrics: string[] = [];
+
+    // Get bookings by grouping
+    const matchStage: any = {
+      createdAt: { $gte: startDate, $lte: endDate },
+      isDeleted: { $ne: true }
+    };
+
+    let groupId: any;
+    switch (grouping) {
+      case 'day':
+        groupId = { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } };
+        break;
+      case 'week':
+        groupId = { year: { $isoWeekYear: '$createdAt' }, week: { $isoWeek: '$createdAt' } };
+        break;
+      case 'month':
+        groupId = { $dateToString: { format: '%Y-%m', date: '$createdAt' } };
+        break;
+      case 'category':
+        groupId = '$serviceId';
+        break;
+      case 'provider':
+        groupId = '$providerId';
+        break;
+      default:
+        groupId = null;
+    }
+
+    const aggregation = await Booking.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: groupId,
+          count: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } }
+        }
+      },
+      { $sort: grouping === 'week' ? { '_id.year': -1, '_id.week': -1 } : { _id: 1 } },
+      { $limit: 20 }
+    ]);
+
+    // Process aggregation results
+    let totalBookings = 0;
+    let totalCompleted = 0;
+    let totalCancelled = 0;
+
+    for (let i = 0; i < aggregation.length; i++) {
+      const item = aggregation[i];
+      let label = String(item._id || 'Unknown');
+
+      if (grouping === 'week') {
+        label = `W${item._id.week} ${item._id.year}`;
+      }
+
+      data.push({
+        label,
+        value: item.count || 0,
+        color: CHART_COLORS[i % CHART_COLORS.length]
+      });
+
+      totalBookings += item.count || 0;
+      totalCompleted += item.completed || 0;
+      totalCancelled += item.cancelled || 0;
+    }
+
+    if (metrics.totalBookings) { summary.totalBookings = totalBookings; enabledMetrics.push('Total Bookings'); }
+    if (metrics.completedBookings) { summary.completedBookings = totalCompleted; enabledMetrics.push('Completed Bookings'); }
+    if (metrics.cancelledBookings) { summary.cancelledBookings = totalCancelled; enabledMetrics.push('Cancelled Bookings'); }
+
+    // Get revenue stats
+    if (metrics.totalRevenue || metrics.averageBookingValue) {
+      const revenueAgg = await Booking.aggregate([
+        { $match: { createdAt: { $gte: startDate, $lte: endDate }, status: 'completed', isDeleted: { $ne: true } } },
+        { $group: { _id: null, totalRevenue: { $sum: '$pricing.totalAmount' }, avgValue: { $avg: '$pricing.totalAmount' } } }
+      ]);
+      const revenue = revenueAgg[0] || { totalRevenue: 0, avgValue: 0 };
+      if (metrics.totalRevenue) { summary.totalRevenue = revenue.totalRevenue; enabledMetrics.push('Total Revenue'); }
+      if (metrics.averageBookingValue) { summary.averageBookingValue = Math.round(revenue.avgValue * 100) / 100; enabledMetrics.push('Average Booking Value'); }
+    }
+
+    // Get user counts
+    const User = mongoose.model('User');
+    if (metrics.newCustomers) {
+      summary.newCustomers = await User.countDocuments({
+        createdAt: { $gte: startDate, $lte: endDate },
+        role: 'customer'
+      });
+      enabledMetrics.push('New Customers');
+    }
+    if (metrics.newProviders) {
+      summary.newProviders = await User.countDocuments({
+        createdAt: { $gte: startDate, $lte: endDate },
+        role: 'provider'
+      });
+      enabledMetrics.push('New Providers');
+    }
+
+    // Get review stats
+    const Review = mongoose.model('Review');
+    if (metrics.totalReviews) {
+      summary.totalReviews = await Review.countDocuments({
+        createdAt: { $gte: startDate, $lte: endDate },
+        moderationStatus: 'approved'
+      });
+      enabledMetrics.push('Total Reviews');
+    }
+    if (metrics.averageRating) {
+      const ratingAgg = await Review.aggregate([
+        { $match: { createdAt: { $gte: startDate, $lte: endDate }, moderationStatus: 'approved' } },
+        { $group: { _id: null, avgRating: { $avg: '$rating' } } }
+      ]);
+      summary.averageRating = Math.round((ratingAgg[0]?.avgRating || 0) * 10) / 10;
+      enabledMetrics.push('Average Rating');
+    }
+
+    const metricNames = Object.entries(metrics)
+      .filter(([_, v]) => v)
+      .map(([k]) => k.replace(/([A-Z])/g, ' $1').trim());
+
+    return {
+      data,
+      chartConfig: {
+        type: chartType,
+        title: `${metricNames.join(', ') || 'Bookings'} by ${grouping.charAt(0).toUpperCase() + grouping.slice(1)}`,
+        xAxisLabel: grouping === 'day' ? 'Date' : grouping === 'week' ? 'Week' : grouping === 'month' ? 'Month' : grouping === 'category' ? 'Category' : 'Provider',
+        yAxisLabel: metrics.totalRevenue ? 'Revenue (AED)' : metrics.averageBookingValue ? 'Average Value (AED)' : 'Count',
+        colors: CHART_COLORS
+      },
+      summary,
+      metadata: {
+        generatedAt: new Date(),
+        dateRange: { startDate, endDate },
+        grouping,
+        metrics: enabledMetrics
+      }
+    };
+  }
+
+  async getTemplates(userId: string): Promise<any[]> {
+    return CustomReportTemplateModel?.find({ createdBy: userId })?.sort({ createdAt: -1 })?.lean() || [];
+  }
+
+  async getTemplateById(templateId: string): Promise<any | null> {
+    return CustomReportTemplateModel?.findById(templateId)?.lean() || null;
+  }
+
+  async saveTemplate(template: any): Promise<any> {
+    if (!CustomReportTemplateModel) return null;
+    const saved = new CustomReportTemplateModel(template);
+    return saved.save();
+  }
+
+  async updateTemplate(templateId: string, updates: any): Promise<any | null> {
+    if (!CustomReportTemplateModel) return null;
+    return CustomReportTemplateModel.findByIdAndUpdate(templateId, { $set: updates }, { new: true }).lean();
+  }
+
+  async deleteTemplate(templateId: string): Promise<boolean> {
+    if (!CustomReportTemplateModel) return false;
+    const result = await CustomReportTemplateModel.findByIdAndDelete(templateId);
+    return !!result;
+  }
 }
+
+// Report template schema for custom reports
+const CustomReportTemplateSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String },
+  config: {
+    metrics: { type: mongoose.Schema.Types.Mixed, required: true },
+    dateRange: {
+      startDate: { type: Date, required: true },
+      endDate: { type: Date, required: true }
+    },
+    grouping: { type: String, required: true },
+    chartType: { type: String, required: true }
+  },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+}, { timestamps: true });
+
+let CustomReportTemplateModel: mongoose.Model<any>;
+
+try {
+  CustomReportTemplateModel = mongoose.model('CustomReportTemplate');
+} catch {
+  CustomReportTemplateModel = mongoose.model('CustomReportTemplate', CustomReportTemplateSchema);
+}
+
+// Assign to the service for use
+(ReportService.prototype as any).reportTemplateModel = CustomReportTemplateModel;
+
+// Override template methods to use the correct model
+const originalGetTemplates = ReportService.prototype.getTemplates;
+ReportService.prototype.getTemplates = async function(userId: string) {
+  return CustomReportTemplateModel?.find({ createdBy: userId })?.sort({ createdAt: -1 })?.lean() || [];
+};
+
+const originalGetTemplateById = ReportService.prototype.getTemplateById;
+ReportService.prototype.getTemplateById = async function(templateId: string) {
+  return CustomReportTemplateModel?.findById(templateId)?.lean() || null;
+};
+
+const originalSaveTemplate = ReportService.prototype.saveTemplate;
+ReportService.prototype.saveTemplate = async function(template: any) {
+  const model = new CustomReportTemplateModel(template);
+  return model.save();
+};
+
+const originalUpdateTemplate = ReportService.prototype.updateTemplate;
+ReportService.prototype.updateTemplate = async function(templateId: string, updates: any) {
+  return CustomReportTemplateModel?.findByIdAndUpdate(templateId, { $set: updates }, { new: true }).lean() || null;
+};
+
+const originalDeleteTemplate = ReportService.prototype.deleteTemplate;
+ReportService.prototype.deleteTemplate = async function(templateId: string) {
+  const result = await CustomReportTemplateModel?.findByIdAndDelete(templateId);
+  return !!result;
+};
 
 // =============================================================================
 // Export Singleton Instance

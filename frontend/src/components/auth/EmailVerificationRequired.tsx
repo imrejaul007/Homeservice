@@ -2,10 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { Mail, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import CaptchaWidget from './CaptchaWidget';
+import CaptchaWidget from './CaptchaWidget';
 
 const EmailVerificationRequired: React.FC = () => {
   const [isResendSuccess, setIsResendSuccess] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const { user, resendVerification, logout, isLoading, errors, clearErrors } = useAuthStore();
@@ -41,7 +44,7 @@ const EmailVerificationRequired: React.FC = () => {
 
     try {
       clearErrors();
-      await resendVerification(user.email);
+      await resendVerification(user.email, captchaToken ?? undefined);
       setIsResendSuccess(true);
 
       // Start cooldown timer (60 seconds)
@@ -157,6 +160,8 @@ const EmailVerificationRequired: React.FC = () => {
 
             {/* Action Buttons */}
             <div className="space-y-3">
+              <CaptchaWidget onToken={setCaptchaToken} className="mb-2" />
+
               {/* Resend Button */}
               <button
                 onClick={handleResendVerification}

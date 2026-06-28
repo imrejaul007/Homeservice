@@ -349,15 +349,19 @@ chatRoomSchema.methods.updateLastRead = async function(
 };
 
 /**
- * Increment unread count for a user
+ * Increment unread count for a user using atomic $inc to prevent race conditions
  */
 chatRoomSchema.methods.incrementUnreadCount = async function(
   userId: mongoose.Types.ObjectId
 ): Promise<void> {
   const userIdStr = userId.toString();
-  const currentCount = this.unreadCounts.get(userIdStr) || 0;
-  this.unreadCounts.set(userIdStr, currentCount + 1);
-  await this.save();
+  await (this.constructor as IChatRoomModel).findByIdAndUpdate(
+    this._id,
+    { $inc: { [`unreadCounts.${userIdStr}`]: 1 } }
+  );
+  // Keep in-memory copy in sync
+  const current = this.unreadCounts.get(userIdStr) || 0;
+  this.unreadCounts.set(userIdStr, current + 1);
 };
 
 /**

@@ -33,7 +33,8 @@ import {
   Power,
   Trash,
   RotateCcw,
-  Archive
+  Archive,
+  RefreshCw
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
@@ -43,84 +44,8 @@ import { AddServiceModal } from './AddServiceModal';
 import { EditServiceModal } from './EditServiceModal';
 import { SkeletonCard, SkeletonServiceList } from './SkeletonCard';
 import { SkeletonStatCard, SkeletonStatGrid, SkeletonPerformanceCard } from './SkeletonStatCard';
-import { EmptyState, NoServicesEmpty, NoServicesSearchEmpty } from '../common/EmptyState';
-
-// Confirmation Modal Component
-interface ConfirmModalProps {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  variant?: 'danger' | 'warning' | 'default';
-  isLoading?: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-const ConfirmModal: React.FC<ConfirmModalProps> = ({
-  isOpen,
-  title,
-  message,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  variant = 'danger',
-  isLoading = false,
-  onConfirm,
-  onCancel,
-}) => {
-  if (!isOpen) return null;
-
-  const buttonStyles = {
-    danger: 'bg-red-600 hover:bg-red-700 text-white',
-    warning: 'bg-amber-600 hover:bg-amber-700 text-white',
-    default: 'bg-nilin-coral hover:bg-nilin-coral/90 text-white',
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onCancel}
-      />
-      <div className="relative glass-nilin-strong rounded-nilin-xl p-6 max-w-md w-full shadow-nilin-lg">
-        <div className="text-center">
-          <div className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4 ${
-            variant === 'danger' ? 'bg-red-100' : variant === 'warning' ? 'bg-amber-100' : 'bg-nilin-blush'
-          }`}>
-            {variant === 'danger' ? (
-              <AlertCircle className="w-6 h-6 text-red-600" />
-            ) : variant === 'warning' ? (
-              <AlertCircle className="w-6 h-6 text-amber-600" />
-            ) : (
-              <AlertCircle className="w-6 h-6 text-nilin-coral" />
-            )}
-          </div>
-          <h3 className="text-lg font-serif text-nilin-charcoal mb-2">{title}</h3>
-          <p className="text-sm text-nilin-warmGray mb-6">{message}</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="flex-1 py-2.5 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium disabled:opacity-50"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isLoading}
-            className={`flex-1 py-2.5 rounded-nilin font-medium transition-colors disabled:opacity-50 ${buttonStyles[variant]}`}
-          >
-            {isLoading ? 'Processing...' : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+import { EmptyState, NoServicesEmpty, NoServicesSearchEmpty, NoTrashItemsEmpty } from '../common/EmptyState';
+import { ConfirmModal } from '../common/ConfirmModal';
 
 interface ServiceAnalyticsData {
   totalViews: number;
@@ -180,6 +105,7 @@ interface Service {
   isDeleted?: boolean;
   deletedAt?: string;
   deletedBy?: string;
+  rejectionReason?: string;
 }
 
 interface ServiceStats {
@@ -267,7 +193,77 @@ const ServiceManagement: React.FC = () => {
   const [services, setServices] = useState<Service[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [listLoading, setListLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [cardStates, setCardStates] = useState<Record<string, 'idle' | 'success' | 'error'>>({});
+
+  // Toast deduplication for error handling
+  const lastToastTime = useRef<number>(0);
+  const TOAST_COOLDOWN = 5000; // 5 seconds between error toasts
+
+  // Enhanced error handling with network detection
+  const showErrorToast = useCallback((title: string, description?: string) => {
+    const now = Date.now();
+    if (now - lastToastTime.current < TOAST_COOLDOWN) return;
+    lastToastTime.current = now;
+    toast.error(title, description ? { description } : undefined);
+  }, [toast]);
+
+  // Network error detection
+  const isNetworkError = useCallback((err: unknown): boolean => {
+    return !navigator.onLine ||
+      err instanceof TypeError ||
+      (err as { message?: string })?.message?.includes('NetworkError');
+  }, []);
+
+  // Handle fetch error with network detection and appropriate messaging
+  const handleFetchError = useCallback((err: unknown, context: string) => {
+    if (isNetworkError(err)) {
+      showErrorToast('Connection error', 'Please check your internet connection and try again');
+      return;
+    }
+
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    switch (status) {
+      case 401: showErrorToast('Session expired', 'Please log in again'); break;
+      case 403: showErrorToast('Access denied', 'You do not have permission'); break;
+      case 404: showErrorToast('Not found', `${context} not found`); break;
+      case 429: showErrorToast('Too many requests', 'Please wait before trying again'); break;
+      case 500: showErrorToast('Server error', 'Please try again later'); break;
+      default: showErrorToast('Error', err instanceof Error ? err.message : 'An error occurred');
+    }
+  }, [isNetworkError, showErrorToast]);
+
+  // Retry mechanism for transient 5xx failures
+  const fetchWithRetry = useCallback(async <T,>(
+    fetchFn: () => Promise<T>,
+    context: string,
+    maxAttempts = 2
+  ): Promise<T | null> => {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await fetchFn();
+      } catch (err) {
+        lastError = err;
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        const isRetryable = status === 0 || (status && status >= 500);
+
+        if (!isRetryable || attempt === maxAttempts - 1) {
+          handleFetchError(err, context);
+          return null;
+        }
+
+        // Exponential backoff: 1s, 2s
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      }
+    }
+
+    handleFetchError(lastError, context);
+    return null;
+  }, [handleFetchError]);
+
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState<ServicesPagination>({
     page: 1,
@@ -382,6 +378,7 @@ const ServiceManagement: React.FC = () => {
   const [isBulkOperating, setIsBulkOperating] = useState(false);
 
   // Trash View State
+  const [trashCount, setTrashCount] = useState(0);
   const [isViewingTrash, setIsViewingTrash] = useState(false);
   const [deletedServices, setDeletedServices] = useState<Service[]>([]);
   const [deletedServicesLoading, setDeletedServicesLoading] = useState(false);
@@ -406,6 +403,9 @@ const ServiceManagement: React.FC = () => {
   const [permanentDeletingServiceName, setPermanentDeletingServiceName] = useState<string>('');
   const [isPermanentDeleting, setIsPermanentDeleting] = useState(false);
 
+  // Accessibility: Status announcer for screen readers
+  const [statusAnnouncement, setStatusAnnouncement] = useState<string>('');
+
   useEffect(() => {
     setPage(1);
     // Clear selection when filters change
@@ -423,7 +423,7 @@ const ServiceManagement: React.FC = () => {
         const start = new Date(startDate);
         const end = new Date(endDate);
         if (start > end) {
-          toast.error('Invalid date range', 'Start date must be before end date');
+          toast.error('Invalid date range', { description: 'Start date must be before end date' });
           return;
         }
       }
@@ -434,7 +434,7 @@ const ServiceManagement: React.FC = () => {
         } else {
           setListLoading(true);
         }
-        setError(null);
+        setListError(null);
 
         const queryParams = new URLSearchParams({
           status: statusFilter,
@@ -467,12 +467,20 @@ const ServiceManagement: React.FC = () => {
         );
         setPagination(data.data.pagination);
       } catch (err) {
-        console.error('Error fetching services:', err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch services');
-        toast.error(
-          'Failed to load services',
-          err instanceof Error ? err.message : 'An error occurred'
-        );
+        setListError(err instanceof Error ? err.message : 'Failed to fetch services');
+        if (isNetworkError(err)) {
+          showErrorToast('Connection error', 'Please check your internet connection and try again');
+        } else {
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          switch (status) {
+            case 401: showErrorToast('Session expired', 'Please log in again'); break;
+            case 403: showErrorToast('Access denied', 'You do not have permission'); break;
+            case 404: showErrorToast('Not found', 'Services not found'); break;
+            case 429: showErrorToast('Too many requests', 'Please wait before trying again'); break;
+            case 500: showErrorToast('Server error', 'Please try again later'); break;
+            default: showErrorToast('Failed to load services', err instanceof Error ? err.message : 'An error occurred');
+          }
+        }
       } finally {
         setListLoading(false);
       }
@@ -490,6 +498,8 @@ const ServiceManagement: React.FC = () => {
       minPrice,
       maxPrice,
       featuredOnly,
+      showErrorToast,
+      isNetworkError,
     ]
   );
 
@@ -498,6 +508,7 @@ const ServiceManagement: React.FC = () => {
 
     try {
       setOverviewLoading(true);
+      setOverviewError(null);
       const data = await authService.get<{
         success: boolean,
         data: {
@@ -533,15 +544,12 @@ const ServiceManagement: React.FC = () => {
         setAllCategories(data.data.overview.allCategories || []);
       }
     } catch (err) {
-      console.error('Error fetching overview stats:', err);
-      toast.error(
-        'Failed to load overview',
-        err instanceof Error ? err.message : 'An error occurred'
-      );
+      setOverviewError(err instanceof Error ? err.message : 'Failed to load overview');
+      handleFetchError(err, 'Overview');
     } finally {
       setOverviewLoading(false);
     }
-  }, [isProvider]);
+  }, [isProvider, handleFetchError]);
 
   const fetchServicesRef = useCallbackRef(fetchServices);
   const fetchOverviewStatsRef = useCallbackRef(fetchOverviewStats);
@@ -571,13 +579,21 @@ const ServiceManagement: React.FC = () => {
   // Initial fetch of overview stats
   useEffect(() => {
     if (!isProvider) {
-      setError('Please log in as a provider to access this page');
+      setListError('Please log in as a provider to access this page');
       setOverviewLoading(false);
       setListLoading(false);
       return;
     }
 
     void fetchOverviewStats();
+
+    authService.get<{ success: boolean; data: { count: number } }>('/provider/services/trash/count')
+      .then((data) => {
+        if (data.success && isMountedRef.current) {
+          setTrashCount(data.data.count);
+        }
+      })
+      .catch(() => { /* non-critical */ });
   }, [isProvider, fetchOverviewStats]);
 
   // Socket listeners for real-time service status updates
@@ -594,7 +610,7 @@ const ServiceManagement: React.FC = () => {
 
     const unsubServiceRejected = socketService.onServiceRejected((data) => {
       if (isMountedRef.current) {
-        toast.error('Service Rejected', data.reason || 'Your service was not approved.');
+        toast.error('Service Rejected', { description: data.reason || 'Your service was not approved.' });
         void fetchServicesRef.current(1, false);
         void fetchOverviewStatsRef.current();
       }
@@ -749,11 +765,10 @@ const ServiceManagement: React.FC = () => {
         setAnalyticsData(data.data.analytics);
       }
     } catch (err) {
-      console.error('Error loading service analytics:', err);
       setAnalyticsError(err instanceof Error ? err.message : 'Failed to load analytics');
       toast.error(
         'Failed to load analytics',
-        err instanceof Error ? err.message : 'An error occurred'
+        { description: err instanceof Error ? err.message : 'An error occurred' }
       );
     } finally {
       setAnalyticsLoading(false);
@@ -769,9 +784,16 @@ const ServiceManagement: React.FC = () => {
 
   const canToggleService = (status: string) => status === 'active' || status === 'inactive';
 
+  const flashCardState = (serviceId: string, state: 'success' | 'error') => {
+    setCardStates((prev) => ({ ...prev, [serviceId]: state }));
+    setTimeout(() => {
+      setCardStates((prev) => ({ ...prev, [serviceId]: 'idle' }));
+    }, 1000);
+  };
+
   const toggleServiceStatus = async (serviceId: string, currentStatus: string) => {
     if (!canToggleService(currentStatus)) {
-      toast.error('Cannot change status', 'This service must be approved by admin first.');
+      toast.error('Cannot change status', { description: 'This service must be approved by admin first.' });
       return;
     }
 
@@ -793,6 +815,7 @@ const ServiceManagement: React.FC = () => {
           newStatus === 'active' ? 'Service activated' : 'Service deactivated',
           data.message
         );
+        flashCardState(serviceId, 'success');
         setPage(1);
         if (isMountedRef.current) {
           void fetchServicesRef.current(1, false);
@@ -802,10 +825,10 @@ const ServiceManagement: React.FC = () => {
         throw new Error('Failed to update service status');
       }
     } catch (err) {
-      console.error('Error toggling service status:', err);
+      flashCardState(serviceId, 'error');
       toast.error(
         'Status update failed',
-        err instanceof Error ? err.message : 'Failed to update service status'
+        { description: err instanceof Error ? err.message : 'Failed to update service status' }
       );
     } finally {
       setIsToggling(false);
@@ -865,8 +888,7 @@ const ServiceManagement: React.FC = () => {
                 }
               }
             } catch (err) {
-              console.error('Error restoring service:', err);
-              toast.error('Restore failed', err instanceof Error ? err.message : 'Failed to restore service');
+              toast.error('Restore failed', { description: err instanceof Error ? err.message : 'Failed to restore service' });
             }
           },
           data.message || `"${deletedServiceName}" can be restored within 8 seconds`,
@@ -876,10 +898,9 @@ const ServiceManagement: React.FC = () => {
         throw new Error('Failed to delete service');
       }
     } catch (err) {
-      console.error('Error deleting service:', err);
       toast.error(
         'Delete failed',
-        err instanceof Error ? err.message : 'Failed to delete service'
+        { description: err instanceof Error ? err.message : 'Failed to delete service' }
       );
     } finally {
       setIsDeleting(false);
@@ -910,14 +931,25 @@ const ServiceManagement: React.FC = () => {
         void fetchOverviewStatsRef.current();
       }
     } catch (err) {
-      console.error('Error cloning service:', err);
-      toast.error('Clone failed', err instanceof Error ? err.message : 'Failed to clone service');
+      toast.error('Clone failed', { description: err instanceof Error ? err.message : 'Failed to clone service' });
     } finally {
       setIsCloningService(false);
     }
   };
 
   // Fetch deleted services (trash)
+  const fetchTrashCount = useCallback(async () => {
+    if (!isProvider) return;
+    try {
+      const data = await authService.get<{ success: boolean; data: { count: number } }>('/provider/services/trash/count');
+      if (data.success && isMountedRef.current) {
+        setTrashCount(data.data.count);
+      }
+    } catch {
+      /* non-critical */
+    }
+  }, [isProvider]);
+
   const fetchDeletedServices = useCallback(async (pageNum: number = 1) => {
     if (!isProvider) return;
 
@@ -936,13 +968,14 @@ const ServiceManagement: React.FC = () => {
       }>(`/provider/services/trash?${queryParams}`);
 
       if (data.success) {
-        setDeletedServices(data.data.services);
+        setDeletedServices((prev) =>
+          pageNum > 1 ? [...prev, ...data.data.services] : data.data.services
+        );
         setDeletedPagination(data.data.pagination);
       }
     } catch (err) {
-      console.error('Error fetching deleted services:', err);
       setDeletedServicesError(err instanceof Error ? err.message : 'Failed to load trash');
-      toast.error('Failed to load trash', err instanceof Error ? err.message : 'An error occurred');
+      toast.error('Failed to load trash', { description: err instanceof Error ? err.message : 'An error occurred' });
     } finally {
       setDeletedServicesLoading(false);
     }
@@ -990,8 +1023,7 @@ const ServiceManagement: React.FC = () => {
         throw new Error('Failed to restore service');
       }
     } catch (err) {
-      console.error('Error restoring service:', err);
-      toast.error('Restore failed', err instanceof Error ? err.message : 'Failed to restore service');
+      toast.error('Restore failed', { description: err instanceof Error ? err.message : 'Failed to restore service' });
     } finally {
       setIsRestoring(false);
     }
@@ -1032,8 +1064,7 @@ const ServiceManagement: React.FC = () => {
         throw new Error('Failed to permanently delete service');
       }
     } catch (err) {
-      console.error('Error permanently deleting service:', err);
-      toast.error('Permanent delete failed', err instanceof Error ? err.message : 'Failed to permanently delete service');
+      toast.error('Permanent delete failed', { description: err instanceof Error ? err.message : 'Failed to permanently delete service' });
     } finally {
       setIsPermanentDeleting(false);
     }
@@ -1077,34 +1108,27 @@ const ServiceManagement: React.FC = () => {
 
     setIsBulkOperating(true);
     const serviceIds = Array.from(selectedServices);
-    let successCount = 0;
-    let failCount = 0;
 
     try {
-      for (const serviceId of serviceIds) {
-        const service = services.find((s) => s._id === serviceId);
-        if (service && canToggleService(service.status)) {
-          try {
-            await authService.patch(`/provider/services/${serviceId}/status`, { status: 'active' });
-            successCount++;
-          } catch {
-            failCount++;
-          }
+      const data = await authService.post<{
+        success: boolean;
+        data: { processed: number; succeeded: number; failed: number; errors?: Array<{ id: string; reason: string }> }
+      }>('/provider/services/bulk/activate', { serviceIds });
+
+      if (data.success) {
+        if (data.data.failed === 0) {
+          toast.success('Services activated', `${data.data.succeeded} service(s) activated successfully.`);
+        } else {
+          toast.warning('Partial activation', `${data.data.succeeded} service(s) activated, ${data.data.failed} failed.`);
+        }
+        clearSelection();
+        if (isMountedRef.current) {
+          void fetchServicesRef.current(1, false);
+          void fetchOverviewStatsRef.current();
         }
       }
-
-      if (successCount > 0) {
-        toast.success('Services activated', `${successCount} service(s) activated successfully.`);
-      }
-      if (failCount > 0) {
-        toast.error('Some services failed', `${failCount} service(s) could not be activated.`);
-      }
-
-      clearSelection();
-      if (isMountedRef.current) {
-        void fetchServicesRef.current(1, false);
-        void fetchOverviewStatsRef.current();
-      }
+    } catch (err) {
+      toast.error('Bulk activation failed', { description: err instanceof Error ? err.message : 'An error occurred' });
     } finally {
       setIsBulkOperating(false);
     }
@@ -1116,34 +1140,27 @@ const ServiceManagement: React.FC = () => {
 
     setIsBulkOperating(true);
     const serviceIds = Array.from(selectedServices);
-    let successCount = 0;
-    let failCount = 0;
 
     try {
-      for (const serviceId of serviceIds) {
-        const service = services.find((s) => s._id === serviceId);
-        if (service && canToggleService(service.status)) {
-          try {
-            await authService.patch(`/provider/services/${serviceId}/status`, { status: 'inactive' });
-            successCount++;
-          } catch {
-            failCount++;
-          }
+      const data = await authService.post<{
+        success: boolean;
+        data: { processed: number; succeeded: number; failed: number; errors?: Array<{ id: string; reason: string }> }
+      }>('/provider/services/bulk/deactivate', { serviceIds });
+
+      if (data.success) {
+        if (data.data.failed === 0) {
+          toast.success('Services deactivated', `${data.data.succeeded} service(s) deactivated successfully.`);
+        } else {
+          toast.warning('Partial deactivation', `${data.data.succeeded} service(s) deactivated, ${data.data.failed} failed.`);
+        }
+        clearSelection();
+        if (isMountedRef.current) {
+          void fetchServicesRef.current(1, false);
+          void fetchOverviewStatsRef.current();
         }
       }
-
-      if (successCount > 0) {
-        toast.success('Services deactivated', `${successCount} service(s) deactivated successfully.`);
-      }
-      if (failCount > 0) {
-        toast.error('Some services failed', `${failCount} service(s) could not be deactivated.`);
-      }
-
-      clearSelection();
-      if (isMountedRef.current) {
-        void fetchServicesRef.current(1, false);
-        void fetchOverviewStatsRef.current();
-      }
+    } catch (err) {
+      toast.error('Bulk deactivation failed', { description: err instanceof Error ? err.message : 'An error occurred' });
     } finally {
       setIsBulkOperating(false);
     }
@@ -1155,109 +1172,117 @@ const ServiceManagement: React.FC = () => {
 
     setIsBulkOperating(true);
     const serviceIds = Array.from(selectedServices);
-    let successCount = 0;
-    let failCount = 0;
 
     try {
-      for (const serviceId of serviceIds) {
-        try {
-          await authService.delete(`/provider/services/${serviceId}`);
-          successCount++;
-        } catch {
-          failCount++;
+      const data = await authService.delete<{
+        success: boolean;
+        data: { processed: number; succeeded: number; failed: number; errors?: Array<{ id: string; reason: string }> }
+      }>('/provider/services/bulk/delete', { data: { serviceIds } });
+
+      if (data.success) {
+        if (data.data.failed === 0) {
+          toast.success('Services deleted', `${data.data.succeeded} service(s) deleted successfully.`);
+        } else {
+          toast.warning('Partial deletion', `${data.data.succeeded} service(s) deleted, ${data.data.failed} failed.`);
+        }
+        clearSelection();
+        setShowBulkDeleteModal(false);
+        if (isMountedRef.current) {
+          void fetchServicesRef.current(1, false);
+          void fetchOverviewStatsRef.current();
+          void fetchTrashCount();
         }
       }
-
-      if (successCount > 0) {
-        toast.success('Services deleted', `${successCount} service(s) deleted successfully.`);
-      }
-      if (failCount > 0) {
-        toast.error('Some services failed', `${failCount} service(s) could not be deleted.`);
-      }
-
-      clearSelection();
-      setShowBulkDeleteModal(false);
-      if (isMountedRef.current) {
-        void fetchServicesRef.current(1, false);
-        void fetchOverviewStatsRef.current();
-      }
+    } catch (err) {
+      toast.error('Bulk deletion failed', { description: err instanceof Error ? err.message : 'An error occurred' });
     } finally {
       setIsBulkOperating(false);
     }
   };
 
-  // Export services to CSV
-  const exportToCSV = () => {
+  // Export services to CSV using backend endpoint
+  const exportToCSV = async () => {
     setIsExporting(true);
     setShowExportDropdown(false);
 
-    const headers = ['Name', 'Category', 'Status', 'Price', 'Duration (min)', 'Views', 'Clicks', 'Rating', 'Created Date'];
-    const rows = services.map((service) => [
-      service.name,
-      service.category,
-      service.status,
-      `${service.price.currency || 'AED'} ${service.price.amount}`,
-      service.duration,
-      service.searchMetadata.searchCount,
-      service.searchMetadata.clickCount,
-      service.rating.count > 0 ? service.rating.average.toFixed(1) : 'N/A',
-      new Date(service.createdAt).toLocaleDateString(),
-    ]);
+    try {
+      // Build query params from current filters
+      const queryParams = new URLSearchParams({
+        format: 'csv',
+        status: statusFilter === 'all' ? 'all' : statusFilter,
+      });
+      if (categoryFilter !== 'all') queryParams.append('category', categoryFilter);
+      if (searchTerm) queryParams.append('search', searchTerm);
+      if (minPrice) queryParams.append('minPrice', minPrice);
+      if (maxPrice) queryParams.append('maxPrice', maxPrice);
+      if (startDate) queryParams.append('startDate', startDate);
+      if (endDate) queryParams.append('endDate', endDate);
+      if (ratingFilter !== 'any') queryParams.append('minRating', ratingFilter);
+      if (featuredOnly) queryParams.append('featured', 'true');
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((row) =>
-        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
-      ),
-    ].join('\n');
+      const blob = await authService.get<Blob>(
+        `/provider/services/export?${queryParams}`,
+        { responseType: 'blob' },
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `services-export-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `services-export-${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    toast.success('Export complete', `Exported ${services.length} services to CSV`);
-    setIsExporting(false);
+      toast.success('Export complete', 'All services exported to CSV');
+    } catch (err) {
+      toast.error('Export failed', { description: err instanceof Error ? err.message : 'Failed to export services' });
+    } finally {
+      setIsExporting(false);
+    }
   };
 
-  // Export services to JSON
-  const exportToJSON = () => {
+  // Export services to JSON using backend endpoint
+  const exportToJSON = async () => {
     setIsExporting(true);
     setShowExportDropdown(false);
 
-    const exportData = services.map((service) => ({
-      name: service.name,
-      category: service.category,
-      status: service.status,
-      price: `${service.price.currency || 'AED'} ${service.price.amount}`,
-      duration: service.duration,
-      views: service.searchMetadata.searchCount,
-      clicks: service.searchMetadata.clickCount,
-      rating: service.rating.count > 0 ? service.rating.average.toFixed(1) : null,
-      createdDate: new Date(service.createdAt).toLocaleDateString(),
-    }));
+    try {
+      // Build query params from current filters
+      const queryParams = new URLSearchParams({
+        format: 'json',
+        status: statusFilter === 'all' ? 'all' : statusFilter,
+      });
+      if (categoryFilter !== 'all') queryParams.append('category', categoryFilter);
+      if (searchTerm) queryParams.append('search', searchTerm);
+      if (minPrice) queryParams.append('minPrice', minPrice);
+      if (maxPrice) queryParams.append('maxPrice', maxPrice);
+      if (startDate) queryParams.append('startDate', startDate);
+      if (endDate) queryParams.append('endDate', endDate);
+      if (ratingFilter !== 'any') queryParams.append('minRating', ratingFilter);
+      if (featuredOnly) queryParams.append('featured', 'true');
 
-    const jsonContent = JSON.stringify(exportData, null, 2);
-    const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `services-export-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      const blob = await authService.get<Blob>(
+        `/provider/services/export?${queryParams}`,
+        { responseType: 'blob' },
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `services-export-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
-    toast.success('Export complete', `Exported ${services.length} services to JSON`);
-    setIsExporting(false);
+      toast.success('Export complete', 'All services exported to JSON');
+    } catch (err) {
+      toast.error('Export failed', { description: err instanceof Error ? err.message : 'Failed to export services' });
+    } finally {
+      setIsExporting(false);
+    }
   };
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, rejectionReason?: string) => {
     switch (status) {
       case 'pending_review':
         return (
@@ -1268,7 +1293,7 @@ const ServiceManagement: React.FC = () => {
         );
       case 'active':
         return (
-          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-50 text-green-800 border border-green-100">
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
             <CheckCircle className="w-3 h-3 mr-1" aria-hidden="true" />
             Active
           </span>
@@ -1282,16 +1307,21 @@ const ServiceManagement: React.FC = () => {
         );
       case 'inactive':
         return (
-          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
             <AlertCircle className="w-3 h-3 mr-1" aria-hidden="true" />
             Inactive
           </span>
         );
       case 'rejected':
         return (
-          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-800 border border-red-200">
-            <XCircle className="w-3 h-3 mr-1" aria-hidden="true" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-rose/10 text-nilin-rose border border-nilin-rose/20">
+            <XCircle className="w-3 h-3" aria-hidden="true" />
             Rejected
+            {rejectionReason && (
+              <span className="ml-1 px-1.5 py-0.5 bg-nilin-rose/20 rounded text-nilin-warmGray" title={rejectionReason}>
+                (?)
+              </span>
+            )}
           </span>
         );
       default:
@@ -1304,19 +1334,52 @@ const ServiceManagement: React.FC = () => {
   if (!isProvider && !overviewLoading) {
     return (
       <div className="glass-nilin rounded-nilin-lg p-10 border border-nilin-border text-center">
-        <p className="text-nilin-warmGray">{error || 'Please log in as a provider to access this page'}</p>
+        <p className="text-nilin-warmGray">{listError || 'Please log in as a provider to access this page'}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-8 font-sans">
+      {/* Accessibility: Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {statusAnnouncement}
+      </div>
+
       {/* Booking Stats - Primary Section */}
       <section>
-        <div className="flex items-center gap-3 mb-4">
-          <h2 className="text-xl font-serif text-nilin-charcoal">Booking Overview</h2>
-          <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full font-medium">Live</span>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-serif text-nilin-charcoal">Booking Overview</h2>
+            <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full font-medium">Live</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setOverviewLoading(true);
+              void fetchOverviewStatsRef.current();
+            }}
+            disabled={overviewLoading}
+            className="p-2 text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-coral/10 rounded-lg transition-colors disabled:opacity-50"
+            title="Refresh stats"
+            aria-label="Refresh booking overview stats"
+          >
+            <RefreshCw className={`w-4 h-4 ${overviewLoading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
+        {overviewError && !overviewLoading && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-nilin-lg flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+            <p className="text-sm text-red-700 flex-1">{overviewError}</p>
+            <button
+              type="button"
+              onClick={() => void fetchOverviewStatsRef.current()}
+              className="text-sm text-red-600 hover:text-red-800 font-medium"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {overviewLoading ? (
           <SkeletonStatGrid columns={4} />
         ) : (
@@ -1354,7 +1417,7 @@ const ServiceManagement: React.FC = () => {
               value={bookingStats.completedThisMonth}
               hint="This month"
               icon={CheckCircle}
-              iconClass="bg-green-50 text-green-700"
+              iconClass="bg-nilin-coral/10 text-nilin-rose"
             />
           </div>
         </div>
@@ -1363,7 +1426,22 @@ const ServiceManagement: React.FC = () => {
 
       {/* Service Stats - Secondary Section */}
       <section>
-        <h2 className="text-xl font-serif text-nilin-charcoal mb-4">Service Performance</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-serif text-nilin-charcoal">Service Performance</h2>
+          <button
+            type="button"
+            onClick={() => {
+              setOverviewLoading(true);
+              void fetchOverviewStatsRef.current();
+            }}
+            disabled={overviewLoading}
+            className="p-2 text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-coral/10 rounded-lg transition-colors disabled:opacity-50"
+            title="Refresh stats"
+            aria-label="Refresh service performance stats"
+          >
+            <RefreshCw className={`w-4 h-4 ${overviewLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
         {overviewLoading ? (
           <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
             <SkeletonPerformanceCard count={5} />
@@ -1381,8 +1459,8 @@ const ServiceManagement: React.FC = () => {
           </div>
           <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.35s' }}>
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-xl bg-green-50/70 flex items-center justify-center group-hover:bg-green-100 transition-colors">
-                <CheckCircle className="w-5 h-5 text-green-600" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/10 flex items-center justify-center group-hover:bg-nilin-coral/20 transition-colors">
+                <CheckCircle className="w-5 h-5 text-nilin-rose" />
               </div>
             </div>
             <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{serviceStats.active}</p>
@@ -1408,8 +1486,8 @@ const ServiceManagement: React.FC = () => {
           </div>
           <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.5s' }}>
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-xl bg-green-50/70 flex items-center justify-center group-hover:bg-green-100 transition-colors">
-                <Users className="w-5 h-5 text-green-600" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/10 flex items-center justify-center group-hover:bg-nilin-coral/20 transition-colors">
+                <Users className="w-5 h-5 text-nilin-rose" />
               </div>
             </div>
             <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{performanceStats.bookingRate.toFixed(1)}%</p>
@@ -1429,11 +1507,14 @@ const ServiceManagement: React.FC = () => {
                 <p className="text-sm text-nilin-warmGray mt-0.5">Create, edit, and manage your service offerings</p>
               </div>
               {/* Tab Buttons */}
-              <div className="flex items-center gap-1 bg-white/60 rounded-nilin p-1 border border-nilin-border/50">
+              <div role="tablist" aria-label="View selection" className="flex items-center gap-1 bg-white/60 rounded-nilin p-1 border border-nilin-border/50">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={!isViewingTrash}
+                  tabIndex={!isViewingTrash ? 0 : -1}
                   onClick={switchToServicesView}
-                  className={`px-4 py-2 rounded-nilin text-sm font-medium transition-all ${
+                  className={`px-4 py-2 rounded-nilin text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                     !isViewingTrash
                       ? 'bg-nilin-coral text-white shadow-sm'
                       : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-muted/50'
@@ -1446,8 +1527,11 @@ const ServiceManagement: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={isViewingTrash}
+                  tabIndex={isViewingTrash ? 0 : -1}
                   onClick={switchToTrashView}
-                  className={`px-4 py-2 rounded-nilin text-sm font-medium transition-all ${
+                  className={`px-4 py-2 rounded-nilin text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                     isViewingTrash
                       ? 'bg-nilin-coral text-white shadow-sm'
                       : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-muted/50'
@@ -1456,6 +1540,11 @@ const ServiceManagement: React.FC = () => {
                   <span className="flex items-center gap-2">
                     <Trash className="w-4 h-4" />
                     Trash
+                    {trashCount > 0 && (
+                      <span className="ml-0.5 px-1.5 py-0.5 text-xs bg-nilin-coral/20 text-nilin-coral rounded-full">
+                        {trashCount}
+                      </span>
+                    )}
                   </span>
                 </button>
               </div>
@@ -1465,11 +1554,11 @@ const ServiceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowShortcutsHelp(true)}
-                  className="p-2 text-nilin-warmGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors"
+                  className="w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   title="Keyboard shortcuts (?)"
                   aria-label="Show keyboard shortcuts"
                 >
-                  <Keyboard className="w-4 h-4" />
+                  <Keyboard className="w-5 h-5" />
                 </button>
               )}
 
@@ -1479,7 +1568,7 @@ const ServiceManagement: React.FC = () => {
                   type="button"
                   onClick={() => setShowExportDropdown(!showExportDropdown)}
                   disabled={services.length === 0 || isExporting}
-                  className="p-2 text-nilin-warmGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   title="Export services"
                   aria-label="Export services"
                 >
@@ -1591,8 +1680,9 @@ const ServiceManagement: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Sort by</label>
+              <label htmlFor="sort-by" className="block text-xs font-medium text-nilin-warmGray mb-1.5">Sort by</label>
               <select
+                id="sort-by"
                 value={`${sortBy}-${sortOrder}`}
                 onChange={(e) => {
                   const [field, order] = e.target.value.split('-');
@@ -1614,8 +1704,8 @@ const ServiceManagement: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Rating</label>
-              <select value={ratingFilter} onChange={(e) => setRatingFilter(e.target.value)} className={selectClass}>
+              <label htmlFor="rating-filter" className="block text-xs font-medium text-nilin-warmGray mb-1.5">Rating</label>
+              <select id="rating-filter" value={ratingFilter} onChange={(e) => setRatingFilter(e.target.value)} className={selectClass}>
                 <option value="any">Any Rating</option>
                 <option value="4">4+ Stars</option>
                 <option value="3">3+ Stars</option>
@@ -1625,9 +1715,10 @@ const ServiceManagement: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Price Range (AED)</label>
+              <label htmlFor="price-range-min" className="block text-xs font-medium text-nilin-warmGray mb-1.5">Price Range (AED)</label>
               <div className="flex items-center gap-2">
                 <input
+                  id="price-range-min"
                   type="number"
                   placeholder="Min"
                   value={minPrice}
@@ -1637,6 +1728,7 @@ const ServiceManagement: React.FC = () => {
                 />
                 <span className="text-sm text-nilin-warmGray shrink-0">to</span>
                 <input
+                  id="price-range-max"
                   type="number"
                   placeholder="Max"
                   value={maxPrice}
@@ -1648,11 +1740,12 @@ const ServiceManagement: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Featured</label>
+              <span className="block text-xs font-medium text-nilin-warmGray mb-1.5">Featured</span>
               <button
                 type="button"
+                aria-pressed={featuredOnly}
                 onClick={() => setFeaturedOnly(!featuredOnly)}
-                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-nilin border transition-colors ${
+                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-nilin border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                   featuredOnly
                     ? 'bg-nilin-warning/20 border-nilin-warning/30 text-nilin-charcoal'
                     : 'bg-white border-nilin-border text-nilin-warmGray hover:border-nilin-coral/30'
@@ -1664,11 +1757,11 @@ const ServiceManagement: React.FC = () => {
             </div>
 
             <div className="sm:col-span-2 xl:col-span-2">
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Service created between</label>
+              <label htmlFor="date-start" className="block text-xs font-medium text-nilin-warmGray mb-1.5">Service created between</label>
               <div className="flex items-center gap-2">
-                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
+                <input id="date-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} aria-label="Start date" />
                 <span className="text-sm text-nilin-warmGray shrink-0">to</span>
-                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} />
+                <input id="date-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} aria-label="End date" />
               </div>
             </div>
           </div>
@@ -1682,7 +1775,7 @@ const ServiceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSearchTerm('')}
-                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear search filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1695,7 +1788,7 @@ const ServiceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCategoryFilter('all')}
-                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear category filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1708,7 +1801,7 @@ const ServiceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setStatusFilter('all')}
-                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear status filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1731,7 +1824,7 @@ const ServiceManagement: React.FC = () => {
                     setStartDate('');
                     setEndDate('');
                   }}
-                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear date filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1745,7 +1838,7 @@ const ServiceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setRatingFilter('any')}
-                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear rating filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1768,7 +1861,7 @@ const ServiceManagement: React.FC = () => {
                     setMinPrice('');
                     setMaxPrice('');
                   }}
-                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-coral/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear price filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1782,7 +1875,7 @@ const ServiceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setFeaturedOnly(false)}
-                  className="p-0.5 rounded-full hover:bg-nilin-warning/30 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-nilin-warning/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1"
                   aria-label="Clear featured filter"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -1822,7 +1915,7 @@ const ServiceManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={clearSelection}
-                className="p-1.5 hover:bg-nilin-coral/20 rounded-lg transition-colors"
+                className="w-9 h-9 flex items-center justify-center hover:bg-nilin-coral/20 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                 aria-label="Clear selection"
               >
                 <X className="w-4 h-4 text-nilin-coral" />
@@ -1836,7 +1929,7 @@ const ServiceManagement: React.FC = () => {
                 type="button"
                 onClick={bulkActivate}
                 disabled={isBulkOperating}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-nilin-coral hover:bg-nilin-rose text-white text-sm font-medium rounded-lg transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
               >
                 <Power className="w-3.5 h-3.5" />
                 Activate
@@ -1845,7 +1938,7 @@ const ServiceManagement: React.FC = () => {
                 type="button"
                 onClick={bulkDeactivate}
                 disabled={isBulkOperating}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-nilin-warning hover:bg-nilin-warning/80 text-white text-sm font-medium rounded-lg transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
               >
                 <ToggleLeft className="w-3.5 h-3.5" />
                 Deactivate
@@ -1854,7 +1947,7 @@ const ServiceManagement: React.FC = () => {
                 type="button"
                 onClick={() => setShowBulkDeleteModal(true)}
                 disabled={isBulkOperating}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-nilin-rose hover:bg-nilin-rose/80 text-white text-sm font-medium rounded-lg transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Delete
@@ -1867,10 +1960,10 @@ const ServiceManagement: React.FC = () => {
         <div className="p-6">
           {listLoading && services.length === 0 ? (
             <SkeletonServiceList count={3} />
-          ) : error ? (
+          ) : listError ? (
             <div className="py-12 text-center">
               <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-              <p className="text-nilin-warmGray mb-4">{error}</p>
+              <p className="text-nilin-warmGray mb-4">{listError}</p>
               <button type="button" onClick={() => fetchServices(1, false)} className="btn-nilin">
                 Try Again
               </button>
@@ -1897,7 +1990,7 @@ const ServiceManagement: React.FC = () => {
                   <button
                     type="button"
                     onClick={toggleAllSelection}
-                    className={`p-1 rounded transition-colors ${
+                    className={`w-9 h-9 flex items-center justify-center rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                       selectedServices.size === services.length && services.length > 0
                         ? 'text-nilin-coral'
                         : 'text-nilin-lightGray hover:text-nilin-coral'
@@ -1920,12 +2013,15 @@ const ServiceManagement: React.FC = () => {
                 <article
                   key={service._id}
                   ref={(el: HTMLDivElement | null) => { serviceRefs.current[index] = el; }}
+                  aria-label={`Service: ${service.name}, Status: ${service.status}, Price: ${service.price.currency} ${service.price.amount}`}
                   className={`card-nilin hover-lift p-6 rounded-nilin-lg bg-white/90 border transition-all duration-200 hover:shadow-lg hover:border-nilin-coral/30 stagger-item ${
                     focusedRowIndex === index
                       ? 'border-nilin-coral shadow-lg ring-2 ring-nilin-coral/20'
                       : 'border-nilin-border'
-                  } ${selectedServices.has(service._id) ? 'ring-2 ring-nilin-coral bg-nilin-coral/5' : ''}`}
-                  style={{ animationDelay: `${index * 0.05}s` }}
+                  } ${selectedServices.has(service._id) ? 'ring-2 ring-nilin-coral bg-nilin-coral/5' : ''} ${
+                    cardStates[service._id] === 'success' ? 'animate-success-glow' : ''
+                  } ${cardStates[service._id] === 'error' ? 'ring-2 ring-nilin-rose/40' : ''}`}
+                  style={{ animationDelay: `${Math.min(index * 0.05, 0.15)}s` }}
                 >
                   <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
                     {/* Checkbox for bulk selection */}
@@ -1933,7 +2029,7 @@ const ServiceManagement: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => toggleServiceSelection(service._id)}
-                        className={`p-1 rounded transition-colors ${
+                        className={`w-9 h-9 flex items-center justify-center rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                           selectedServices.has(service._id)
                             ? 'text-nilin-coral'
                             : 'text-nilin-lightGray hover:text-nilin-coral'
@@ -1954,10 +2050,10 @@ const ServiceManagement: React.FC = () => {
                         <img
                           src={service.images[0]}
                           alt={service.name}
-                          className="w-20 h-20 rounded-xl object-cover border border-nilin-border/50"
+                          className="w-20 h-20 rounded-nilin-lg object-cover border border-nilin-border/50"
                         />
                       ) : (
-                        <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-nilin-blush to-nilin-peach flex items-center justify-center border border-nilin-border/50">
+                        <div className="w-20 h-20 rounded-nilin-lg bg-gradient-to-br from-nilin-blush to-nilin-peach flex items-center justify-center border border-nilin-border/50">
                           <span className="text-2xl font-serif text-nilin-coral/50">
                             {service.name.charAt(0).toUpperCase()}
                           </span>
@@ -1967,7 +2063,7 @@ const ServiceManagement: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-3 mb-4">
                         <h3 className="text-xl font-serif text-nilin-charcoal tracking-tight truncate" title={service.name}>{service.name}</h3>
-                        {getStatusBadge(service.status)}
+                        {getStatusBadge(service.status, service.rejectionReason)}
                         {service.isFeatured && (
                           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-warning/20 text-nilin-charcoal border border-nilin-warning/30">
                             <Star className="w-3 h-3 mr-1 fill-nilin-warning text-nilin-warning" aria-hidden="true" />
@@ -2022,7 +2118,7 @@ const ServiceManagement: React.FC = () => {
                         </span>
                         {service.rating.count > 0 && (
                           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-nilin-charcoal/70">
-                            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                            <Star className="w-3.5 h-3.5 text-nilin-warning fill-nilin-warning" />
                             <span className="font-semibold text-nilin-charcoal">{service.rating.average.toFixed(1)}</span>
                             <span className="text-nilin-lightGray">({service.rating.count})</span>
                           </span>
@@ -2040,12 +2136,12 @@ const ServiceManagement: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => openAnalyticsModal(service)}
-                          className="p-2.5 text-nilin-warmGray hover:text-nilin-rose hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                          className="w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-rose hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                           aria-label={`View analytics for ${service.name}`}
                         >
                           <TrendingUp className="w-4 h-4" aria-hidden="true" />
                         </button>
-                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/analytics:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/analytics:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-30">
                           Analytics
                         </span>
                       </div>
@@ -2056,7 +2152,7 @@ const ServiceManagement: React.FC = () => {
                           type="button"
                           onClick={() => handleCloneService(service)}
                           disabled={isCloningService}
-                          className="p-2.5 text-nilin-warmGray hover:text-nilin-coral hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 disabled:opacity-50"
+                          className="w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-coral hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 disabled:opacity-50"
                           aria-label={`Clone ${service.name}`}
                         >
                           <Copy className="w-4 h-4" aria-hidden="true" />
@@ -2099,7 +2195,7 @@ const ServiceManagement: React.FC = () => {
                             <ToggleLeft className="w-5 h-5" aria-hidden="true" />
                           )}
                         </button>
-                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/toggle:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/toggle:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-30">
                           {service.status === 'active' ? 'Deactivate' : 'Activate'}
                         </span>
                       </div>
@@ -2117,7 +2213,7 @@ const ServiceManagement: React.FC = () => {
                         >
                           <Edit3 className="w-4 h-4" aria-hidden="true" />
                         </button>
-                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/edit:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/edit:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-30">
                           Edit
                         </span>
                       </div>
@@ -2130,12 +2226,12 @@ const ServiceManagement: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleDeleteClick(service._id, service.name)}
-                          className="p-2.5 text-nilin-lightGray hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                          className="w-11 h-11 flex items-center justify-center text-nilin-lightGray hover:text-nilin-rose hover:bg-nilin-rose/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-rose focus-visible:ring-offset-2"
                           aria-label={`Delete ${service.name}`}
                         >
                           <Trash2 className="w-4 h-4" aria-hidden="true" />
                         </button>
-                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-red-600 text-white rounded opacity-0 group-hover/delete:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-rose text-white rounded opacity-0 group-hover/delete:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-30">
                           Delete
                         </span>
                       </div>
@@ -2149,7 +2245,7 @@ const ServiceManagement: React.FC = () => {
                 </div>
               )}
               {pagination.hasNext && !listLoading && (
-                <div className="flex justify-center pt-4">
+                <div className="flex flex-col items-center gap-4 pt-4">
                   <button
                     type="button"
                     onClick={() => setPage((p) => p + 1)}
@@ -2157,6 +2253,47 @@ const ServiceManagement: React.FC = () => {
                   >
                     Load more
                   </button>
+                  {pagination.pages > 1 && (
+                    <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
+                      <span>Page {pagination.page} of {pagination.pages}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPage(1)}
+                        disabled={pagination.page === 1}
+                        className="px-2 py-1 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors"
+                        aria-label="Go to first page"
+                      >
+                        First
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        disabled={pagination.page === 1}
+                        className="px-2 py-1 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors"
+                        aria-label="Go to previous page"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPage((p) => Math.min(pagination.pages, p + 1))}
+                        disabled={!pagination.hasNext}
+                        className="px-2 py-1 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors"
+                        aria-label="Go to next page"
+                      >
+                        Next
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPage(pagination.pages)}
+                        disabled={!pagination.hasNext}
+                        className="px-2 py-1 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors"
+                        aria-label="Go to last page"
+                      >
+                        Last
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2177,13 +2314,7 @@ const ServiceManagement: React.FC = () => {
                 </button>
               </div>
             ) : deletedServices.length === 0 ? (
-              <div className="py-16 text-center">
-                <div className="w-20 h-20 rounded-full bg-nilin-muted/50 flex items-center justify-center mx-auto mb-4">
-                  <Trash className="w-10 h-10 text-nilin-lightGray" />
-                </div>
-                <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Trash is empty</h3>
-                <p className="text-sm text-nilin-warmGray">Deleted services will appear here</p>
-              </div>
+              <NoTrashItemsEmpty />
             ) : (
               <div className="space-y-4">
                 {deletedPagination.total > 0 && (
@@ -2195,7 +2326,7 @@ const ServiceManagement: React.FC = () => {
                   <article
                     key={service._id}
                     className="card-nilin hover-lift p-6 rounded-nilin-lg bg-white/90 border border-nilin-border transition-all duration-200 hover:shadow-lg hover:border-nilin-coral/30 stagger-item opacity-75"
-                    style={{ animationDelay: `${index * 0.05}s` }}
+                    style={{ animationDelay: `${Math.min(index * 0.05, 0.15)}s` }}
                   >
                     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
                       {/* Service Thumbnail */}
@@ -2264,7 +2395,7 @@ const ServiceManagement: React.FC = () => {
                             type="button"
                             onClick={() => handleRestoreClick(service._id, service.name)}
                             disabled={isRestoring && restoringServiceId === service._id}
-                            className="p-2.5 text-nilin-warmGray hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 disabled:opacity-50"
+                            className="w-11 h-11 flex items-center justify-center text-nilin-warmGray hover:text-nilin-coral hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 disabled:opacity-50"
                             aria-label={`Restore ${service.name}`}
                           >
                             {isRestoring && restoringServiceId === service._id ? (
@@ -2349,8 +2480,8 @@ const ServiceManagement: React.FC = () => {
 
       {/* Service Analytics Modal */}
       {showAnalyticsModal && analyticsService && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-nilin-charcoal/40 backdrop-blur-sm">
-          <div className="glass-nilin-strong rounded-nilin-lg shadow-nilin-lg max-w-lg w-full max-h-[90vh] overflow-hidden border border-nilin-border">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-nilin-charcoal/40 backdrop-blur-sm animate-fade-in">
+          <div className="glass-nilin-strong rounded-nilin-lg shadow-nilin-lg max-w-lg w-full max-h-[90vh] overflow-hidden border border-nilin-border animate-modal-enter">
             <div className="px-6 py-4 bg-gradient-to-r from-nilin-rose to-nilin-coral flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-serif text-white">Service Analytics</h2>
@@ -2360,7 +2491,7 @@ const ServiceManagement: React.FC = () => {
                 type="button"
                 onClick={closeAnalyticsModal}
                 className="p-2 hover:bg-white/15 rounded-nilin transition-colors text-white/90 hover:text-white"
-                aria-label="Close"
+                aria-label="Close analytics modal"
               >
                 <XCircle className="w-5 h-5" />
               </button>
@@ -2534,8 +2665,8 @@ const ServiceManagement: React.FC = () => {
 
       {/* Keyboard Shortcuts Help Modal */}
       {showShortcutsHelp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-nilin-charcoal/40 backdrop-blur-sm">
-          <div className="glass-nilin-strong rounded-nilin-lg shadow-nilin-lg max-w-md w-full border border-nilin-border">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-nilin-charcoal/40 backdrop-blur-sm animate-fade-in">
+          <div className="glass-nilin-strong rounded-nilin-lg shadow-nilin-lg max-w-md w-full border border-nilin-border animate-modal-enter">
             <div className="px-6 py-4 bg-gradient-to-r from-nilin-rose to-nilin-coral flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Keyboard className="w-5 h-5 text-white" />
@@ -2545,7 +2676,7 @@ const ServiceManagement: React.FC = () => {
                 type="button"
                 onClick={() => setShowShortcutsHelp(false)}
                 className="p-2 hover:bg-white/15 rounded-nilin transition-colors text-white/90 hover:text-white"
-                aria-label="Close"
+                aria-label="Close keyboard shortcuts"
               >
                 <XCircle className="w-5 h-5" />
               </button>

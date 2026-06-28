@@ -29,6 +29,12 @@ coverage/
 dist/
 build/
 
+# Accidental TypeScript compile output in src/ (build goes to dist/)
+src/**/*.js
+!src/migrations/**/*.js
+!src/scripts/**/*.js
+!src/tests/**/*.js
+
 # IDE - VS Code
 .vscode/
 .idea/

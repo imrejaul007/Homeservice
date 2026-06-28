@@ -131,19 +131,25 @@ const MapView: React.FC<MapViewProps> = ({
   const hasClusters = clusters !== null && clusters.some((c) => c.count > 1);
   const displayItems = hasClusters ? clusters : markers;
 
-  // Calculate bounds
+  // Calculate bounds - with validation to prevent undefined coordinates
   const bounds = useMemo<L.LatLngBoundsExpression | null>(() => {
     if (markers.length === 0) return null;
     const points: [number, number][] = markers.map((m) => [m.coords.lat, m.coords.lng]);
-    if (userLocation?.coordinates) {
+    // Guard against undefined or invalid user location coordinates
+    if (userLocation?.coordinates &&
+        typeof userLocation.coordinates.lat === 'number' &&
+        typeof userLocation.coordinates.lng === 'number') {
       points.push([userLocation.coordinates.lat, userLocation.coordinates.lng]);
     }
     return points as L.LatLngBoundsExpression;
   }, [markers, userLocation]);
 
-  // Determine initial center
+  // Determine initial center - with validation to prevent undefined lat/lng
   const center: [number, number] = useMemo(() => {
-    if (userLocation?.coordinates) {
+    // Guard against undefined or invalid coordinates
+    if (userLocation?.coordinates &&
+        typeof userLocation.coordinates.lat === 'number' &&
+        typeof userLocation.coordinates.lng === 'number') {
       return [userLocation.coordinates.lat, userLocation.coordinates.lng];
     }
     if (markers.length > 0) {
@@ -162,7 +168,15 @@ const MapView: React.FC<MapViewProps> = ({
     return cluster?.services || [];
   }, [expandedCluster, clusters]);
 
-  if (markers.length === 0) {
+  // Guard: ensure center is valid before rendering map
+  const hasValidCenter = Array.isArray(center) &&
+    center.length === 2 &&
+    typeof center[0] === 'number' &&
+    typeof center[1] === 'number' &&
+    !Number.isNaN(center[0]) &&
+    !Number.isNaN(center[1]);
+
+  if (markers.length === 0 || !hasValidCenter) {
     return (
       <div
         className="flex items-center justify-center bg-nilin-muted rounded-2xl border border-nilin-blush/40"
@@ -170,7 +184,9 @@ const MapView: React.FC<MapViewProps> = ({
       >
         <div className="text-center p-8">
           <p className="text-nilin-warmGray text-sm">
-            No services with location data to display on the map.
+            {markers.length === 0
+              ? 'No services with location data to display on the map.'
+              : 'Loading map location...'}
           </p>
         </div>
       </div>
@@ -200,8 +216,12 @@ const MapView: React.FC<MapViewProps> = ({
 
           {bounds && <FitBounds bounds={bounds} />}
 
-          {/* User location marker */}
-          {userLocation?.coordinates && (
+          {/* User location marker - with validation */}
+          {Boolean(
+            userLocation?.coordinates &&
+            typeof userLocation.coordinates.lat === 'number' &&
+            typeof userLocation.coordinates.lng === 'number'
+          ) && (
             <Marker
               position={[userLocation.coordinates.lat, userLocation.coordinates.lng]}
               icon={userLocationIcon()}

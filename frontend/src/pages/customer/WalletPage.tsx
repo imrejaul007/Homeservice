@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { WalletBalance } from '../../components/marketplace/WalletBalance';
 import { AddMoneyModal } from '../../components/wallet/AddMoneyModal';
+import NavigationHeader from '../../components/layout/NavigationHeader';
 import { CashbackTracking } from '../../components/customer/CashbackTracking';
 import { AutoTopup } from '../../components/customer/AutoTopup';
 import { Link } from 'react-router-dom';
@@ -169,11 +170,15 @@ const WalletPage: React.FC = () => {
         onClose={() => setShowAddMoney(false)}
         onSuccess={handleAddMoneySuccess}
       />
+
+      {/* Site-wide header with location filter, search and nav */}
+      <NavigationHeader showSearch={false} showCategoryTabs={false} />
+
       {/* Header - Hidden on Desktop */}
       <div className="lg:hidden">
         <div className="bg-gradient-to-br from-nilin-coral to-nilin-rose text-white p-6">
           <div className="flex items-center gap-4 mb-4">
-            <Link to="/customer/profile" className="p-2 -ml-2 hover:bg-white/10 rounded-full">
+            <Link to="/customer/profile" className="w-11 h-11 p-0 flex items-center justify-center -ml-2 hover:bg-white/10 rounded-full">
               <ArrowLeft className="w-6 h-6" />
             </Link>
             <h1 className="text-xl font-bold">{t('wallet.title')}</h1>
@@ -194,7 +199,7 @@ const WalletPage: React.FC = () => {
           <div className="max-w-6xl mx-auto px-8 py-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <Link to="/customer/profile" className="p-2 hover:bg-nilin-blush rounded-xl transition-colors">
+                <Link to="/customer/profile" className="w-11 h-11 p-0 flex items-center justify-center hover:bg-nilin-blush rounded-xl transition-colors">
                   <ArrowLeft className="w-5 h-5 text-nilin-charcoal" />
                 </Link>
                 <div>

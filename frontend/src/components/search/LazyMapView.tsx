@@ -19,16 +19,34 @@ interface ErrorBoundaryState {
   error?: Error;
 }
 
-const MapErrorFallback = ({ retry }: { retry?: () => void }) => (
+const MapErrorFallback = ({ retry, onSwitchToList }: { retry?: () => void; onSwitchToList?: () => void }) => (
   <div className="flex flex-col items-center justify-center h-full bg-nilin-muted rounded-2xl border border-nilin-blush/30 p-8 text-center">
     <MapPin className="w-12 h-12 text-nilin-warmGray mb-4" />
     <h3 className="text-lg font-semibold text-nilin-charcoal mb-2">Unable to load map</h3>
-    <p className="text-sm text-nilin-warmGray mb-4">Try viewing as list instead</p>
-    {retry && (
-      <button onClick={retry} className="px-4 py-2 bg-nilin-coral text-white rounded-xl text-sm font-medium">
-        Try Again
-      </button>
-    )}
+    <p className="text-sm text-nilin-warmGray mb-4">
+      {navigator.onLine
+        ? "The map failed to load. You can try again or switch to list view."
+        : "You're offline. Check your connection and try again."
+      }
+    </p>
+    <div className="flex gap-3">
+      {retry && (
+        <button
+          onClick={retry}
+          className="px-4 py-2 bg-nilin-coral text-white rounded-xl text-sm font-medium hover:bg-nilin-rose transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+        >
+          Try Again
+        </button>
+      )}
+      {onSwitchToList && (
+        <button
+          onClick={onSwitchToList}
+          className="px-4 py-2 bg-nilin-muted text-nilin-charcoal rounded-xl text-sm font-medium hover:bg-nilin-blush/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+        >
+          Switch to List
+        </button>
+      )}
+    </div>
   </div>
 );
 
@@ -90,6 +108,9 @@ function useResponsiveMapHeight(height?: string): string {
 const LazyMapView: React.FC<LazyMapViewProps> = (props) => {
   const responsiveHeight = useResponsiveMapHeight(props.height);
 
+  // Ensure services is always an array to prevent undefined errors
+  const safeServices = Array.isArray(props.services) ? props.services : [];
+
   return (
     <MapErrorBoundary height={responsiveHeight}>
       <Suspense
@@ -106,7 +127,9 @@ const LazyMapView: React.FC<LazyMapViewProps> = (props) => {
         }
       >
         <MapView
-          {...props}
+          services={safeServices}
+          onViewDetails={props.onViewDetails}
+          onBookNow={props.onBookNow}
           height={responsiveHeight}
           isMobileCollapsed={props.isMobileCollapsed}
           onToggleCollapse={props.onToggleCollapse}

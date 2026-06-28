@@ -112,10 +112,126 @@ export interface RecentBooking {
   id: string;
   bookingNumber: string;
   service: string;
+  serviceId?: string;
   provider: string;
+  providerId?: string;
   scheduledDate: string;
-  status: string;
+  completedDate?: string;
+  status: BookingStatus;
   totalAmount: number;
+  currency?: string;
+  paymentStatus?: string;
+  notes?: string;
+}
+
+export type BookingStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show'
+  | 'refunded';
+
+export interface BookingListResponse {
+  bookings: RecentBooking[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+export interface CustomerAddress {
+  id: string;
+  label: string;
+  type: 'home' | 'work' | 'other';
+  address: string;
+  building?: string;
+  apartment?: string;
+  floor?: string;
+  instructions?: string;
+  lat?: number;
+  lng?: number;
+  isDefault: boolean;
+  createdAt: string;
+}
+
+export interface MaskedPaymentMethod {
+  id: string;
+  type: 'card' | 'bank_account' | 'wallet';
+  brand?: string;
+  last4: string;
+  expiryMonth?: number;
+  expiryYear?: number;
+  isDefault: boolean;
+  createdAt: string;
+}
+
+export interface ActivityItem {
+  id: string;
+  type: ActivityType;
+  title: string;
+  description: string;
+  metadata?: Record<string, unknown>;
+  timestamp: string;
+  ipAddress?: string;
+  deviceInfo?: string;
+}
+
+export type ActivityType =
+  | 'login'
+  | 'logout'
+  | 'booking_created'
+  | 'booking_completed'
+  | 'booking_cancelled'
+  | 'payment'
+  | 'refund'
+  | 'review_submitted'
+  | 'review_received'
+  | 'profile_update'
+  | 'address_added'
+  | 'address_removed'
+  | 'payment_method_added'
+  | 'coupon_used'
+  | 'support_ticket'
+  | 'flag_added'
+  | 'flag_resolved';
+
+export interface ActivityListResponse {
+  activities: ActivityItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+export interface Message {
+  id: string;
+  senderId: string;
+  senderType: 'admin' | 'user';
+  content: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface MessageListResponse {
+  messages: Message[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
 }
 
 export interface TrustScoreDeduction {
@@ -518,6 +634,138 @@ class CustomerOpsApiService {
       sortOrder: 'asc',
     });
   }
+
+  /**
+   * Get customer's complete booking history with pagination
+   */
+  async getCustomerBookings(
+    customerId: string,
+    params?: {
+      page?: number;
+      limit?: number;
+      status?: BookingStatus | BookingStatus[];
+      startDate?: string;
+      endDate?: string;
+    }
+  ): Promise<BookingListResponse> {
+    const { page = 1, limit = 20, status, startDate, endDate } = params || {};
+
+    const queryParams = new URLSearchParams();
+    queryParams.append('page', page.toString());
+    queryParams.append('limit', limit.toString());
+    if (status) {
+      queryParams.append('status', Array.isArray(status) ? status.join(',') : status);
+    }
+    if (startDate) queryParams.append('startDate', startDate);
+    if (endDate) queryParams.append('endDate', endDate);
+
+    try {
+      const response = await api.get(`/admin/customers/${customerId}/bookings?${queryParams.toString()}`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer bookings');
+    }
+  }
+
+  /**
+   * Get customer's saved addresses
+   * Backend response shape: { success, data: { count, addresses: CustomerAddress[] } }
+   */
+  async getCustomerAddresses(customerId: string): Promise<CustomerAddress[]> {
+    try {
+      const response = await api.get(`/admin/users/${customerId}/addresses`);
+      // Backend returns { data: { count, addresses } } - unwrap the addresses array
+      const payload = response.data?.data;
+      if (Array.isArray(payload)) {
+        return payload as CustomerAddress[];
+      }
+      if (payload && Array.isArray(payload.addresses)) {
+        return payload.addresses as CustomerAddress[];
+      }
+      return [];
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer addresses');
+    }
+  }
+
+  /**
+   * Get customer's masked payment methods
+   */
+  async getCustomerPaymentMethods(customerId: string): Promise<MaskedPaymentMethod[]> {
+    try {
+      const response = await api.get(`/admin/users/${customerId}/payment-methods`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer payment methods');
+    }
+  }
+
+  /**
+   * Get customer's activity timeline
+   */
+  async getCustomerActivity(
+    customerId: string,
+    params?: {
+      page?: number;
+      limit?: number;
+      type?: ActivityType | ActivityType[];
+    }
+  ): Promise<ActivityListResponse> {
+    const { page = 1, limit = 20, type } = params || {};
+
+    const queryParams = new URLSearchParams();
+    queryParams.append('page', page.toString());
+    queryParams.append('limit', limit.toString());
+    if (type) {
+      queryParams.append('type', Array.isArray(type) ? type.join(',') : type);
+    }
+
+    try {
+      const response = await api.get(`/admin/users/${customerId}/activity?${queryParams.toString()}`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer activity');
+    }
+  }
+
+  /**
+   * Send message to customer
+   */
+  async sendCustomerMessage(
+    customerId: string,
+    content: string
+  ): Promise<{ success: boolean; message: Message }> {
+    try {
+      const response = await api.post(`/admin/users/${customerId}/messages`, { content });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'send customer message');
+    }
+  }
+
+  /**
+   * Get message history with customer
+   */
+  async getCustomerMessages(
+    customerId: string,
+    params?: {
+      page?: number;
+      limit?: number;
+    }
+  ): Promise<MessageListResponse> {
+    const { page = 1, limit = 50 } = params || {};
+
+    const queryParams = new URLSearchParams();
+    queryParams.append('page', page.toString());
+    queryParams.append('limit', limit.toString());
+
+    try {
+      const response = await api.get(`/admin/users/${customerId}/messages?${queryParams.toString()}`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer messages');
+    }
+  }
 }
 
 // ============================================
@@ -673,4 +921,119 @@ export const formatFlagType = (type: AbuseFlagType): string => {
     payment_fraud: 'Payment Fraud',
   };
   return labels[type] || type;
+};
+
+// ============================================
+// New Helper Utilities
+// ============================================
+
+export const formatBookingStatus = (status: BookingStatus): string => {
+  const labels: Record<BookingStatus, string> = {
+    pending: 'Pending',
+    confirmed: 'Confirmed',
+    in_progress: 'In Progress',
+    completed: 'Completed',
+    cancelled: 'Cancelled',
+    no_show: 'No Show',
+    refunded: 'Refunded',
+  };
+  return labels[status] || status;
+};
+
+export const getBookingStatusColor = (status: BookingStatus): string => {
+  const colors: Record<BookingStatus, string> = {
+    pending: 'bg-yellow-100 text-yellow-700',
+    confirmed: 'bg-blue-100 text-blue-700',
+    in_progress: 'bg-purple-100 text-purple-700',
+    completed: 'bg-green-100 text-green-700',
+    cancelled: 'bg-gray-100 text-gray-700',
+    no_show: 'bg-orange-100 text-orange-700',
+    refunded: 'bg-red-100 text-red-700',
+  };
+  return colors[status] || 'bg-gray-100 text-gray-700';
+};
+
+export const formatPaymentMethod = (method: MaskedPaymentMethod): string => {
+  if (method.type === 'card' && method.brand) {
+    return `${method.brand} ****${method.last4}`;
+  }
+  if (method.type === 'bank_account') {
+    return `Bank ****${method.last4}`;
+  }
+  if (method.type === 'wallet') {
+    return `Wallet ${method.last4 ? '****' + method.last4 : ''}`;
+  }
+  return `${method.type} ${method.last4 ? '****' + method.last4 : ''}`;
+};
+
+export const formatPaymentMethodExpiry = (method: MaskedPaymentMethod): string | null => {
+  if (method.expiryMonth && method.expiryYear) {
+    return `${method.expiryMonth.toString().padStart(2, '0')}/${method.expiryYear.toString().slice(-2)}`;
+  }
+  return null;
+};
+
+export const formatActivityType = (type: ActivityType): string => {
+  const labels: Record<ActivityType, string> = {
+    login: 'Login',
+    logout: 'Logout',
+    booking_created: 'Booking Created',
+    booking_completed: 'Booking Completed',
+    booking_cancelled: 'Booking Cancelled',
+    payment: 'Payment',
+    refund: 'Refund',
+    review_submitted: 'Review Submitted',
+    review_received: 'Review Received',
+    profile_update: 'Profile Updated',
+    address_added: 'Address Added',
+    address_removed: 'Address Removed',
+    payment_method_added: 'Payment Method Added',
+    coupon_used: 'Coupon Used',
+    support_ticket: 'Support Ticket',
+    flag_added: 'Flag Added',
+    flag_resolved: 'Flag Resolved',
+  };
+  return labels[type] || type;
+};
+
+export const getActivityIcon = (type: ActivityType): string => {
+  // Return icon name for use with lucide-react
+  const icons: Record<ActivityType, string> = {
+    login: 'LogIn',
+    logout: 'LogOut',
+    booking_created: 'CalendarPlus',
+    booking_completed: 'CalendarCheck',
+    booking_cancelled: 'CalendarX',
+    payment: 'CreditCard',
+    refund: 'RotateCcw',
+    review_submitted: 'Star',
+    review_received: 'Star',
+    profile_update: 'User',
+    address_added: 'MapPin',
+    address_removed: 'MapPinOff',
+    payment_method_added: 'CreditCard',
+    coupon_used: 'Tag',
+    support_ticket: 'MessageCircle',
+    flag_added: 'Flag',
+    flag_resolved: 'CheckCircle',
+  };
+  return icons[type] || 'Activity';
+};
+
+export const formatAddress = (address: CustomerAddress): string => {
+  const parts: string[] = [];
+  if (address.building) parts.push(`Building ${address.building}`);
+  if (address.apartment) parts.push(`Apt ${address.apartment}`);
+  if (address.floor) parts.push(`Floor ${address.floor}`);
+  parts.push(address.address);
+  return parts.join(', ');
+};
+
+export const getAddressTypeLabel = (type: CustomerAddress['type']): string => {
+  const labels: Record<CustomerAddress['type'], string> = {
+    home: 'Home',
+    work: 'Work',
+    other: 'Other',
+  };
+  return labels[type] || 'Other';
 };

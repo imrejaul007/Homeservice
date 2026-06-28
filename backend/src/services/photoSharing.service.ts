@@ -319,26 +319,60 @@ export class PhotoSharingService {
 
   /**
    * Delete photo
+   * SECURITY FIX: Added ownership verification and Cloudinary cleanup
    */
-  async deletePhoto(photoId: string): Promise<void> {
+  async deletePhoto(photoId: string, userId?: string): Promise<void> {
     if (!Types.ObjectId.isValid(photoId)) {
       throw ApiError.badRequest('Invalid photo ID');
     }
 
-    const photo = await PhotoModel.findByIdAndUpdate(
-      photoId,
-      { $set: { status: 'deleted' } },
-      { new: true }
-    );
+    const photo = await PhotoModel.findById(photoId);
 
     if (!photo) {
       throw ApiError.notFound('Photo not found');
     }
 
+    // SECURITY FIX: Verify ownership if userId provided
+    if (userId && Types.ObjectId.isValid(userId)) {
+      if (!photo.userId.equals(new Types.ObjectId(userId))) {
+        throw ApiError.forbidden('You do not have permission to delete this photo');
+      }
+    }
+
+    // SECURITY FIX: Delete actual Cloudinary image before marking as deleted
+    try {
+      const { deleteFromCloudinary, extractPublicIdFromUrl } = await import('../utils/cloudinary');
+      const publicId = extractPublicIdFromUrl(photo.url);
+      if (publicId) {
+        await deleteFromCloudinary(publicId);
+        logger.info('Cloudinary image deleted', {
+          context: 'PhotoSharingService',
+          action: 'CLOUDINARY_IMAGE_DELETED',
+          photoId,
+          publicId,
+        });
+      }
+    } catch (cloudinaryError) {
+      // Log but don't fail - image might already be deleted
+      logger.warn('Failed to delete from Cloudinary', {
+        context: 'PhotoSharingService',
+        action: 'CLOUDINARY_DELETE_ERROR',
+        photoId,
+        error: cloudinaryError instanceof Error ? cloudinaryError.message : String(cloudinaryError),
+      });
+    }
+
+    await PhotoModel.findByIdAndUpdate(
+      photoId,
+      { $set: { status: 'deleted' } },
+      { new: true }
+    );
+
     logger.info('Photo deleted', {
       context: 'PhotoSharingService',
       action: 'PHOTO_DELETED',
       photoId,
+      deletedBy: userId,
     });
   }
 

@@ -1,8 +1,14 @@
 // API Configuration
-// Uses getApiUrl() for proper mobile detection and fallback
+// Uses getApiUrl() for proper mobile detection and same-origin /api fallback in production
 import { getApiUrl } from '../lib/getApiUrl';
 
-export const API_BASE_URL = getApiUrl();
+export { getApiUrl };
+
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD && typeof window !== 'undefined'
+    ? `${window.location.origin}/api`
+    : getApiUrl());
 
 export const API_ENDPOINTS = {
   // Authentication

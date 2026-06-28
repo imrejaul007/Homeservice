@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Clock, TrendingUp, X, ChevronRight, Loader2, Sparkles, Scissors, Flower2, Palette } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
+import { useCategories } from '@/hooks/useCategories';
+import { useTrendingSearchTerms } from '@/hooks/useTrendingSearchTerms';
 import { cn } from '@/lib/utils';
 
 interface HeaderSearchDropdownProps {
@@ -9,14 +11,6 @@ interface HeaderSearchDropdownProps {
   onClose: () => void;
   isHeroOverlay?: boolean;
 }
-
-// NILIN brand category definitions
-const CATEGORIES = [
-  { name: 'Hair', icon: Scissors, slug: 'hair' },
-  { name: 'Spa', icon: Flower2, slug: 'spa' },
-  { name: 'Nails', icon: Sparkles, slug: 'nails' },
-  { name: 'Makeup', icon: Palette, slug: 'makeup' },
-];
 
 // NILIN brand category tokens
 const CATEGORY_TOKENS: Record<string, { bg: string; text: string; glow: string }> = {
@@ -26,14 +20,12 @@ const CATEGORY_TOKENS: Record<string, { bg: string; text: string; glow: string }
   makeup: { bg: 'bg-nilin-blush', text: 'text-nilin-rose', glow: 'shadow-nilin-rose/20' },
 };
 
-// Trending searches
-const TRENDING_SEARCHES = [
-  { term: 'Manicure', category: 'Nails' },
-  { term: 'Hair treatment', category: 'Hair' },
-  { term: 'Hot stone massage', category: 'Spa' },
-  { term: 'Bridal makeup', category: 'Makeup' },
-  { term: 'Hair coloring', category: 'Hair' },
-];
+const CATEGORY_ICONS: Record<string, typeof Scissors> = {
+  hair: Scissors,
+  spa: Flower2,
+  nails: Sparkles,
+  makeup: Palette,
+};
 
 const HeaderSearchDropdown: React.FC<HeaderSearchDropdownProps> = ({
   isOpen,
@@ -54,6 +46,8 @@ const HeaderSearchDropdown: React.FC<HeaderSearchDropdownProps> = ({
     getSearchSuggestions,
     addToSearchHistory,
   } = useSearchStore();
+  const { categories: apiCategories } = useCategories();
+  const { terms: trendingTerms } = useTrendingSearchTerms(5);
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -265,7 +259,7 @@ const HeaderSearchDropdown: React.FC<HeaderSearchDropdownProps> = ({
             <button
               onClick={clearQuery}
               className={cn(
-                'absolute right-4 top-1/2 -translate-y-1/2 p-1.5 rounded-full',
+                'absolute right-4 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center p-1.5 rounded-full',
                 'hover:bg-nilin-blush/60 active:bg-nilin-blush/80',
                 'transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/50'
               )}
@@ -417,12 +411,12 @@ const HeaderSearchDropdown: React.FC<HeaderSearchDropdownProps> = ({
               <span>Popular Searches</span>
             </div>
             <div className="space-y-1">
-              {TRENDING_SEARCHES.map((item, index) => (
+              {trendingTerms.map((term, index) => (
                 <button
-                  key={`trending-${index}`}
-                  onClick={() => handleSuggestionClick(item.term)}
+                  key={`trending-${term}-${index}`}
+                  onClick={() => handleSuggestionClick(term)}
                   className={cn(
-                    'w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all duration-150',
+                    'w-full text-left min-h-11 px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all duration-150',
                     'focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/50 focus-visible:ring-offset-1',
                     selectedIndex === index
                       ? 'bg-nilin-coral/10 text-nilin-coral shadow-sm scale-[1.01]'
@@ -430,10 +424,7 @@ const HeaderSearchDropdown: React.FC<HeaderSearchDropdownProps> = ({
                   )}
                 >
                   <TrendingUp className="w-4 h-4 flex-shrink-0 text-nilin-coral" aria-hidden="true" />
-                  <span className="flex-1 text-sm font-medium">{item.term}</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-nilin-blush/60 text-nilin-warmGray font-medium transition-colors duration-150">
-                    {item.category}
-                  </span>
+                  <span className="flex-1 text-sm font-medium truncate">{term}</span>
                 </button>
               ))}
             </div>
@@ -460,15 +451,15 @@ const HeaderSearchDropdown: React.FC<HeaderSearchDropdownProps> = ({
             <div className="text-xs font-semibold uppercase tracking-wider text-nilin-warmGray mb-3">
               Browse Categories
             </div>
-            <div className="grid grid-cols-4 gap-2">
-              {CATEGORIES.map((category) => {
-                const Icon = category.icon;
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {apiCategories.slice(0, 4).map((category) => {
+                const Icon = CATEGORY_ICONS[category.slug] || Sparkles;
                 return (
                   <button
                     key={category.slug}
                     onClick={() => handleCategoryClick(category.slug)}
                     className={cn(
-                      'group relative flex flex-col items-center gap-1.5 p-3 rounded-xl transition-all duration-200',
+                      'group relative flex flex-col items-center gap-1.5 min-h-11 p-3 rounded-xl transition-all duration-200',
                       'hover:shadow-md hover:-translate-y-1 active:translate-y-0',
                       'focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/50 focus-visible:ring-offset-1',
                       'overflow-hidden'

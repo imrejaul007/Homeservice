@@ -167,15 +167,25 @@ export const circuitBreakers = new Map<string, CircuitBreaker>();
 // Circuit names enum for type-safe references
 export const CIRCUIT_NAMES = {
   PAYMENT: 'payment',
+  STRIPE: 'stripe',
   AI_PREDICTION: 'ai_prediction',
   AI_RECOMMENDATION: 'ai_recommendation',
   AI_CHURN: 'ai_churn',
   AI_DEMAND: 'ai_demand',
   AI_SMART_PRICING: 'ai_smart_pricing',
+  AI_LLM: 'ai_llm',
   NOTIFICATION: 'notification',
   EMAIL: 'email',
   SMS: 'sms',
+  TWILIO: 'twilio',
+  MSG91: 'msg91',
+  SEARCH: 'search',
+  CLOUDINARY: 'cloudinary',
+  GOOGLE_MAPS: 'google_maps',
+  FIREBASE: 'firebase',
+  AUTH: 'auth',
   EXTERNAL_API: 'external_api',
+  PDF: 'pdf',
 } as const;
 
 export type CircuitName = typeof CIRCUIT_NAMES[keyof typeof CIRCUIT_NAMES];
@@ -308,4 +318,117 @@ export const resetAllCircuitBreakers = (): void => {
   for (const [, circuit] of circuitBreakers.entries()) {
     circuit.reset();
   }
+};
+
+// ============================================
+// Pre-configured Circuit Breakers for External Services
+// ============================================
+
+/**
+ * Initialize all external service circuit breakers
+ * Call this once at application startup
+ */
+export const initializeExternalServiceCircuits = (): void => {
+  // High priority - Payment
+  createCircuitBreaker(CIRCUIT_NAMES.STRIPE, {
+    failureThreshold: 3,
+    resetTimeout: 30000,
+    halfOpenMaxAttempts: 2,
+    name: CIRCUIT_NAMES.STRIPE,
+  });
+
+  // High priority - SMS providers
+  createCircuitBreaker(CIRCUIT_NAMES.TWILIO, {
+    failureThreshold: 5,
+    resetTimeout: 30000,
+    halfOpenMaxAttempts: 3,
+    name: CIRCUIT_NAMES.TWILIO,
+  });
+
+  createCircuitBreaker(CIRCUIT_NAMES.MSG91, {
+    failureThreshold: 5,
+    resetTimeout: 30000,
+    halfOpenMaxAttempts: 3,
+    name: CIRCUIT_NAMES.MSG91,
+  });
+
+  // Search service
+  createCircuitBreaker(CIRCUIT_NAMES.SEARCH, {
+    failureThreshold: 3,
+    resetTimeout: 15000,
+    halfOpenMaxAttempts: 2,
+    name: CIRCUIT_NAMES.SEARCH,
+  });
+
+  // Cloud/Storage
+  createCircuitBreaker(CIRCUIT_NAMES.CLOUDINARY, {
+    failureThreshold: 5,
+    resetTimeout: 30000,
+    halfOpenMaxAttempts: 2,
+    name: CIRCUIT_NAMES.CLOUDINARY,
+  });
+
+  // AI/LLM services
+  createCircuitBreaker(CIRCUIT_NAMES.AI_LLM, {
+    failureThreshold: 3,
+    resetTimeout: 60000,
+    halfOpenMaxAttempts: 2,
+    name: CIRCUIT_NAMES.AI_LLM,
+  });
+
+  // Google Maps
+  createCircuitBreaker(CIRCUIT_NAMES.GOOGLE_MAPS, {
+    failureThreshold: 5,
+    resetTimeout: 30000,
+    halfOpenMaxAttempts: 2,
+    name: CIRCUIT_NAMES.GOOGLE_MAPS,
+  });
+
+  // Email (already exists but with stricter defaults for external)
+  createCircuitBreaker(CIRCUIT_NAMES.EMAIL, {
+    failureThreshold: 10,
+    resetTimeout: 30000,
+    halfOpenMaxAttempts: 3,
+    name: CIRCUIT_NAMES.EMAIL,
+  });
+
+  logger.info('External service circuit breakers initialized', {
+    action: 'CIRCUIT_INIT',
+    circuits: Array.from(circuitBreakers.keys()),
+  });
+};
+
+/**
+ * Get all circuit breaker stats for monitoring
+ */
+export const getCircuitBreakerDashboard = (): {
+  summary: {
+    total: number;
+    healthy: number;
+    degraded: number;
+    open: number;
+  };
+  circuits: Array<{
+    name: string;
+    state: CircuitState;
+    stats: CircuitBreakerStats;
+  }>;
+} => {
+  const stats = getAllCircuitBreakerStats();
+  const open = stats.filter(s => s.state === CircuitState.OPEN).length;
+  const halfOpen = stats.filter(s => s.state === CircuitState.HALF_OPEN).length;
+
+  return {
+    summary: {
+      total: stats.length,
+      healthy: stats.length - open - halfOpen,
+      degraded: halfOpen,
+      open,
+    },
+    circuits: stats.map(s => ({
+      name: s.name,
+      state: s.state,
+      stats: s,
+    })),
+  };
 };

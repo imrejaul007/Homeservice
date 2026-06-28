@@ -3,6 +3,7 @@ import Booking from '../models/booking.model';
 import Experience from '../models/experience.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { escapeRegex } from '../utils/formatBookingListItem';
 
 /** Extract Cloudinary URLs from multer-uploaded files */
 function extractUploadedImageUrls(req: Request): string[] {
@@ -81,11 +82,12 @@ export const getPublicExperiences = asyncHandler(async (req: Request, res: Respo
     query.rating = { $gte: parseInt(minRating as string, 10) };
   }
 
-  // Search by title or description
+  // Search by title or description (with regex escape for security)
   if (search) {
+    const escapedSearch = escapeRegex(search as string);
     query.$or = [
-      { title: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } },
+      { title: { $regex: escapedSearch, $options: 'i' } },
+      { description: { $regex: escapedSearch, $options: 'i' } },
     ];
   }
 

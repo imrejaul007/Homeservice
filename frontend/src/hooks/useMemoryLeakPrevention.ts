@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
  * Memory Leak Prevention Hooks
@@ -142,7 +142,7 @@ export function useAbortController(): { signal: AbortSignal } {
     };
   }, []);
 
-  return { signal: abortControllerRef.current?.signal! };
+  return { signal: abortControllerRef.current?.signal };
 }
 
 // =============================================================================
@@ -234,9 +234,6 @@ export function useAsync<T>(
 
   return { ...state, execute, reset };
 }
-
-// Need to import useState
-import { useState } from 'react';
 
 // =============================================================================
 // useTimeout - Proper cleanup of setTimeout

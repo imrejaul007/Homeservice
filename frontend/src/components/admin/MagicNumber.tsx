@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   TrendingUp,
@@ -102,54 +103,11 @@ export const MagicNumber: React.FC<MagicNumberProps> = ({
         setData(response.data.data);
         setStats(response.data.data.stats);
       } else {
-        // Mock data for SaaS Magic Number = New ARR from Sales & Marketing / Previous Quarter S&M Spend
-        setData({
-          currentValue: 1.45,
-          previousValue: 1.28,
-          change: 0.17,
-          changePercent: 13.3,
-          isGood: true,
-          components: {
-            newMRR: 456000,
-            expansionMRR: 123000,
-            contractionMRR: -45000,
-            churnedMRR: -78000
-          },
-          salesEfficiency: 1.45,
-          netRevenueRetention: 112,
-          grossRevenueRetention: 89
-        });
-        setStats({
-          currentQuarter: 'Q2 2024',
-          magicNumber: 1.45,
-          previousMagicNumber: 1.28,
-          targetMagicNumber: 1.2,
-          benchmark: 1.0,
-          efficiency: 'excellent',
-          trend: [
-            { quarter: 'Q3 2023', magicNumber: 0.85, target: 1.0 },
-            { quarter: 'Q4 2023', magicNumber: 0.92, target: 1.0 },
-            { quarter: 'Q1 2024', magicNumber: 1.28, target: 1.1 },
-            { quarter: 'Q2 2024', magicNumber: 1.45, target: 1.2 }
-          ],
-          breakdown: {
-            newBusiness: 456000,
-            expansion: 123000,
-            contraction: -45000,
-            churn: -78000,
-            netNew: 456000
-          },
-          recommendations: [
-            'Current magic number of 1.45 indicates excellent sales efficiency',
-            'For every AED 1 spent on S&M, generating AED 1.45 in new ARR',
-            'Consider increasing S&M investment to accelerate growth',
-            'Net revenue retention of 112% shows strong expansion performance'
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching magic number data:', err);
-      setError('Failed to load magic number data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

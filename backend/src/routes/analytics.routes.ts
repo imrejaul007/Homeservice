@@ -21,8 +21,66 @@ import {
   GeographicAnalytics,
 } from '../services/analytics.service';
 import { ingestAnalyticsEventBatch } from '../services/analyticsEventsIngest.service';
+import PDFDocument from 'pdfkit';
+import { format as formatDate } from 'date-fns';
 
 const router = Router();
+
+/**
+ * Get table headers based on export format
+ */
+function getTableHeaders(format: string): string[] {
+  switch (format) {
+    case 'bookings':
+      return ['Date', 'Customer', 'Provider', 'Status'];
+    case 'revenue':
+      return ['Date', 'Revenue', 'Bookings', 'Avg Value'];
+    case 'providers':
+      return ['Name', 'Email', 'Status', 'Joined'];
+    case 'services':
+      return ['Name', 'Category', 'Status', 'Provider'];
+    default:
+      return ['ID', 'Name', 'Status', 'Date'];
+  }
+}
+
+/**
+ * Format a data row for the PDF table based on export format
+ */
+function formatTableRow(row: any, format: string): string[] {
+  switch (format) {
+    case 'bookings':
+      return [
+        row.createdAt ? formatDate(new Date(row.createdAt), 'MM/dd/yy') : 'N/A',
+        row.customerId?.firstName ? `${row.customerId.firstName} ${row.customerId.lastName || ''}` : row.customerId?.email || 'N/A',
+        row.providerId?.firstName ? `${row.providerId.firstName} ${row.providerId.lastName || ''}` : row.providerId?.email || 'N/A',
+        row.status || 'N/A'
+      ];
+    case 'revenue':
+      return [
+        row._id || 'N/A',
+        `$${(row.totalRevenue || 0).toFixed(2)}`,
+        String(row.totalBookings || 0),
+        `$${(row.avgBookingValue || 0).toFixed(2)}`
+      ];
+    case 'providers':
+      return [
+        row.userId?.firstName ? `${row.userId.firstName} ${row.userId.lastName || ''}` : 'N/A',
+        row.userId?.email || 'N/A',
+        row.userId?.accountStatus || row.verificationStatus?.overall || 'N/A',
+        row.userId?.createdAt ? formatDate(new Date(row.userId.createdAt), 'MM/dd/yy') : 'N/A'
+      ];
+    case 'services':
+      return [
+        row.name || 'N/A',
+        row.category || 'N/A',
+        row.status || 'N/A',
+        row.providerId?.firstName ? `${row.providerId.firstName} ${row.providerId.lastName || ''}` : 'N/A'
+      ];
+    default:
+      return ['N/A', 'N/A', 'N/A', 'N/A'];
+  }
+}
 
 function parseAnalyticsDateRange(query: Request['query']): { start: Date; end: Date; period?: string } {
   const { startDate, endDate, period } = query;
@@ -261,7 +319,7 @@ router.get('/dashboard', authenticate, requireRole('admin'), asyncHandler(async 
  */
 router.get('/export/:type', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { type } = req.params;
-  const { period, startDate, endDate, format } = req.query;
+  const { period, startDate, endDate, format: exportFormatQuery } = req.query;
 
   // Validate export type
   const validTypes = ['csv', 'json', 'pdf'];
@@ -309,7 +367,7 @@ router.get('/export/:type', authenticate, requireRole('admin'), asyncHandler(asy
   })();
 
   // Fetch data based on format parameter or default
-  const exportFormat = format as string || 'bookings';
+  const exportFormat = (exportFormatQuery as string) || 'bookings';
 
   let data: any;
   let filename: string;
@@ -424,22 +482,173 @@ router.get('/export/:type', authenticate, requireRole('admin'), asyncHandler(asy
     return res.send(csvRows.join('\n'));
   }
 
-  // For PDF, return a stub with instructions (actual PDF generation would require a library like pdfkit)
+  // For PDF export, generate a properly formatted PDF document
   if (type === 'pdf') {
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
-    return res.json({
-      success: true,
-      message: 'PDF export is not yet implemented. Data exported as JSON instead.',
-      data,
-      metadata: {
-        exportType: 'pdf',
-        format: exportFormat,
-        dateRange,
-        recordCount: Array.isArray(data) ? data.length : 0,
-        exportedAt: new Date().toISOString()
+    try {
+      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      const chunks: Buffer[] = [];
+
+      doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+      doc.on('end', () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        return res.end(pdfBuffer);
+      });
+
+      // Helper function to check if we need a new page
+      const checkPageBreak = (yPos: number, requiredSpace: number = 100) => {
+        if (yPos + requiredSpace > doc.page.height - doc.page.margins.bottom) {
+          doc.addPage();
+          return doc.y;
+        }
+        return yPos;
+      };
+
+      // Title
+      doc.fontSize(24).font('Helvetica-Bold').text('Analytics Report', { align: 'center' });
+      doc.moveDown(0.5);
+
+      // Report metadata
+      doc.fontSize(12).font('Helvetica').fillColor('#666666');
+      doc.text(`Export Type: ${exportFormat.charAt(0).toUpperCase() + exportFormat.slice(1)}`, { align: 'center' });
+      doc.text(`Period: ${formatDate(dateRange.startDate, 'MMM dd, yyyy')} - ${formatDate(dateRange.endDate, 'MMM dd, yyyy')}`, { align: 'center' });
+      doc.text(`Generated: ${formatDate(new Date(), 'MMM dd, yyyy HH:mm')}`, { align: 'center' });
+      doc.text(`Records: ${Array.isArray(data) ? data.length : 0}`, { align: 'center' });
+      doc.moveDown(1);
+
+      // Summary statistics
+      doc.fontSize(16).font('Helvetica-Bold').fillColor('#333333');
+      doc.text('Summary Statistics', { underline: true });
+      doc.moveDown(0.5);
+
+      let y = doc.y;
+      if (exportFormat === 'bookings' && Array.isArray(data)) {
+        const totalBookings = data.length;
+        const completedBookings = data.filter((b: any) => b.status === 'completed').length;
+        const pendingBookings = data.filter((b: any) => ['pending', 'confirmed'].includes(b.status)).length;
+        const cancelledBookings = data.filter((b: any) => b.status === 'cancelled').length;
+        const totalRevenue = data
+          .filter((b: any) => b.pricing?.totalAmount)
+          .reduce((sum: number, b: any) => sum + (b.pricing?.totalAmount || 0), 0);
+
+        doc.fontSize(11).font('Helvetica');
+        doc.text(`Total Bookings: ${totalBookings}`);
+        doc.text(`Completed: ${completedBookings}`);
+        doc.text(`Pending/Confirmed: ${pendingBookings}`);
+        doc.text(`Cancelled: ${cancelledBookings}`);
+        doc.text(`Total Revenue: $${totalRevenue.toFixed(2)}`);
+      } else if (exportFormat === 'revenue' && Array.isArray(data)) {
+        const totalRevenue = data.reduce((sum: number, r: any) => sum + (r.totalRevenue || 0), 0);
+        const totalBookings = data.reduce((sum: number, r: any) => sum + (r.totalBookings || 0), 0);
+        const avgValue = totalBookings > 0 ? totalRevenue / totalBookings : 0;
+
+        doc.fontSize(11).font('Helvetica');
+        doc.text(`Total Revenue: $${totalRevenue.toFixed(2)}`);
+        doc.text(`Total Bookings: ${totalBookings}`);
+        doc.text(`Average Booking Value: $${avgValue.toFixed(2)}`);
+      } else if (exportFormat === 'providers' && Array.isArray(data)) {
+        const totalProviders = data.length;
+        const activeProviders = data.filter((p: any) => p.userId?.accountStatus === 'active').length;
+
+        doc.fontSize(11).font('Helvetica');
+        doc.text(`Total Providers: ${totalProviders}`);
+        doc.text(`Active Providers: ${activeProviders}`);
+      } else if (exportFormat === 'services' && Array.isArray(data)) {
+        const totalServices = data.length;
+        const activeServices = data.filter((s: any) => s.status === 'active').length;
+
+        doc.fontSize(11).font('Helvetica');
+        doc.text(`Total Services: ${totalServices}`);
+        doc.text(`Active Services: ${activeServices}`);
       }
-    });
+
+      doc.moveDown(1);
+      y = doc.y;
+
+      // Data table
+      if (Array.isArray(data) && data.length > 0) {
+        // Section header
+        doc.fontSize(16).font('Helvetica-Bold').fillColor('#333333');
+        y = checkPageBreak(doc.y, 60);
+        doc.text('Data Table', { underline: true });
+        doc.moveDown(0.5);
+
+        // Table header
+        y = checkPageBreak(doc.y, 30);
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#ffffff');
+        const tableTop = y;
+        const colWidth = (doc.page.width - 100) / 4;
+
+        // Draw header row background
+        doc.rect(50, tableTop - 5, doc.page.width - 100, 20).fill('#333333');
+        doc.fillColor('#ffffff');
+
+        const headers = getTableHeaders(exportFormat);
+        headers.forEach((header: string, i: number) => {
+          doc.text(header, 55 + i * colWidth, tableTop, { width: colWidth - 10 });
+        });
+
+        y = tableTop + 25;
+        doc.fontSize(8).font('Helvetica').fillColor('#333333');
+
+        // Data rows (limit to first 50 rows for readability)
+        const displayData = data.slice(0, 50);
+        for (const row of displayData) {
+          y = checkPageBreak(y, 25);
+
+          // Alternate row background
+          if (displayData.indexOf(row) % 2 === 0) {
+            doc.rect(50, y - 5, doc.page.width - 100, 18).fill('#f5f5f5');
+          }
+
+          const rowData = formatTableRow(row, exportFormat);
+          rowData.forEach((cell: string, i: number) => {
+            doc.text(cell, 55 + i * colWidth, y, { width: colWidth - 10 });
+          });
+          y += 18;
+        }
+
+        if (data.length > 50) {
+          doc.moveDown(0.5);
+          doc.fontSize(10).font('Helvetica-Oblique').fillColor('#666666');
+          doc.text(`... and ${data.length - 50} more records (showing first 50)`, { align: 'center' });
+        }
+      } else {
+        doc.fontSize(12).font('Helvetica-Oblique').fillColor('#666666');
+        doc.text('No data available for the selected criteria.', { align: 'center' });
+      }
+
+      // Footer
+      doc.fontSize(8).font('Helvetica').fillColor('#999999');
+      doc.text(
+        'This report was automatically generated. For questions, contact support.',
+        50,
+        doc.page.height - 50,
+        { align: 'center' }
+      );
+
+      doc.end();
+    } catch (pdfError) {
+      console.error('PDF generation error:', pdfError);
+      // Fallback to JSON on error
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
+      return res.json({
+        success: true,
+        message: 'PDF generation failed. Data exported as JSON instead.',
+        data,
+        metadata: {
+          exportType: 'pdf-fallback',
+          format: exportFormat,
+          dateRange,
+          recordCount: Array.isArray(data) ? data.length : 0,
+          exportedAt: new Date().toISOString()
+        }
+      });
+    }
+    return; // Response handled in doc.on('end')
   }
 
   // Fallback for unexpected types (should not reach here due to validation above)

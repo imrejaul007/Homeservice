@@ -75,7 +75,9 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const isProvider = user?.role === 'provider';
+  const messagesPath = isProvider ? '/provider/messages' : '/customer/messages/new';
   const [isOpen, setIsOpen] = useState(false);
   const [isReady, setIsReady] = useState(false);
 
@@ -120,14 +122,12 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
 
   const handleStartConversation = () => {
     setIsOpen(false);
-    // Navigate to new message page
-    navigate('/customer/messages/new');
+    navigate(messagesPath);
   };
 
   const handleHumanTransfer = () => {
-    // Close chatbot and navigate to message creation
     setIsOpen(false);
-    navigate('/customer/messages/new');
+    navigate(messagesPath);
   };
 
   // Don't render if on hidden route or not authenticated or not ready yet

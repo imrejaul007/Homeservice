@@ -1,3 +1,40 @@
+// Duration Variant type for service pricing options
+export interface DurationVariant {
+  duration: number;
+  price: number;
+  label: string;
+}
+
+// Add-On type for optional service extras
+export interface AddOn {
+  name: string;
+  price: number;
+  description?: string;
+}
+
+// Service status type
+export type ServiceStatus = 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
+
+// Service Form Data type for add/edit service forms
+export interface ServiceFormData {
+  name: string;
+  category: string;
+  subcategory: string;
+  description: string;
+  shortDescription: string;
+  duration: number;
+  durationOptions: DurationVariant[];
+  addOns: AddOn[];
+  price: {
+    amount: number;
+    currency: string;
+    type: 'fixed' | 'hourly' | 'custom';
+  };
+  tags: string[];
+  images: string[];
+  status?: ServiceStatus;
+}
+
 // Unified Service type that works with both search API and components
 export interface Service {
   _id: string;
@@ -40,8 +77,9 @@ export interface Service {
     average?: number;
     count?: number;
   };
-  status?: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
+  status?: ServiceStatus;
   isActive: boolean;
+  rejectionReason?: string;
   isFeatured?: boolean;
   isPopular?: boolean;
   isNew?: boolean;

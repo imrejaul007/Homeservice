@@ -6,8 +6,9 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from 'recharts';
-import { Star, ThumbsUp, ThumbsDown, Loader, MessageSquare, Send } from 'lucide-react';
+import { Star, ThumbsUp, ThumbsDown, Loader, MessageSquare, Send, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface NPSSurveyProps {
   customerId?: string;
@@ -32,15 +33,15 @@ interface NPSStats {
   responseRate: number;
 }
 
-const MOCK_STATS: NPSStats = {
-  currentScore: 72,
-  responseCount: 156,
-  promoters: 112,
-  passives: 28,
-  detractors: 16,
-  averageScore: 8.4,
-  trend: 5,
-  responseRate: 68,
+const EMPTY_STATS: NPSStats = {
+  currentScore: 0,
+  responseCount: 0,
+  promoters: 0,
+  passives: 0,
+  detractors: 0,
+  averageScore: 0,
+  trend: 0,
+  responseRate: 0,
 };
 
 const SCORE_LABELS: Record<number, string> = {
@@ -66,7 +67,8 @@ export const NPSSurvey: React.FC<NPSSurveyProps> = ({
   autoShow = false,
 }) => {
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<NPSStats>(MOCK_STATS);
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<NPSStats>(EMPTY_STATS);
   const [currentScore, setCurrentScore] = useState<number | null>(null);
   const [feedback, setFeedback] = useState('');
   const [showSurvey, setShowSurvey] = useState(autoShow);
@@ -76,8 +78,17 @@ export const NPSSurvey: React.FC<NPSSurveyProps> = ({
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      setLoading(false);
+      setError(null);
+
+      try {
+        const apiData = await analyticsApi.getCustomerNPS();
+        setStats(apiData);
+      } catch (err) {
+        setStats(EMPTY_STATS);
+        setError(err instanceof Error ? err.message : 'Failed to load NPS data');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [customerId]);
@@ -91,30 +102,19 @@ export const NPSSurvey: React.FC<NPSSurveyProps> = ({
 
     setIsSubmitting(true);
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    onSubmit?.(currentScore, feedback);
-    setIsSubmitting(false);
-    setIsSubmitted(true);
-
-    // Update local stats
-    const newPromoters = currentScore >= PROMOTER_THRESHOLD ? stats.promoters + 1 : stats.promoters;
-    const newDetractors = currentScore < DETRACTOR_THRESHOLD ? stats.detractors + 1 : stats.detractors;
-    const newPassives = currentScore >= DETRACTOR_THRESHOLD && currentScore < PROMOTER_THRESHOLD
-      ? stats.passives + 1
-      : stats.passives;
-    const total = stats.responseCount + 1;
-    const newScore = Math.round(((newPromoters - newDetractors) / total) * 100);
-
-    setStats({
-      ...stats,
-      currentScore: newScore,
-      responseCount: total,
-      promoters: newPromoters,
-      passives: newPassives,
-      detractors: newDetractors,
-    });
+    try {
+      const updatedStats = await analyticsApi.submitCustomerNPS({
+        score: currentScore,
+        feedback: feedback || undefined,
+      });
+      onSubmit?.(currentScore, feedback);
+      setStats(updatedStats);
+      setIsSubmitted(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit NPS score');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const renderScoreButton = (score: number) => {
@@ -192,6 +192,9 @@ export const NPSSurvey: React.FC<NPSSurveyProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {loading ? (
+            <Loader className="h-4 w-4 animate-spin text-gray-400" />
+          ) : (
           <span
             className={`px-3 py-1 rounded-full text-sm font-medium ${
               stats.currentScore >= 70
@@ -203,8 +206,16 @@ export const NPSSurvey: React.FC<NPSSurveyProps> = ({
           >
             {stats.currentScore > 0 ? '+' : ''}{stats.currentScore}
           </span>
+          )}
         </div>
       </div>
+
+      {error && (
+        <div className="mb-4 flex items-center gap-2 text-red-600 text-sm">
+          <AlertCircle className="h-4 w-4" />
+          <p>{error}</p>
+        </div>
+      )}
 
       {/* Survey Section */}
       <AnimatePresence mode="wait">

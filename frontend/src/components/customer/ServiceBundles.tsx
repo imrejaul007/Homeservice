@@ -693,14 +693,11 @@ export const ServiceBundles: React.FC<ServiceBundlesProps> = ({
       if (response.success && response.data?.bundles) {
         setBundles((response.data.bundles ?? []) as Bundle[]);
       } else {
-        // Fallback to mock data for development
-        setBundles(getMockBundles());
+        setError('Failed to load bundles. Please try again.');
       }
     } catch (err) {
       console.error('Error fetching bundles:', err);
-      // Use mock data as fallback
-      setBundles(getMockBundles());
-      setError('Failed to load bundles. Showing demo data.');
+      setError('Failed to load bundles. Please check your connection and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -868,77 +865,6 @@ export const ServiceBundles: React.FC<ServiceBundlesProps> = ({
     </div>
   );
 };
-
-// =============================================================================
-// Mock Data for Development
-// =============================================================================
-
-function getMockBundles(): Bundle[] {
-  return [
-    {
-      _id: 'bundle-1',
-      name: 'Complete Home Clean',
-      description: 'Deep cleaning package including all rooms, kitchen, and bathrooms with premium eco-friendly products.',
-      services: [
-        { serviceId: 's1', serviceName: 'Living Room Deep Clean', quantity: 1, originalPrice: 150 },
-        { serviceId: 's2', serviceName: 'Kitchen Deep Clean', quantity: 1, originalPrice: 120 },
-        { serviceId: 's3', serviceName: 'Bathroom Sanitization', quantity: 2, originalPrice: 80 },
-        { serviceId: 's4', serviceName: 'Bedroom Dusting', quantity: 2, originalPrice: 60 },
-      ],
-      originalPrice: 490,
-      bundlePrice: 349,
-      savingsAmount: 141,
-      savingsPercentage: 29,
-      validFrom: new Date().toISOString(),
-      validUntil: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-      maxRedemptions: 50,
-      redemptionsUsed: 23,
-      isActive: true,
-      rating: { average: 4.8, count: 156 },
-      tags: ['Popular', 'Best Value'],
-    },
-    {
-      _id: 'bundle-2',
-      name: 'Spa Day Package',
-      description: 'Full relaxation experience with massage, facial, and aromatherapy treatment.',
-      services: [
-        { serviceId: 's5', serviceName: 'Swedish Massage (60 min)', quantity: 1, originalPrice: 200 },
-        { serviceId: 's6', serviceName: 'Signature Facial', quantity: 1, originalPrice: 180 },
-        { serviceId: 's7', serviceName: 'Aromatherapy Session', quantity: 1, originalPrice: 100 },
-      ],
-      originalPrice: 480,
-      bundlePrice: 359,
-      savingsAmount: 121,
-      savingsPercentage: 25,
-      validFrom: new Date().toISOString(),
-      validUntil: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
-      isActive: true,
-      rating: { average: 4.9, count: 89 },
-      tags: ['Wellness', 'Premium'],
-    },
-    {
-      _id: 'bundle-3',
-      name: 'Beauty Essentials',
-      description: 'Complete beauty grooming package for hair, nails, and makeup.',
-      services: [
-        { serviceId: 's8', serviceName: 'Hair Styling', quantity: 1, originalPrice: 120 },
-        { serviceId: 's9', serviceName: 'Manicure & Pedicure', quantity: 1, originalPrice: 150 },
-        { serviceId: 's10', serviceName: 'Makeup Application', quantity: 1, originalPrice: 200 },
-      ],
-      originalPrice: 470,
-      bundlePrice: 329,
-      savingsAmount: 141,
-      savingsPercentage: 30,
-      validFrom: new Date().toISOString(),
-      validUntil: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
-      isActive: true,
-      maxRedemptions: 30,
-      redemptionsUsed: 28,
-      rating: { average: 4.7, count: 234 },
-      tags: ['Beauty', 'Grooming'],
-    },
-  ];
-}
 
 // =============================================================================
 // Exports

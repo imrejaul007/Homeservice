@@ -55,6 +55,8 @@ export interface ChatServerToClientEvents {
   // Typing indicators
   'typing:start': (data: TypingEvent) => void;
   'typing:stop': (data: TypingEvent) => void;
+  'chat:typing:start': (data: TypingEvent) => void;
+  'chat:typing:stop': (data: TypingEvent) => void;
 
   // Presence
   'presence:online': (data: { userId: string }) => void;
@@ -215,6 +217,61 @@ export function clearAllTypingTimers(): void {
 // Chat Handler Class
 // =============================================================================
 
+// FIX P1: Add Redis pub/sub for presence sync across instances
+let redisClient: any = null;
+let redisPubClient: any = null;
+const REDIS_CHANNEL_PRESENCE = 'presence:updates';
+
+const initRedisPresence = async (
+  io: Server<ChatClientToServerEvents, ChatServerToClientEvents>
+): Promise<void> => {
+  if (process.env.SOCKET_REDIS_ENABLED !== 'true') return;
+
+  try {
+    const Redis = (await import('ioredis')).default;
+    const redisUrl = process.env.REDIS_URL;
+    if (!redisUrl) return;
+
+    redisClient = new Redis(redisUrl);
+    redisPubClient = new Redis(redisUrl);
+
+    // Subscribe to presence updates from other instances
+    redisPubClient.subscribe(REDIS_CHANNEL_PRESENCE, (err: Error | null) => {
+      if (err) {
+        logger.error('Failed to subscribe to presence channel', {
+          context: 'ChatSocketHandler',
+          error: err.message
+        });
+      }
+    });
+
+    redisPubClient.on('message', (channel: string, message: string) => {
+      if (channel !== REDIS_CHANNEL_PRESENCE) return;
+      try {
+        const { userId, status } = JSON.parse(message);
+        // Broadcast to local sockets
+        if (status === 'online') {
+          io.emit('presence:online', { userId });
+        } else {
+          io.emit('presence:offline', { userId });
+        }
+      } catch (e) {
+        logger.warn('Failed to parse presence message', { message });
+      }
+    });
+
+    logger.info('Redis presence sync initialized', {
+      context: 'ChatSocketHandler',
+      action: 'REDIS_PRESENCE_INIT'
+    });
+  } catch (error) {
+    logger.warn('Redis presence not available', {
+      context: 'ChatSocketHandler',
+      error: (error as Error).message
+    });
+  }
+};
+
 export class ChatSocketHandler {
   private io: Server<ChatClientToServerEvents, ChatServerToClientEvents>;
   private userSockets: Map<string, Set<string>> = new Map();
@@ -224,6 +281,8 @@ export class ChatSocketHandler {
   constructor(io: Server<ChatClientToServerEvents, ChatServerToClientEvents>) {
     this.io = io;
     this.setupHandlers();
+    // Initialize Redis presence sync
+    initRedisPresence(io);
   }
 
   // =============================================================================
@@ -291,9 +350,9 @@ export class ChatSocketHandler {
       // Mark as read
       socket.on('mark:read', (data) => this.handleMarkRead(socket, data));
 
-      // Typing indicators
-      socket.on('typing:start', (data) => this.handleTypingStart(socket, data));
-      socket.on('typing:stop', (data) => this.handleTypingStop(socket, data));
+      // Chat typing indicators (separate from booking typing in SocketServer)
+      socket.on('chat:typing:start', (data) => this.handleTypingStart(socket, data));
+      socket.on('chat:typing:stop', (data) => this.handleTypingStop(socket, data));
 
       // Acknowledgment
       socket.on('ack', (data) => this.handleAck(socket, data));
@@ -676,7 +735,7 @@ export class ChatSocketHandler {
         userId: socket.userId!
       };
 
-      socket.to(`chat:${chatRoomId}`).emit('typing:start', typingEvent);
+      socket.to(`chat:${chatRoomId}`).emit('chat:typing:start', typingEvent);
 
       logger.debug('User started typing', {
         context: 'ChatSocketHandler',
@@ -740,14 +799,24 @@ export class ChatSocketHandler {
         userId,
       };
 
-      // Only emit if we have the socket (direct calls)
       if (socket) {
-        socket.to(`chat:${chatRoomId}`).emit('typing:stop', typingEvent);
+        // Direct socket call: exclude the sender's own socket
+        socket.to(`chat:${chatRoomId}`).emit('chat:typing:stop', typingEvent);
 
         logger.debug('User stopped typing', {
           context: 'ChatSocketHandler',
           action: 'TYPING_STOP',
           socketId: socket.id,
+          userId,
+          chatRoomId,
+        });
+      } else {
+        // Timer-triggered call: broadcast to the whole room (sender already gone/idle)
+        this.io.to(`chat:${chatRoomId}`).emit('chat:typing:stop', typingEvent);
+
+        logger.debug('User stopped typing (timer)', {
+          context: 'ChatSocketHandler',
+          action: 'TYPING_STOP_TIMER',
           userId,
           chatRoomId,
         });
@@ -830,7 +899,7 @@ export class ChatSocketHandler {
           chatRoomId,
           userId: socket.userId
         };
-        this.io.to(`chat:${chatRoomId}`).emit('typing:stop', typingEvent);
+        this.io.to(`chat:${chatRoomId}`).emit('chat:typing:stop', typingEvent);
       }
       this.userRooms.delete(socket.id);
     }
@@ -862,6 +931,7 @@ export class ChatSocketHandler {
 
   // =============================================================================
   // Presence Tracking
+  // FIX P1: Sync presence across instances using Redis pub/sub
   // =============================================================================
 
   private setUserOnline(userId: string): void {
@@ -869,7 +939,12 @@ export class ChatSocketHandler {
     this.userStatus.set(userId, 'online');
 
     if (wasOffline) {
+      // Emit locally
       this.io.emit('presence:online', { userId });
+      // Publish to other instances via Redis
+      if (redisClient) {
+        redisClient.publish(REDIS_CHANNEL_PRESENCE, JSON.stringify({ userId, status: 'online' }));
+      }
     }
   }
 
@@ -881,7 +956,12 @@ export class ChatSocketHandler {
       this.userStatus.set(userId, 'offline');
 
       if (wasOnline) {
+        // Emit locally
         this.io.emit('presence:offline', { userId });
+        // Publish to other instances via Redis
+        if (redisClient) {
+          redisClient.publish(REDIS_CHANNEL_PRESENCE, JSON.stringify({ userId, status: 'offline' }));
+        }
       }
     }
   }

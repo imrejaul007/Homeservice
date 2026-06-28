@@ -1,5 +1,7 @@
 import * as nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import sgMail from '@sendgrid/mail';
+import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import type { Transporter } from 'nodemailer';
 import type { IPlatformSettings } from '../models/settings.model';
 import { getSettings } from './settings.service';
@@ -21,12 +23,14 @@ export interface ResolvedEmailFrom {
   replyTo?: string;
 }
 
-type TransportMode = 'smtp' | 'resend' | 'none';
+type TransportMode = 'smtp' | 'resend' | 'sendgrid' | 'ses' | 'none';
 
 interface CachedTransport {
   mode: TransportMode;
   smtp?: Transporter | null;
   resend?: Resend | null;
+  sendgridApiKey?: string | null;
+  ses?: SESClient | null;
   from: ResolvedEmailFrom;
   provider: string;
   cachedAt: number;
@@ -77,14 +81,33 @@ function resolveResendApiKey(settings: Partial<IPlatformSettings>): string | nul
   return process.env.RESEND_API_KEY || null;
 }
 
+function resolveSendGridApiKey(settings: Partial<IPlatformSettings>): string | null {
+  const dbKey = settings.emailConfig?.sendgrid?.apiKey;
+  if (!isMasked(dbKey) && dbKey) {
+    return dbKey;
+  }
+  return process.env.SENDGRID_API_KEY || null;
+}
+
 export function getUnsupportedEmailProviderMessage(
   settings?: Partial<IPlatformSettings>
 ): string | null {
-  const provider = settings?.emailConfig?.provider;
-  if (provider === 'ses' || provider === 'sendgrid') {
-    return `${provider.toUpperCase()} provider is saved in settings but not yet implemented. Use SMTP or Resend for test sends.`;
-  }
+  // All supported providers now have implementations
   return null;
+}
+
+function resolveSesConfig(settings: Partial<IPlatformSettings>): { accessKeyId: string; secretAccessKey: string; region: string } | null {
+  // Check settings first, then environment variables
+  const sesSettings = settings.emailConfig?.ses;
+  const accessKeyId = sesSettings?.accessKeyId || process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = !isMasked(sesSettings?.secretAccessKey) ? sesSettings?.secretAccessKey : process.env.AWS_SECRET_ACCESS_KEY;
+  const region = sesSettings?.region || process.env.AWS_REGION || 'us-east-1';
+
+  if (!accessKeyId || !secretAccessKey) {
+    return null;
+  }
+
+  return { accessKeyId, secretAccessKey, region };
 }
 
 export async function buildTransportCache(
@@ -126,6 +149,40 @@ export async function buildTransportCache(
     }
   }
 
+  if (provider === 'sendgrid') {
+    const apiKey = resolveSendGridApiKey(settings);
+    if (apiKey) {
+      sgMail.setApiKey(apiKey);
+      return {
+        mode: 'sendgrid',
+        sendgridApiKey: apiKey,
+        from,
+        provider: 'sendgrid',
+        cachedAt: Date.now(),
+      };
+    }
+  }
+
+  if (provider === 'ses') {
+    const sesCfg = resolveSesConfig(settings);
+    if (sesCfg) {
+      const sesClient = new SESClient({
+        region: sesCfg.region,
+        credentials: {
+          accessKeyId: sesCfg.accessKeyId,
+          secretAccessKey: sesCfg.secretAccessKey,
+        },
+      });
+      return {
+        mode: 'ses',
+        ses: sesClient,
+        from,
+        provider: 'ses',
+        cachedAt: Date.now(),
+      };
+    }
+  }
+
   // Env fallback chain
   const envSmtp = resolveSmtpConfig({});
   if (envSmtp) {
@@ -151,6 +208,37 @@ export async function buildTransportCache(
       resend: new Resend(envResendKey),
       from,
       provider: 'resend-env',
+      cachedAt: Date.now(),
+    };
+  }
+
+  const envSendGridKey = process.env.SENDGRID_API_KEY;
+  if (envSendGridKey) {
+    sgMail.setApiKey(envSendGridKey);
+    return {
+      mode: 'sendgrid',
+      sendgridApiKey: envSendGridKey,
+      from,
+      provider: 'sendgrid-env',
+      cachedAt: Date.now(),
+    };
+  }
+
+  // SES env fallback
+  const envSesCfg = resolveSesConfig({});
+  if (envSesCfg) {
+    const sesClient = new SESClient({
+      region: envSesCfg.region,
+      credentials: {
+        accessKeyId: envSesCfg.accessKeyId,
+        secretAccessKey: envSesCfg.secretAccessKey,
+      },
+    });
+    return {
+      mode: 'ses',
+      ses: sesClient,
+      from,
+      provider: 'ses-env',
       cachedAt: Date.now(),
     };
   }
@@ -250,6 +338,65 @@ export async function sendViaPlatformTransport(
       action: 'EMAIL_SENT',
     });
     return { messageId: result.data?.id || 'unknown' };
+  }
+
+  if (cache.mode === 'sendgrid' && cache.sendgridApiKey) {
+    const result = await sgMail.send({
+      to,
+      from: {
+        email: cache.from.fromEmail,
+        name: cache.from.fromName,
+      },
+      subject,
+      html,
+      text: plainText,
+      replyTo: cache.from.replyTo,
+    });
+    const sgResponse = Array.isArray(result) ? result[0] : result;
+    const messageId = sgResponse?.headers?.['x-message-id'] || (sgResponse as unknown as { messageId?: string })?.messageId;
+    logger.info('Email sent via platform SendGrid transport', {
+      to,
+      subject,
+      emailTransportProvider: cache.provider,
+      messageId,
+      action: 'EMAIL_SENT',
+    });
+    return { messageId: messageId || 'unknown' };
+  }
+
+  if (cache.mode === 'ses' && cache.ses) {
+    const sesCommand = new SendEmailCommand({
+      Source: fromHeader,
+      Destination: {
+        ToAddresses: [to],
+      },
+      Message: {
+        Subject: {
+          Data: subject,
+          Charset: 'UTF-8',
+        },
+        Body: {
+          Html: {
+            Data: html,
+            Charset: 'UTF-8',
+          },
+          Text: {
+            Data: plainText,
+            Charset: 'UTF-8',
+          },
+        },
+      },
+      ReplyToAddresses: cache.from.replyTo ? [cache.from.replyTo] : undefined,
+    });
+    const result = await cache.ses.send(sesCommand);
+    logger.info('Email sent via platform SES transport', {
+      to,
+      subject,
+      emailTransportProvider: cache.provider,
+      messageId: result.MessageId,
+      action: 'EMAIL_SENT',
+    });
+    return { messageId: result.MessageId || 'unknown' };
   }
 
   logger.warn('Email transport not configured', { to, subject, action: 'EMAIL_NOT_CONFIGURED' });

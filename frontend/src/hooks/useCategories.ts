@@ -15,12 +15,13 @@ interface UseCategoryState {
 }
 
 // In-memory cache for categories (MAJOR PERFORMANCE FIX)
+// Backend caches categories for 30 minutes - align frontend cache
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
 }
 
-const CATEGORY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CATEGORY_CACHE_TTL = 30 * 60 * 1000; // 30 minutes - matches backend cache TTL
 const categoryCache = new Map<string, CacheEntry<unknown>>();
 
 // Subcategory cache (separate from main category cache)
@@ -28,6 +29,27 @@ const subcategoryCache = new Map<string, CacheEntry<unknown>>();
 
 // Stats cache
 const statsCache = new Map<string, CacheEntry<unknown>>();
+
+// Cache invalidation functions
+export function invalidateCategoryCache(key?: string): void {
+  if (key) {
+    categoryCache.delete(key);
+  } else {
+    categoryCache.clear();
+  }
+}
+
+export function invalidateSubcategoryCache(key?: string): void {
+  if (key) {
+    subcategoryCache.delete(key);
+  } else {
+    subcategoryCache.clear();
+  }
+}
+
+export function invalidateStatsCache(): void {
+  statsCache.clear();
+}
 
 // Request deduplication maps
 const pendingRequests = new Map<string, Promise<unknown>>();
@@ -191,7 +213,7 @@ export function useCategories(featured?: boolean, includeComingSoon?: boolean): 
 
   useEffect(() => {
     fetchCategories();
-  }, [fetchCategories]);
+  }, [fetchCategories, featured, includeComingSoon]);
 
   return {
     ...state,

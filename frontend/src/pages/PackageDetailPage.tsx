@@ -26,6 +26,7 @@ import Breadcrumb from '../components/common/Breadcrumb';
 import Button from '../components/common/Button';
 import { useAuthStore } from '../stores/authStore';
 import toast from 'react-hot-toast';
+import { showDeduplicatedError } from '../utils/toastUtils';
 import { normalizeFeatures, packageApi } from '../services/packageApi';
 import { PackagePriceCalculator } from '../components/price-calculator';
 import type { PriceBreakdown } from '../services/priceCalculatorApi';
@@ -170,10 +171,10 @@ const PackageDetailPage: React.FC = () => {
       } else {
         toast.success('Package removed from wishlist');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to toggle wishlist:', error);
       const message = error?.response?.data?.message || 'Failed to update wishlist';
-      toast.error(message);
+      showDeduplicatedError('Wishlist update failed', message);
     }
   };
 
@@ -189,7 +190,7 @@ const PackageDetailPage: React.FC = () => {
       setReviews((result as unknown as { reviews?: Review[] }).reviews || []);
       setImageLoadError(false);
       setSelectedImageIndex(0);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to load package details');
     } finally {
       setIsLoading(false);
@@ -213,7 +214,7 @@ const PackageDetailPage: React.FC = () => {
     if (pkg?.providerId) {
       navigate('/customer/messages', { state: { providerId: pkg.providerId } });
     } else {
-      toast.error('Unable to contact provider. Please try again later.');
+      showDeduplicatedError('Unable to contact provider', 'Please try again later.');
     }
   };
 
@@ -443,7 +444,7 @@ const PackageDetailPage: React.FC = () => {
                   <div className="absolute top-4 right-4 flex gap-2">
                     <button
                       onClick={handleToggleWishlist}
-                      className={`p-3 rounded-full ${
+                      className={`w-11 h-11 flex items-center justify-center rounded-full ${
                         isFavorite
                           ? 'bg-red-500 text-white'
                           : 'bg-white/90 text-nilin-warmGray hover:text-red-500'
@@ -463,7 +464,7 @@ const PackageDetailPage: React.FC = () => {
                     />
                     <button
                       onClick={handleShare}
-                      className="p-3 rounded-full bg-white/90 text-nilin-warmGray hover:text-nilin-coral transition-colors"
+                      className="w-11 h-11 flex items-center justify-center rounded-full bg-white/90 text-nilin-warmGray hover:text-nilin-coral transition-colors"
                       aria-label="Share package"
                     >
                       <Share2 className="w-5 h-5" />
@@ -481,7 +482,7 @@ const PackageDetailPage: React.FC = () => {
 
               {/* Package Info */}
               <div className="bg-white rounded-xl p-6">
-                <h1 className="text-3xl font-serif text-nilin-charcoal mb-4">{pkg.name}</h1>
+                <h1 className="text-2xl sm:text-3xl font-serif text-nilin-charcoal mb-4 break-words">{pkg.name}</h1>
 
                 {/* Provider Info */}
                 {pkg.providerId && (
@@ -525,7 +526,7 @@ const PackageDetailPage: React.FC = () => {
                 </div>
 
                 {/* Duration and Rating */}
-                <div className="flex items-center gap-6 py-4 border-y border-gray-100">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-3 py-4 border-y border-gray-100">
                   <div className="flex items-center gap-2">
                     <Clock className="w-5 h-5 text-nilin-coral" />
                     <span className="text-nilin-charcoal">{pkg.duration.totalMinutes} minutes</span>

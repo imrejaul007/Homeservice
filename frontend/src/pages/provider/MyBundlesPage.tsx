@@ -30,6 +30,7 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { useAuthStore } from '../../stores/authStore';
 import { bundleApi, Bundle, CreateBundlePayload } from '../../services/bundleApi';
 import { api } from '../../services/api';
+import { useCategories } from '../../hooks/useCategories';
 import type { Service } from '../../types/service';
 import { formatPrice } from '../../utils/currency';
 
@@ -309,7 +310,7 @@ const EditBundleModal: React.FC<{
     try {
       await onSave(formData);
       onClose();
-    } catch (err: any) {
+    } catch (err) {
       setError(err.message || 'Failed to update bundle');
     } finally {
       setIsLoading(false);
@@ -482,6 +483,7 @@ const CreateBundleForm: React.FC<{
   onCreate: (data: CreateBundlePayload) => Promise<void>;
   onSuccess: () => void;
 }> = ({ services, onCreate, onSuccess }) => {
+  const { categories: categoryOptions } = useCategories();
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [bundleName, setBundleName] = useState('');
   const [bundleDescription, setBundleDescription] = useState('');
@@ -548,7 +550,7 @@ const CreateBundleForm: React.FC<{
         categoryId,
       });
       onSuccess();
-    } catch (err: any) {
+    } catch (err) {
       setError(err.message || 'Failed to create bundle');
     } finally {
       setIsCreating(false);
@@ -564,8 +566,8 @@ const CreateBundleForm: React.FC<{
     }).format(price);
   };
 
-  // Get unique categories from services
-  const categories = [...new Set(services.map((s) => s.category))];
+  // Get categories from API (IDs required by backend)
+  const categories = categoryOptions.filter((cat) => cat.isActive !== false);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -739,8 +741,8 @@ const CreateBundleForm: React.FC<{
               >
                 <option value="">Select category</option>
                 {categories.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
+                  <option key={cat._id} value={cat._id}>
+                    {cat.name}
                   </option>
                 ))}
               </select>
@@ -938,8 +940,15 @@ const MyBundlesPage: React.FC = () => {
       showToast('Bundle created successfully! It will be reviewed shortly.', 'success');
       setActiveTab('list');
       fetchBundles();
-    } catch (error: any) {
-      throw new Error(error.response?.data?.message || 'Failed to create bundle');
+    } catch (error) {
+      // Network error detection
+      const isNetworkError = !navigator.onLine ||
+        (error as { response?: { status?: number } })?.response?.status === 0;
+      const errorMessage = isNetworkError
+        ? 'Network error. Please check your connection.'
+        : (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Failed to create bundle';
+      showToast(errorMessage, 'error');
+      throw new Error(errorMessage);
     }
   };
 
@@ -952,8 +961,15 @@ const MyBundlesPage: React.FC = () => {
       showToast('Bundle updated! Status changed to pending review.', 'success');
       setEditingBundle(null);
       fetchBundles();
-    } catch (error: any) {
-      throw new Error(error.response?.data?.message || 'Failed to update bundle');
+    } catch (error) {
+      // Network error detection
+      const isNetworkError = !navigator.onLine ||
+        (error as { response?: { status?: number } })?.response?.status === 0;
+      const errorMessage = isNetworkError
+        ? 'Network error. Please check your connection.'
+        : (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Failed to update bundle';
+      showToast(errorMessage, 'error');
+      throw new Error(errorMessage);
     }
   };
 
@@ -967,7 +983,7 @@ const MyBundlesPage: React.FC = () => {
       showToast('Bundle deleted successfully', 'success');
       setDeletingBundle(null);
       fetchBundles();
-    } catch (error: any) {
+    } catch (error) {
       showToast(error.response?.data?.message || 'Failed to delete bundle', 'error');
     } finally {
       setIsDeleting(false);
@@ -1008,11 +1024,25 @@ const MyBundlesPage: React.FC = () => {
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isRefreshing ? 'Refreshing bundle data...' : ''}
+        {error ? `Error: ${error}` : ''}
+      </div>
+
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
           <div className="mb-8">
@@ -1154,7 +1184,7 @@ const MyBundlesPage: React.FC = () => {
             />
           )}
         </div>
-      </div>
+      </main>
 
       {/* Edit Modal */}
       <EditBundleModal

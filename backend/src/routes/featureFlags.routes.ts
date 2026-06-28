@@ -28,8 +28,8 @@ router.get('/', authenticate, async (req, res) => {
   return res.json({ flags });
 });
 
-// Get enabled flags
-router.get('/enabled', async (req, res) => {
+// Get enabled flags (requires authentication)
+router.get('/enabled', optionalAuth, async (req, res) => {
   const flags = await featureFlagsService.getEnabledFlags();
   res.json({ flags });
 });

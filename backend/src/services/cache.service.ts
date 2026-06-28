@@ -19,6 +19,17 @@ export const CACHE_KEYS = {
   ANALYTICS: 'analytics',
 } as const;
 
+// TTL overrides per cache type (in seconds)
+export const CACHE_TTL: Record<string, number> = {
+  [CACHE_KEYS.ANALYTICS]: 3600,      // 1 hour for analytics
+  [CACHE_KEYS.SEARCH]: 600,          // 10 minutes for search
+  [CACHE_KEYS.CATEGORY]: 1800,       // 30 minutes for categories
+  [CACHE_KEYS.SERVICE]: 600,         // 10 minutes for services
+  [CACHE_KEYS.BOOKING]: 300,         // 5 minutes for bookings
+  [CACHE_KEYS.USER]: 300,            // 5 minutes for user data
+  [CACHE_KEYS.PROVIDER]: 600,        // 10 minutes for provider data
+};
+
 // Generate cache key
 const generateKey = (prefix: string, key: string): string => {
   return `${prefix}:${key}`;
@@ -51,7 +62,8 @@ export const set = async <T>(
 ): Promise<void> => {
   try {
     const fullKey = generateKey(options?.prefix || 'cache', key);
-    const ttl = options?.ttl || DEFAULT_TTL;
+    // Use explicit TTL, then type-specific TTL, then default
+    const ttl = options?.ttl || CACHE_TTL[key] || DEFAULT_TTL;
 
     await cache.set(fullKey, JSON.stringify(value), ttl);
 
@@ -144,7 +156,7 @@ export const clear = async (prefix?: string): Promise<number> => {
   }
 };
 
-// Get or set (cache-aside pattern)
+// Get or set (cache-aside pattern) with stampede prevention using Redis SETNX
 export const getOrSet = async <T>(
   key: string,
   fetchFn: () => Promise<T>,
@@ -156,10 +168,48 @@ export const getOrSet = async <T>(
     return cached;
   }
 
-  const value = await fetchFn();
-  await set(key, value, options);
+  const client = cache.client;
+  const lockKey = `lock:${key}`;
+  const LOCK_TTL = 30; // 30 seconds lock timeout
 
-  return value;
+  // Try to acquire lock to prevent cache stampede
+  if (client) {
+    const lockAcquired = await client.set(lockKey, '1', 'EX', LOCK_TTL, 'NX');
+
+    if (!lockAcquired) {
+      // Another request is fetching, wait and retry
+      let retries = 0;
+      const maxRetries = 10;
+      const retryDelay = 100; // 100ms between retries
+
+      while (retries < maxRetries) {
+        await new Promise(r => setTimeout(r, retryDelay));
+
+        const cachedAgain = await get<T>(key, options);
+        if (cachedAgain !== null) {
+          return cachedAgain;
+        }
+        retries++;
+      }
+
+      // If still no cache after retries, fetch ourselves
+      logger.warn('Cache stampede: waited but cache still empty, fetching directly', { key });
+    }
+
+    try {
+      const value = await fetchFn();
+      await set(key, value, options);
+      return value;
+    } finally {
+      // Release lock
+      await client.del(lockKey);
+    }
+  } else {
+    // No Redis client, fallback to simple get-or-set
+    const value = await fetchFn();
+    await set(key, value, options);
+    return value;
+  }
 };
 
 // Increment counter

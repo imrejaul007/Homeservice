@@ -238,6 +238,13 @@ export interface IProviderProfile extends Document {
     maxAdvanceBooking: number; // days
     minNoticeTime: number; // hours
     autoAcceptBookings: boolean;
+    breaks?: Array<{
+      _id?: mongoose.Types.ObjectId;
+      dayOfWeek: string;
+      startTime: string;
+      endTime: string;
+      label?: string;
+    }>;
   };
   
   // Location and service areas
@@ -509,7 +516,22 @@ export interface IProviderProfile extends Document {
     };
     adminNotes?: string;
   };
-  
+
+  // Additional verification fields
+  verificationDocuments?: Array<{
+    type: string;
+    url: string;
+    status: 'pending' | 'approved' | 'rejected';
+    uploadedAt: Date;
+  }>;
+  verificationBadges?: Array<{
+    type: 'identity' | 'business' | 'insurance' | 'certification' | 'background_check';
+    verifiedAt: Date;
+    expiresAt?: Date;
+    verifier: string;
+    documentUrl?: string;
+  }>;
+
   // Settings and preferences
   settings: {
     autoAcceptBookings: boolean;
@@ -1280,6 +1302,15 @@ providerProfileSchema.index({ completionPercentage: -1 });
 providerProfileSchema.index({ 'analytics.performanceMetrics.qualityScore': -1 });
 providerProfileSchema.index({ 'instagramStyleProfile.followersCount': -1 });
 providerProfileSchema.index({ lastActiveAt: -1 });
+
+// ===================================
+// CRITICAL INDEXES (DATABASE INTEGRITY FIXES)
+// ===================================
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+providerProfileSchema.index({ isDeleted: 1, status: 1 }); // Soft deleted profiles by status
+providerProfileSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted profiles sorted by date
+providerProfileSchema.index({ isDeleted: 1, isActive: 1 }); // Soft deleted profiles by active status
+providerProfileSchema.index({ userId: 1, isDeleted: 1 }); // Provider's profile including deleted
 
 // Tenant isolation indexes
 providerProfileSchema.index({ tenantId: 1, 'verificationStatus.overall': 1 });

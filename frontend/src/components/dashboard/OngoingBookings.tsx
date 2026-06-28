@@ -269,26 +269,12 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
       setError(null);
       const fetchLimit = Math.max(limit, 15);
 
-      const [inProgressRes, confirmedRes, pendingRes] = await Promise.all([
-        bookingService.getCustomerBookings({
-          status: 'in_progress',
+      const activeRes = await bookingService.getCustomerBookings({
+          status: 'active',
           limit: fetchLimit,
           sortBy: 'scheduledDate',
           sortOrder: 'asc',
-        }),
-        bookingService.getCustomerBookings({
-          status: 'confirmed',
-          limit: fetchLimit,
-          sortBy: 'scheduledDate',
-          sortOrder: 'asc',
-        }),
-        bookingService.getCustomerBookings({
-          status: 'pending',
-          limit: fetchLimit,
-          sortBy: 'scheduledDate',
-          sortOrder: 'asc',
-        }),
-      ]);
+        });
 
       if (controller.signal.aborted || !isMountedRef.current) return;
 
@@ -304,9 +290,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
         categorized.push({ booking, kind });
       };
 
-      inProgressRes.data.bookings.forEach(addBooking);
-      confirmedRes.data.bookings.forEach(addBooking);
-      pendingRes.data.bookings.forEach(addBooking);
+      (activeRes.data?.bookings || []).forEach(addBooking);
 
       categorized.sort(sortByUrgency);
       setAllBookings(categorized);

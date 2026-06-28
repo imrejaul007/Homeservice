@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import authMiddleware from '../middleware/auth.middleware';
+import { validateProviderRole } from '../middleware/validation.middleware';
 import managedContractController from '../controllers/managedContract.controller';
 
 const router = Router();
 
-// All routes require authentication
+// All routes require authentication and provider role
 router.use(authMiddleware.authenticate);
+router.use(validateProviderRole);
 
 // ============================================
 // Contract CRUD Routes

@@ -189,7 +189,7 @@ const createBookingSchema = Joi.object({
     .default('no_preference'),
 
   paymentMethod: Joi.string()
-    .valid('apple_pay', 'credit_card', 'cash')
+    .valid('apple_pay', 'credit_card', 'cash', 'wallet')
     .optional()
     .default('credit_card'),
 
@@ -211,7 +211,7 @@ const bookingMessageSchema = Joi.object({
     })
 });
 
-const cancelBookingSchema = Joi.object({
+export const cancelBookingSchema = Joi.object({
   reason: Joi.string()
     .min(5)
     .max(500)
@@ -222,12 +222,12 @@ const cancelBookingSchema = Joi.object({
     })
 });
 
-const acceptBookingSchema = Joi.object({
+export const acceptBookingSchema = Joi.object({
   notes: Joi.string().max(500).optional(),
   estimatedArrival: Joi.date().min('now').optional()
 });
 
-const rejectBookingSchema = Joi.object({
+export const rejectBookingSchema = Joi.object({
   reason: Joi.string()
     .min(10)
     .max(500)
@@ -239,9 +239,21 @@ const rejectBookingSchema = Joi.object({
     })
 });
 
-const completeBookingSchema = Joi.object({
+export const completeBookingSchema = Joi.object({
   notes: Joi.string().max(500).optional(),
   actualDuration: Joi.number().min(15).max(480).optional()
+});
+
+export const rescheduleBookingSchema = Joi.object({
+  scheduledDate: Joi.string().isoDate().required().messages({
+    'string.isoDate': 'Invalid date format. Use YYYY-MM-DD format',
+    'any.required': 'Scheduled date is required'
+  }),
+  scheduledTime: Joi.string().pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).required().messages({
+    'string.pattern.base': 'Invalid time format. Use HH:MM format',
+    'any.required': 'Scheduled time is required'
+  }),
+  reason: Joi.string().max(500).optional()
 });
 
 // Guest booking schema with honeypot for bot prevention
@@ -537,6 +549,7 @@ export const validateBookingCancellation = createValidationMiddleware(cancelBook
 export const validateBookingAcceptance = createValidationMiddleware(acceptBookingSchema);
 export const validateBookingRejection = createValidationMiddleware(rejectBookingSchema);
 export const validateBookingCompletion = createValidationMiddleware(completeBookingSchema);
+export const validateRescheduleBooking = createValidationMiddleware(rescheduleBookingSchema);
 export const validateGuestBooking = createValidationMiddleware(guestBookingSchema);
 
 export const validateAvailabilityInput = createValidationMiddleware(updateAvailabilitySchema);

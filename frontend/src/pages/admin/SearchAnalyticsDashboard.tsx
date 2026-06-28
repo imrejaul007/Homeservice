@@ -5,9 +5,7 @@ import {
   TrendingDown,
   AlertTriangle,
   BarChart3,
-  PieChart,
   RefreshCw,
-  Filter,
   Download,
   ChevronDown,
   ChevronUp,
@@ -16,6 +14,8 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { api } from '@/services/api';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 interface SearchAnalytics {
   totalSearches: number;
@@ -58,9 +58,13 @@ const SearchAnalyticsDashboard: React.FC = () => {
       if (patternsRes.data.success) {
         setRefinementPatterns(patternsRes.data.data);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to fetch search analytics:', err);
-      setError(err.response?.data?.message || 'Failed to load analytics');
+      const message =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
+          : undefined;
+      setError(message || 'Failed to load analytics');
     } finally {
       setLoading(false);
       setIsRefreshing(false);
@@ -108,30 +112,45 @@ const SearchAnalyticsDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <RefreshCw className="w-8 h-8 text-nilin-primary animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Loading search analytics...</p>
+      <AdminPageShell
+        title="Search Analytics"
+        subtitle="Query insights · content gaps"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Search Analytics', current: true },
+        ]}
+        wideLayout
+      >
+        <div className="flex items-center justify-center py-16">
+          <RefreshCw className="w-8 h-8 text-nilin-coral animate-spin" />
         </div>
-      </div>
+      </AdminPageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center max-w-md">
+      <AdminPageShell
+        title="Search Analytics"
+        subtitle="Query insights · content gaps"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Search Analytics', current: true },
+        ]}
+        wideLayout
+      >
+        <div className="text-center max-w-md mx-auto py-12 px-4">
           <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Unable to Load Analytics</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
+          <h2 className="text-xl font-serif text-nilin-charcoal mb-2">Unable to Load Analytics</h2>
+          <p className="text-nilin-warmGray font-sans mb-4">{error}</p>
           <button
             onClick={handleRefresh}
-            className="px-4 py-2 bg-nilin-primary text-white rounded-lg hover:bg-nilin-primary/90"
+            className="inline-flex items-center justify-center min-h-11 px-5 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-sans hover:opacity-95 transition-opacity"
           >
             Try Again
           </button>
         </div>
-      </div>
+      </AdminPageShell>
     );
   }
 
@@ -255,53 +274,49 @@ const SearchAnalyticsDashboard: React.FC = () => {
     },
   ];
 
+  const headerActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        value={timeframe}
+        onChange={(e) => setTimeframe(e.target.value)}
+        className="min-h-11 px-3 rounded-xl border border-nilin-border/50 bg-white/60 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
+        aria-label="Select timeframe"
+      >
+        <option value="24h">Last 24 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
+      </select>
+      <button
+        onClick={handleRefresh}
+        disabled={isRefreshing}
+        className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl border border-nilin-border/50 bg-white/60 hover:bg-nilin-blush/40 transition-colors disabled:opacity-50"
+        aria-label="Refresh analytics"
+      >
+        <RefreshCw className={`w-5 h-5 text-nilin-charcoal ${isRefreshing ? 'animate-spin' : ''}`} />
+      </button>
+      <button
+        onClick={exportData}
+        className="inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-sm font-medium font-sans hover:opacity-95 transition-opacity"
+      >
+        <Download className="w-4 h-4" />
+        <span className="hidden sm:inline">Export</span>
+      </button>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Search Analytics</h1>
-              <p className="text-sm text-gray-500 mt-1">
-                Monitor search behavior and identify content gaps
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              {/* Timeframe selector */}
-              <select
-                value={timeframe}
-                onChange={(e) => setTimeframe(e.target.value)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-nilin-primary/20"
-              >
-                <option value="24h">Last 24 hours</option>
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-              </select>
-
-              {/* Refresh button */}
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <RefreshCw className={`w-5 h-5 text-gray-600 ${isRefreshing ? 'animate-spin' : ''}`} />
-              </button>
-
-              {/* Export button */}
-              <button
-                onClick={exportData}
-                className="flex items-center gap-2 px-4 py-2 bg-nilin-primary text-white rounded-lg hover:bg-nilin-primary/90 transition-colors"
-              >
-                <Download className="w-4 h-4" />
-                Export
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <ErrorBoundary>
+      <AdminPageShell
+        title="Search Analytics"
+        subtitle="Monitor search behavior and identify content gaps"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Search Analytics', current: true },
+        ]}
+        headerActions={headerActions}
+        wideLayout
+      >
+        <div id="main-content" className="space-y-6 overflow-x-hidden min-w-0">
         {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           {statsCards.map((stat, index) => (
@@ -375,7 +390,7 @@ const SearchAnalyticsDashboard: React.FC = () => {
             >
               <button
                 onClick={() => setExpandedSection(expandedSection === section.id ? null : section.id)}
-                className="w-full flex items-center justify-between p-5 hover:bg-gray-50 transition-colors"
+                className="w-full flex items-center justify-between min-h-11 p-4 sm:p-5 hover:bg-gray-50 transition-colors"
               >
                 <div className="flex items-center gap-4">
                   <div className="p-2 bg-gray-100 rounded-lg">
@@ -469,8 +484,9 @@ const SearchAnalyticsDashboard: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
-    </div>
+        </div>
+      </AdminPageShell>
+    </ErrorBoundary>
   );
 };
 

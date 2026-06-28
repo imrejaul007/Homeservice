@@ -630,7 +630,7 @@ export const validateProviderRole = (req: Request, res: Response, next: NextFunc
     });
   }
 
-  if (user.role !== 'provider') {
+  if (user.role !== 'provider' && user.role !== 'admin') {
     return res.status(403).json({
       success: false,
       message: 'Only providers can access this endpoint',

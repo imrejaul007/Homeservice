@@ -505,7 +505,7 @@ const ManagedServicesPage: React.FC = () => {
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-nilin hover:bg-nilin-rose disabled:opacity-50 transition-all duration-200 shadow-lg shadow-nilin-coral/30"
+          className="inline-flex items-center justify-center gap-2 min-h-11 px-4 py-2 bg-nilin-coral text-white rounded-nilin hover:bg-nilin-rose disabled:opacity-50 transition-all duration-200 shadow-lg shadow-nilin-coral/30 w-full md:w-auto"
         >
           <RefreshIcon />
           {refreshing ? 'Refreshing...' : 'Refresh'}
@@ -516,8 +516,68 @@ const ManagedServicesPage: React.FC = () => {
 
   const renderContractList = () => (
     <div className="glass-nilin rounded-nilin-lg border border-nilin-border/50 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full">
+      {/* Mobile cards */}
+      <div className="md:hidden p-4 space-y-3">
+        {isLoading ? (
+          <div className="flex justify-center py-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+          </div>
+        ) : contracts.length === 0 ? (
+          <p className="text-center text-gray-500 py-12">No contracts found</p>
+        ) : (
+          contracts.map((contract) => {
+            const slaRate =
+              contract.slaCompliance.totalBookings > 0
+                ? contract.slaCompliance.complianceRate
+                : 0;
+            return (
+              <button
+                key={contract._id}
+                type="button"
+                onClick={() => handleViewContract(contract)}
+                className="w-full text-left bg-white rounded-xl border border-gray-100 p-4 shadow-sm hover:border-nilin-coral/30 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-900 truncate">{contract.contractNumber}</p>
+                    <p className="text-sm text-gray-600 truncate">{contract.clientName}</p>
+                  </div>
+                  <span className={`flex-shrink-0 px-2 py-1 text-xs font-medium rounded-full border ${getStatusColor(contract.status)}`}>
+                    {getStatusLabel(contract.status)}
+                  </span>
+                </div>
+                <dl className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-3">
+                  <div>
+                    <dt className="text-gray-500">Monthly fee</dt>
+                    <dd className="font-medium text-gray-900">{formatCurrency(contract.pricing.monthlyFee)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">Duration</dt>
+                    <dd>{calculateContractDuration(contract.startDate, contract.endDate)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">Contacts</dt>
+                    <dd>{contract.teamMembers?.length ?? 0}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">SLA</dt>
+                    <dd className="font-medium">{slaRate}%</dd>
+                  </div>
+                </dl>
+                {isExpiringSoon(contract.endDate) && (
+                  <span className="inline-block px-2 py-1 text-xs font-medium rounded-full bg-orange-100 text-orange-800 border border-orange-200">
+                    Expiring Soon
+                  </span>
+                )}
+              </button>
+            );
+          })
+        )}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full min-w-[720px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -673,8 +733,8 @@ const ManagedServicesPage: React.FC = () => {
 
       {/* Pagination */}
       {pagination.pages > 1 && (
-        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-          <div className="text-sm text-gray-500">
+        <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="text-sm text-gray-500 text-center sm:text-left">
             Showing {((filters.page ?? 1) - 1) * (filters.limit ?? 20) + 1} to{' '}
             {Math.min((filters.page ?? 1) * (filters.limit ?? 20), pagination.total)} of {pagination.total} results
           </div>
@@ -682,14 +742,14 @@ const ManagedServicesPage: React.FC = () => {
             <button
               onClick={() => handlePageChange((filters.page ?? 1) - 1)}
               disabled={filters.page === 1}
-              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-50"
+              className="min-h-11 px-4 py-2 border border-gray-300 rounded disabled:opacity-50"
             >
               Previous
             </button>
             <button
               onClick={() => handlePageChange((filters.page ?? 1) + 1)}
               disabled={filters.page === pagination.pages}
-              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-50"
+              className="min-h-11 px-4 py-2 border border-gray-300 rounded disabled:opacity-50"
             >
               Next
             </button>
@@ -706,11 +766,12 @@ const ManagedServicesPage: React.FC = () => {
       <div className="space-y-6">
         {/* Header */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+            <div className="flex items-center gap-4 min-w-0">
               <button
                 onClick={handleBackToList}
-                className="p-2 hover:bg-gray-100 rounded-lg"
+                className="w-11 h-11 flex items-center justify-center hover:bg-gray-100 rounded-lg flex-shrink-0"
+                aria-label="Back to contracts list"
               >
                 <ChevronLeftIcon />
               </button>
@@ -721,13 +782,13 @@ const ManagedServicesPage: React.FC = () => {
                 <p className="text-gray-500">{selectedContract.clientName}</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <span className={`px-3 py-1 text-sm font-medium rounded-full border ${getStatusColor(selectedContract.status)}`}>
                 {getStatusLabel(selectedContract.status)}
               </span>
               <button
                 onClick={() => setViewMode('edit')}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                className="min-h-11 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
                 Edit Contract
               </button>
@@ -735,7 +796,7 @@ const ManagedServicesPage: React.FC = () => {
           </div>
 
           {/* Quick Stats */}
-          <div className="grid grid-cols-4 gap-4 pt-4 border-t">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t">
             <div>
               <p className="text-sm text-gray-500">Monthly Fee</p>
               <p className="text-lg font-semibold">
@@ -773,7 +834,7 @@ const ManagedServicesPage: React.FC = () => {
                 <button
                   key={tab}
                   onClick={() => handleTabChange(tab)}
-                  className={`px-6 py-3 text-sm font-medium whitespace-nowrap border-b-2 ${
+                  className={`flex-shrink-0 px-4 sm:px-6 py-3 min-h-11 text-sm font-medium whitespace-nowrap border-b-2 ${
                     activeTab === tab
                       ? 'border-blue-600 text-blue-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -785,7 +846,7 @@ const ManagedServicesPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-6">
+          <div className="p-4 sm:p-6">
             {activeTab === 'overview' && renderOverviewTab()}
             {activeTab === 'details' && renderDetailsTab()}
             {activeTab === 'team' && renderTeamTab()}
@@ -1416,7 +1477,21 @@ const ManagedServicesPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-nilin-cream">
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isLoading ? 'Loading contracts...' : ''}
+        {error ? `Error: ${error}` : ''}
+      </div>
+
+      <main id="main-content" className="max-w-7xl mx-auto px-4 py-6">
         {/* Page Header */}
         <div className="flex justify-between items-center mb-6">
           <div>
@@ -1450,13 +1525,13 @@ const ManagedServicesPage: React.FC = () => {
             isSubmitting={isSubmitting}
           />
         )}
-      </div>
 
-      {/* Modals */}
-      {renderCreateModal()}
-      {renderTeamModal()}
-      {renderStatusModal()}
-      {renderReportModal()}
+        {/* Modals */}
+        {renderCreateModal()}
+        {renderTeamModal()}
+        {renderStatusModal()}
+        {renderReportModal()}
+      </main>
     </div>
   );
 };
@@ -1937,11 +2012,92 @@ const EditContractForm: React.FC<{
     clientPhone: contract.clientPhone,
     clientAddress: contract.clientAddress,
     internalNotes: contract.internalNotes,
+    startDate: contract.startDate,
+    endDate: contract.endDate,
+    pricing: {
+      model: contract.pricing.model,
+      monthlyFee: contract.pricing.monthlyFee,
+      currency: contract.pricing.currency,
+      overtimeRate: contract.pricing.overtimeRate,
+      minimumCommitmentMonths: contract.pricing.minimumCommitmentMonths,
+    },
+    slaTerms: {
+      responseTimeMinutes: contract.slaTerms.responseTimeMinutes,
+      completionTimeHours: contract.slaTerms.completionTimeHours,
+      availabilityPercentage: contract.slaTerms.availabilityPercentage,
+      priority: contract.slaTerms.priority,
+      penaltyClauses: contract.slaTerms.penaltyClauses,
+      escalationPath: contract.slaTerms.escalationPath,
+    },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData);
+    // Only send fields that have been changed from original values
+    const updateData: UpdateContractInput = {};
+
+    if (formData.clientName !== contract.clientName) updateData.clientName = formData.clientName;
+    if (formData.clientContactName !== contract.clientContactName) updateData.clientContactName = formData.clientContactName;
+    if (formData.clientEmail !== contract.clientEmail) updateData.clientEmail = formData.clientEmail;
+    if (formData.clientPhone !== contract.clientPhone) updateData.clientPhone = formData.clientPhone;
+    if (formData.clientAddress) updateData.clientAddress = formData.clientAddress;
+    if (formData.internalNotes !== contract.internalNotes) updateData.internalNotes = formData.internalNotes;
+
+    if (formData.startDate && formData.startDate !== contract.startDate) {
+      updateData.startDate = formData.startDate;
+    }
+    if (formData.endDate && formData.endDate !== contract.endDate) {
+      updateData.endDate = formData.endDate;
+    }
+
+    if (formData.pricing) {
+      const pricingUpdate: UpdateContractInput['pricing'] = {};
+      if (formData.pricing.monthlyFee !== contract.pricing.monthlyFee) {
+        pricingUpdate.monthlyFee = formData.pricing.monthlyFee;
+      }
+      if (formData.pricing.model !== contract.pricing.model) {
+        pricingUpdate.model = formData.pricing.model;
+      }
+      if (formData.pricing.currency !== contract.pricing.currency) {
+        pricingUpdate.currency = formData.pricing.currency;
+      }
+      if (formData.pricing.overtimeRate !== contract.pricing.overtimeRate) {
+        pricingUpdate.overtimeRate = formData.pricing.overtimeRate;
+      }
+      if (formData.pricing.minimumCommitmentMonths !== contract.pricing.minimumCommitmentMonths) {
+        pricingUpdate.minimumCommitmentMonths = formData.pricing.minimumCommitmentMonths;
+      }
+      if (Object.keys(pricingUpdate).length > 0) {
+        updateData.pricing = pricingUpdate;
+      }
+    }
+
+    if (formData.slaTerms) {
+      const slaUpdate: UpdateContractInput['slaTerms'] = {};
+      if (formData.slaTerms.responseTimeMinutes !== contract.slaTerms.responseTimeMinutes) {
+        slaUpdate.responseTimeMinutes = formData.slaTerms.responseTimeMinutes;
+      }
+      if (formData.slaTerms.completionTimeHours !== contract.slaTerms.completionTimeHours) {
+        slaUpdate.completionTimeHours = formData.slaTerms.completionTimeHours;
+      }
+      if (formData.slaTerms.availabilityPercentage !== contract.slaTerms.availabilityPercentage) {
+        slaUpdate.availabilityPercentage = formData.slaTerms.availabilityPercentage;
+      }
+      if (formData.slaTerms.priority !== contract.slaTerms.priority) {
+        slaUpdate.priority = formData.slaTerms.priority;
+      }
+      if (formData.slaTerms.penaltyClauses !== contract.slaTerms.penaltyClauses) {
+        slaUpdate.penaltyClauses = formData.slaTerms.penaltyClauses;
+      }
+      if (formData.slaTerms.escalationPath !== contract.slaTerms.escalationPath) {
+        slaUpdate.escalationPath = formData.slaTerms.escalationPath;
+      }
+      if (Object.keys(slaUpdate).length > 0) {
+        updateData.slaTerms = slaUpdate;
+      }
+    }
+
+    onSave(updateData);
   };
 
   return (
@@ -1956,51 +2112,237 @@ const EditContractForm: React.FC<{
         <h2 className="text-xl font-bold">Edit Contract</h2>
       </div>
       <form onSubmit={handleSubmit}>
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Client Name</label>
-              <input
-                type="text"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                value={formData.clientName}
-                onChange={(e) => setFormData({ ...formData, clientName: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Contact Name</label>
-              <input
-                type="text"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                value={formData.clientContactName}
-                onChange={(e) => setFormData({ ...formData, clientContactName: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input
-                type="email"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                value={formData.clientEmail}
-                onChange={(e) => setFormData({ ...formData, clientEmail: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-              <input
-                type="tel"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                value={formData.clientPhone}
-                onChange={(e) => setFormData({ ...formData, clientPhone: e.target.value })}
-              />
-            </div>
-          </div>
-
+        <div className="p-6 space-y-6">
+          {/* Client Information */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Client Information</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Client Name</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.clientName}
+                  onChange={(e) => setFormData({ ...formData, clientName: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Contact Name</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.clientContactName}
+                  onChange={(e) => setFormData({ ...formData, clientContactName: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.clientEmail}
+                  onChange={(e) => setFormData({ ...formData, clientEmail: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.clientPhone}
+                  onChange={(e) => setFormData({ ...formData, clientPhone: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Contract Dates */}
+          <div className="border-t pt-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Contract Dates</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.startDate?.split('T')[0] || ''}
+                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.endDate?.split('T')[0] || ''}
+                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Pricing */}
+          <div className="border-t pt-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Pricing</h3>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Monthly Fee (AED)</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.pricing?.monthlyFee || 0}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    pricing: { ...formData.pricing!, monthlyFee: parseFloat(e.target.value) || 0 }
+                  })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Pricing Model</label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.pricing?.model || 'fixed'}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    pricing: { ...formData.pricing!, model: e.target.value as PricingModel }
+                  })}
+                >
+                  <option value="fixed">Fixed Monthly</option>
+                  <option value="hourly">Hourly</option>
+                  <option value="per_service">Per Service</option>
+                  <option value="tiered">Tiered</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Overtime Rate (AED/hr)</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.pricing?.overtimeRate || ''}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    pricing: { ...formData.pricing!, overtimeRate: parseFloat(e.target.value) || undefined }
+                  })}
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Commitment (months)</label>
+                <input
+                  type="number"
+                  min="1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.pricing?.minimumCommitmentMonths || 1}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    pricing: { ...formData.pricing!, minimumCommitmentMonths: parseInt(e.target.value) || 1 }
+                  })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.pricing?.currency || 'AED'}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    pricing: { ...formData.pricing!, currency: e.target.value }
+                  })}
+                >
+                  <option value="AED">AED - UAE Dirham</option>
+                  <option value="USD">USD - US Dollar</option>
+                  <option value="EUR">EUR - Euro</option>
+                  <option value="GBP">GBP - British Pound</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* SLA Terms */}
+          <div className="border-t pt-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">SLA Terms</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Response Time (minutes)</label>
+                <input
+                  type="number"
+                  min="1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.slaTerms?.responseTimeMinutes || 60}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    slaTerms: { ...formData.slaTerms!, responseTimeMinutes: parseInt(e.target.value) || 60 }
+                  })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Completion Time (hours)</label>
+                <input
+                  type="number"
+                  min="1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.slaTerms?.completionTimeHours || 24}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    slaTerms: { ...formData.slaTerms!, completionTimeHours: parseInt(e.target.value) || 24 }
+                  })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Availability (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.slaTerms?.availabilityPercentage || 99}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    slaTerms: { ...formData.slaTerms!, availabilityPercentage: parseInt(e.target.value) || 99 }
+                  })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  value={formData.slaTerms?.priority || 'standard'}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    slaTerms: { ...formData.slaTerms!, priority: e.target.value as SLAPriority }
+                  })}
+                >
+                  <option value="standard">Standard</option>
+                  <option value="express">Express</option>
+                  <option value="premium">Premium</option>
+                </select>
+              </div>
+            </div>
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Penalty Clauses</label>
+              <textarea
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                value={formData.slaTerms?.penaltyClauses || ''}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  slaTerms: { ...formData.slaTerms!, penaltyClauses: e.target.value }
+                })}
+                placeholder="Describe any penalty clauses..."
+              />
+            </div>
+          </div>
+
+          {/* Internal Notes */}
+          <div className="border-t pt-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Internal Notes</h3>
             <textarea
               rows={4}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"

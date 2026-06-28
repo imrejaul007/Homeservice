@@ -163,6 +163,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
     }),
     {
       name: 'nilin-subscription',
+      version: 1,
       partialize: (state) => ({
         subscription: state.subscription,
         membership: state.membership,

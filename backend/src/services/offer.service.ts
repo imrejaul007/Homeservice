@@ -667,7 +667,17 @@ export class OfferService {
       return { success: false, message: 'Offer not found' };
     }
 
-    // SECURITY: Check for device/IP abuse
+    // FIX: Check offer validity BEFORE abuse check to avoid unnecessary abuse logging
+    // when the offer is already invalid/expired/exhausted
+    const isValid = this.checkOfferValidity(offer);
+    if (!isValid.valid) {
+      await logCouponAction('CLAIM_FAILED', userId, offerId, { reason: 'invalid_offer', details: isValid.reason }, 'failure', isValid.reason);
+      // Invalidate cache even on failure
+      await this.invalidateOfferCache().catch(() => {});
+      return { success: false, message: isValid.reason || 'Offer is not valid' };
+    }
+
+    // SECURITY: Check for device/IP abuse (only after validating offer is active)
     const deviceCheck = await checkDeviceAbuse(offerObjectId, deviceInfo?.fingerprint, deviceInfo?.ip);
     if (deviceCheck.blocked) {
       await logCouponAction('CLAIM_FAILED', userId, offerId, {
@@ -678,23 +688,21 @@ export class OfferService {
       return { success: false, message: deviceCheck.reason || 'Too many claims detected' };
     }
 
-    // Check offer validity
-    const isValid = this.checkOfferValidity(offer);
-    if (!isValid.valid) {
-      await logCouponAction('CLAIM_FAILED', userId, offerId, { reason: 'invalid_offer', details: isValid.reason }, 'failure', isValid.reason);
-      // Invalidate cache even on failure
-      await this.invalidateOfferCache().catch(() => {});
-      return { success: false, message: isValid.reason || 'Offer is not valid' };
-    }
+    // CRITICAL FIX: Atomic check-and-increment to prevent race conditions
+    // Uses findOneAndUpdate to atomically verify and increment usage in a single operation
+    const OfferModel = mongoose.model('Offer');
+    const atomicOffer = await OfferModel.findOneAndUpdate(
+      {
+        _id: offerObjectId,
+        $expr: { $lt: ['$currentUses', '$maxUses'] },
+        isActive: true
+      },
+      { $inc: { currentUses: 1 } },
+      { new: true }
+    );
 
-    // Check global usage limit
-    if ((offer as any).currentUses >= (offer as any).maxUses) {
-      await logCouponAction('CLAIM_FAILED', userId, offerId, { reason: 'exhausted', currentUses: (offer as any).currentUses, maxUses: (offer as any).maxUses }, 'failure', 'Offer has reached maximum uses');
-      // Invalidate cache even on failure
-      await this.invalidateOfferCache().catch(() => {});
-      return { success: false, message: 'Offer has reached maximum uses' };
-    }
-
+    // FIX: Check per-user limit BEFORE incrementing to prevent race condition
+    // If we increment first and then check, users could exceed per-user limit
     const maxPerUser = (offer as any).maxUsesPerUser || 1;
 
     const appliedCount = await OfferClaim.countDocuments({
@@ -709,6 +717,13 @@ export class OfferService {
         success: false,
         message: 'You have already used this offer the maximum number of times',
       };
+    }
+
+    if (!atomicOffer) {
+      // Either exhausted, inactive, or not found - invalidate cache
+      await this.invalidateOfferCache().catch(() => {});
+      await logCouponAction('CLAIM_FAILED', userId, offerId, { reason: 'exhausted_or_inactive' }, 'failure', 'Offer unavailable or exhausted');
+      return { success: false, message: 'Offer unavailable or exhausted' };
     }
 
     // Return existing active claim if user already has one ready to use

@@ -110,13 +110,14 @@ interface ServiceSlide {
 
 interface ParallaxServiceSliderProps {
   limit?: number;
+  services?: Service[];
 }
 
 // -------------------------------------------------
 // ------------------ Component --------------------
 // -------------------------------------------------
 
-const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6 }) => {
+const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6, services: servicesProp }) => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
   const { convert, currency, format } = usePriceConversion();
@@ -133,12 +134,48 @@ const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6
   const slideRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const rafIds = useRef<Set<string>>(new Set());
   const isAnimatingRef = useRef(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const isInViewRef = useRef(true);
+  const [motionEffectsEnabled, setMotionEffectsEnabled] = useState(true);
+
+  useEffect(() => {
+    const reducedQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const mobileQuery = window.matchMedia('(max-width: 768px)');
+    const update = () => setMotionEffectsEnabled(!reducedQuery.matches && !mobileQuery.matches);
+    update();
+    reducedQuery.addEventListener('change', update);
+    mobileQuery.addEventListener('change', update);
+    return () => {
+      reducedQuery.removeEventListener('change', update);
+      mobileQuery.removeEventListener('change', update);
+    };
+  }, []);
+
+  useEffect(() => {
+    const node = sectionRef.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        isInViewRef.current = entry.isIntersecting;
+        if (!entry.isIntersecting) {
+          raf.stop();
+        } else if (isLoaded && motionEffectsEnabled && rafIds.current.size > 0) {
+          raf.start();
+        }
+      },
+      { rootMargin: '100px' }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isLoaded, motionEffectsEnabled]);
 
   const TRANSITION_MS = 850;
 
   // Apply tilt effect to each slide
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || !motionEffectsEnabled) return;
 
     rafIds.current.forEach(id => raf.remove(id));
     rafIds.current.clear();
@@ -154,6 +191,7 @@ const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6
       const bgPos = { current: vec2(), target: vec2() };
 
       const ticker = () => {
+        if (!isInViewRef.current) return;
         rotDeg.current.x = lerp(rotDeg.current.x, rotDeg.target.x, lerpAmount);
         rotDeg.current.y = lerp(rotDeg.current.y, rotDeg.target.y, lerpAmount);
         bgPos.current.x = lerp(bgPos.current.x, bgPos.target.x, lerpAmount);
@@ -198,57 +236,72 @@ const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6
       };
     });
 
-    raf.start();
+    if (isInViewRef.current) {
+      raf.start();
+    }
 
     return () => {
       slideRefs.current.forEach(el => el._cleanup?.());
       rafIds.current.forEach(id => raf.remove(id));
       rafIds.current.clear();
     };
-  }, [services, isLoaded]);
+  }, [services, isLoaded, motionEffectsEnabled]);
 
-  // Fetch services
+  const mapServicesToSlides = useCallback(
+    (source: Service[]): ServiceSlide[] =>
+      source.slice(0, limit).map((service) => {
+        const rawPrice =
+          (service as any).pricing?.currentPrice ??
+          (typeof service.price === 'number' ? service.price : service.price?.amount || 0);
+        const rating =
+          typeof service.rating === 'number'
+            ? service.rating
+            : (service.rating?.average || 0);
+        const reviewCount =
+          service.reviewCount ||
+          (typeof service.rating === 'object' ? service.rating?.count : 0) ||
+          0;
+
+        const categoryImage = getCategoryImage(service.category || '');
+        const serviceImage = service.image || service.images?.[0] || categoryImage;
+
+        return {
+          service,
+          title: service.title || service.name || 'Service',
+          subtitle: service.category || 'Beauty Service',
+          description: service.description?.slice(0, 60) + '...' || 'Professional service at your doorstep',
+          image: serviceImage,
+          price: format(convert(rawPrice, 'USD'), currency),
+          rating,
+          reviewCount,
+          duration: service.duration ? `${service.duration} min` : '60 min',
+          location: service.provider?.location || 'Dubai',
+          providerName: service.provider?.businessName || (service as any).providerName || 'NILIN Pro',
+          category: service.category || 'Service',
+          isFavorite: false,
+          providerId: service.provider?._id || (service as any).providerId || '',
+        };
+      }),
+    [limit, convert, format, currency]
+  );
+
   useEffect(() => {
+    if (servicesProp !== undefined) {
+      if (servicesProp.length > 0) {
+        setServices(mapServicesToSlides(servicesProp));
+        setError(null);
+      }
+      setIsLoading(servicesProp.length === 0);
+      return;
+    }
+
     const fetchServices = async () => {
       try {
         setIsLoading(true);
         setError(null);
         const response = await searchApi.searchServices({ limit, sortBy: 'popularity' });
         if (response.success && response.data.services) {
-          const mappedServices: ServiceSlide[] = response.data.services.map((service) => {
-            const rawPrice =
-              (service as any).pricing?.currentPrice ??
-              (typeof service.price === 'number' ? service.price : service.price?.amount || 0);
-            const rating =
-              typeof service.rating === 'number'
-                ? service.rating
-                : (service.rating?.average || 0);
-            const reviewCount =
-              service.reviewCount ||
-              (typeof service.rating === 'object' ? service.rating?.count : 0) ||
-              0;
-
-            const categoryImage = getCategoryImage(service.category || '');
-            const serviceImage = service.image || service.images?.[0] || categoryImage;
-
-            return {
-              service,
-              title: service.title || service.name || 'Service',
-              subtitle: service.category || 'Beauty Service',
-              description: service.description?.slice(0, 60) + '...' || 'Professional service at your doorstep',
-              image: serviceImage,
-              price: format(convert(rawPrice, 'USD'), currency),
-              rating,
-              reviewCount,
-              duration: service.duration ? `${service.duration} min` : '60 min',
-              location: service.provider?.location || 'Dubai',
-              providerName: service.provider?.businessName || (service as any).providerName || 'NILIN Pro',
-              category: service.category || 'Service',
-              isFavorite: false,
-              providerId: service.provider?._id || (service as any).providerId || '',
-            };
-          });
-          setServices(mappedServices);
+          setServices(mapServicesToSlides(response.data.services));
         }
       } catch (err) {
         console.error('Error fetching services:', err);
@@ -259,7 +312,7 @@ const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6
     };
 
     fetchServices();
-  }, [limit, convert, format, currency]);
+  }, [limit, servicesProp, mapServicesToSlides]);
 
   // Image loading
   useEffect(() => {
@@ -365,7 +418,7 @@ const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6
         });
         toast.success('Added to favorites');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to toggle favorite:', err);
       toast.error('Failed to update favorites');
     }
@@ -381,7 +434,7 @@ const ParallaxServiceSlider: React.FC<ParallaxServiceSliderProps> = ({ limit = 6
   const currentService = services[currentIndex];
 
   return (
-    <section className="py-10 px-0 bg-nilin-cream relative overflow-hidden">
+    <section ref={sectionRef} className="py-10 px-0 bg-nilin-cream relative overflow-hidden">
       {/* Loader Overlay */}
       {!isLoaded && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-nilin-cream transition-opacity duration-500">

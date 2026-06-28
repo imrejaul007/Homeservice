@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
 import type { BookingAttributionContext } from '../../types/bookingAttribution';
 import { searchApi } from '../../services/searchApi';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 
 const BookServicePage: React.FC = () => {
   const { serviceId } = useParams<{ serviceId: string }>();
@@ -18,27 +19,18 @@ const BookServicePage: React.FC = () => {
   const [service, setService] = useState<Service | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedVariantIndex, setSelectedVariantIndex] = useState<number | null>(null);
 
-  // CRITICAL: Load service and variant from state or fetch from API
   useEffect(() => {
-    // First check if service was passed via state (faster, no API call)
     const stateService = location.state?.service as Service | undefined;
+    const stateServiceId = (stateService as { _id?: string; id?: string })?._id
+      || (stateService as { id?: string })?.id;
 
-    // Check if the state service matches the URL serviceId (flexible check)
-    const stateServiceId = (stateService as any)?._id || (stateService as any)?.id;
     if (stateService && stateServiceId === serviceId) {
-      console.log('[BookServicePage] Service loaded from state:', stateService.name, 'variant:', (stateService as any).selectedVariant);
       setService(stateService);
-      // Also store variant info if passed
-      if ((stateService as any).selectedVariant !== undefined) {
-        setSelectedVariantIndex((stateService as any).selectedVariant);
-      }
       setLoading(false);
       return;
     }
 
-    // If not in state, fetch from API
     if (serviceId) {
       fetchServiceDetails();
     } else {
@@ -46,19 +38,6 @@ const BookServicePage: React.FC = () => {
       setLoading(false);
     }
   }, [serviceId]);
-
-  // When navigating TO search, it means something went wrong - log it
-  useEffect(() => {
-    const currentPath = location.pathname;
-    if (currentPath === '/search' || currentPath.startsWith('/search?')) {
-      console.error('[BookServicePage] REDIRECT TO SEARCH DETECTED - This should not happen!');
-      console.error('This means BookServicePage could not load the service.');
-    }
-  }, [location.pathname]);
-
-  // Idempotency keys are generated fresh on each submit inside BookingFormWizard.
-  // Do NOT persist them in sessionStorage — that caused stale bookings to be returned
-  // when the user changed date, time, or coupon and tried again.
 
   const fetchServiceDetails = async () => {
     if (!serviceId) {
@@ -70,56 +49,50 @@ const BookServicePage: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      console.log('[BookServicePage] Fetching service:', serviceId);
 
-      // Use the searchApi service to fetch service details
       const response = await searchApi.getServiceById(serviceId);
 
       if (response.success && response.data?.service) {
-        const fetchedService = response.data.service;
-        console.log('[BookServicePage] Service fetched successfully:', fetchedService.name);
-        setService(fetchedService);
+        setService(response.data.service);
       } else {
-        console.error('[BookServicePage] Service not found:', response);
         setError('Service not found. It may have been removed.');
       }
-    } catch (error) {
-      console.error('[BookServicePage] Error fetching service:', error);
-      setError('Unable to load service details. Please try again.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to load service details. Please try again.';
+      setError(message);
+      showDeduplicatedError('Failed to load service', message);
     } finally {
       setLoading(false);
     }
   };
 
   const handleBookingSuccess = (bookingId: string, bookingNumber?: string) => {
-    // Clear the booking state from sessionStorage
     sessionStorage.removeItem(`booking_idempotency_${serviceId}`);
 
     if (isGuest && bookingNumber) {
       navigate(`/track/${bookingNumber}`, {
-        state: { message: 'Booking created successfully! Check your email for details.' }
+        state: { message: 'Booking created successfully! Check your email for details.' },
       });
     } else {
       navigate(`/customer/bookings/${bookingId}`, {
-        state: { message: 'Booking created successfully!' }
+        state: { message: 'Booking created successfully!' },
       });
     }
   };
 
-  const handleCancel = () => {
-    // Clear the booking state
-    sessionStorage.removeItem(`booking_idempotency_${serviceId}`);
-    navigate(-1);
-  };
+  const attribution = (location.state as { attribution?: BookingAttributionContext })?.attribution;
+  const providerId = (location.state as { providerId?: string })?.providerId
+    || (service as { providerId?: string })?.providerId
+    || service?.provider?._id;
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Loading service details...</p>
+            <div className="w-12 h-12 border-4 border-nilin-rose/30 border-t-nilin-rose rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-nilin-warmGray">Loading service details...</p>
           </div>
         </div>
         <Footer />
@@ -127,30 +100,30 @@ const BookServicePage: React.FC = () => {
     );
   }
 
-  if (error) {
+  if (error || !service) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
+        <div className="flex-1 flex items-center justify-center px-4">
           <div className="text-center max-w-md">
-            <div className="bg-red-50 rounded-full p-3 w-16 h-16 mx-auto mb-4">
-              <AlertCircle className="h-10 w-10 text-red-600" />
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertCircle className="w-8 h-8 text-red-600" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Unable to Load Service</h2>
-            <p className="text-gray-600 mb-6">{error}</p>
-            <div className="space-x-4">
+            <h2 className="text-xl font-semibold text-nilin-charcoal mb-2">Unable to Load Service</h2>
+            <p className="text-nilin-warmGray mb-6">{error || 'Service not found'}</p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <button
-                onClick={() => navigate('/search')}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Browse Services
-              </button>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                onClick={fetchServiceDetails}
+                className="px-6 py-2 bg-nilin-rose text-white rounded-xl font-medium hover:bg-nilin-coral transition-colors"
               >
                 Try Again
               </button>
+              <button
+                onClick={() => navigate('/search')}
+                className="px-6 py-2 border border-nilin-border text-nilin-charcoal rounded-xl font-medium hover:bg-white transition-colors"
+              >
+                Browse Services
+              </button>
             </div>
           </div>
         </div>
@@ -159,84 +132,14 @@ const BookServicePage: React.FC = () => {
     );
   }
 
-  if (!service) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
-        <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <p className="text-gray-600 mb-4">Service not found</p>
-            <button
-              onClick={() => navigate('/search')}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Back to Search
-            </button>
-          </div>
-        </div>
-        <Footer />
-      </div>
-    );
-  }
-
-  // Normalize providerId (search API may return a populated object)
-  const resolveProviderId = (svc: Service): string => {
-    const raw = svc.providerId ?? (svc.provider as { _id?: string })?._id;
-    if (typeof raw === 'string') return raw;
-    if (raw && typeof raw === 'object' && '_id' in raw) {
-      return String((raw as { _id: unknown })._id);
-    }
-    return '';
-  };
-
-  const resolvedProviderId = resolveProviderId(service);
-
-  // Extract offer/coupon and attribution from navigation state
-  const navigationState = location.state as {
-    couponCode?: string;
-    offerId?: string;
-    offerDetails?: {
-      code: string;
-      title: string;
-      type: 'percentage' | 'fixed' | 'free_service';
-      value: number;
-      maxDiscount?: number;
-    };
-    filterByOffer?: boolean;
-    source?: BookingAttributionContext['source'];
-    adCampaignId?: string;
-    query?: string;
-    position?: number;
-    referrer?: string;
-  } | undefined;
-
-  const attribution: BookingAttributionContext = {
-    source: navigationState?.source ?? (navigationState?.query ? 'search' : 'direct'),
-    adCampaignId: navigationState?.adCampaignId,
-    query: navigationState?.query,
-    position: navigationState?.position,
-    referrer: navigationState?.referrer ?? (typeof document !== 'undefined' ? document.referrer : undefined),
-  };
-
-  // Ensure service has required fields for BookingForm
-  const serviceWithDefaults = {
-    ...service,
-    providerId: resolvedProviderId,
-  };
-
   return (
     <BookingFormWizard
-      service={serviceWithDefaults}
-      providerId={resolvedProviderId}
-      onSuccess={handleBookingSuccess}
-      onCancel={handleCancel}
+      service={service}
+      providerId={providerId || ''}
       guestMode={isGuest}
-      preloadedOffer={navigationState?.couponCode ? {
-        code: navigationState.couponCode,
-        offerId: navigationState.offerId,
-        offerDetails: navigationState.offerDetails,
-      } : undefined}
       attribution={attribution}
+      onSuccess={handleBookingSuccess}
+      onCancel={() => navigate(-1)}
     />
   );
 };

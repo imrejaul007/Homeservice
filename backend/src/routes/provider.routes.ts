@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import {
   getMyServices,
   getServiceById,
@@ -7,6 +7,7 @@ import {
   deleteService,
   restoreService,
   getDeletedServices,
+  getDeletedServicesCount,
   permanentDeleteService,
   toggleServiceStatus,
   cloneService,
@@ -25,9 +26,17 @@ import {
   deletePortfolioItem,
   addPortfolioImage,
   removePortfolioImage,
+  addServiceImage,
+  removeServiceImage,
+  uploadServiceImagesDirect,
   getProviderSettings,
   updateProviderSettings,
   getProviderReviews,
+  exportServices,
+  bulkActivateServices,
+  bulkDeactivateServices,
+  bulkDeleteServices,
+  getProviderDashboardStats,
 } from '../controllers/provider.controller';
 import { authenticate, requireProviderAccount } from '../middleware/auth.middleware';
 import { validateProviderRole } from '../middleware/validation.middleware';
@@ -38,11 +47,12 @@ import {
   validateServiceId
 } from '../middleware/validation/provider.validation';
 import rateLimit from 'express-rate-limit';
-import providerOpsRoutes from './provider-ops.routes';
+import Joi from 'joi';
+import { validate } from '../middleware/validation.middleware';
 import ProviderProfile from '../models/providerProfile.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
-import { uploadPortfolio, uploadPortfolioMultiple } from '../utils/cloudinary';
+import { uploadPortfolio, uploadPortfolioMultiple, uploadServiceImages, uploadServiceDirect } from '../utils/cloudinary';
 
 const router = express.Router();
 
@@ -57,6 +67,11 @@ const providerRateLimit = rateLimit({
   }
 });
 
+const verificationDocumentSchema = Joi.object({
+  documentType: Joi.string().trim().min(1).max(100).required(),
+  documentUrl: Joi.string().uri({ scheme: ['http', 'https'] }).required(),
+});
+
 // Apply authentication and provider role validation to all routes
 router.use(authenticate);
 router.use(validateProviderRole);
@@ -65,11 +80,22 @@ router.use(providerRateLimit);
 // Analytics Routes (MUST be before :id routes to prevent matching)
 router.get('/analytics/insights', getProviderInsightsAnalytics);
 router.get('/analytics', getOverviewAnalytics);
+router.get('/dashboard/stats', getProviderDashboardStats);
 
 // Service Management Routes (specific routes before :id)
 router.get('/services', getMyServices);
 router.post('/services', validateServiceCreation, requireProviderAccount, createService);
 router.get('/services/trash', getDeletedServices);
+router.get('/services/trash/count', getDeletedServicesCount);
+router.get('/services/export', exportServices);
+
+// Direct image upload (before service creation)
+router.post('/services/upload-images', uploadServiceDirect, uploadServiceImagesDirect);
+
+// Bulk service operations (before :id routes)
+router.post('/services/bulk/activate', bulkActivateServices);
+router.post('/services/bulk/deactivate', bulkDeactivateServices);
+router.delete('/services/bulk/delete', bulkDeleteServices);
 
 // Service Routes with ID (after specific routes)
 router.get('/services/:id', validateServiceId, getServiceById);
@@ -84,10 +110,14 @@ router.get('/services/:id/analytics', validateServiceId, getServiceAnalytics);
 // Service clone
 router.post('/services/:id/clone', validateServiceId, cloneService);
 
+// Service Image Management Routes
+router.patch('/services/:id/images', validateServiceId, uploadServiceImages, addServiceImage);
+router.delete('/services/:id/images/:imageUrl', validateServiceId, removeServiceImage);
+
 // Provider Onboarding Routes (no rate limiting for these as they are lightweight)
 router.get('/onboarding', getProviderOnboardingStatus);
 router.get('/verification', getProviderVerification);
-router.post('/verification/documents', uploadVerificationDocument);
+router.post('/verification/documents', validate(verificationDocumentSchema), uploadVerificationDocument);
 router.post('/verification/consent', recordBackgroundCheckConsent);
 router.post('/verification/submit', submitVerification);
 
@@ -175,8 +205,5 @@ router.patch('/profile', asyncHandler(async (req, res) => {
 
 // Provider reviews (canonical)
 router.get('/reviews', getProviderReviews);
-
-// Operations Dashboard Routes (requires admin)
-router.use('/ops', providerOpsRoutes);
 
 export default router;

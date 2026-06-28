@@ -18,6 +18,7 @@ export interface StandardErrorResponse {
   success: false;
   message: string;
   code: string;
+  error?: string;
   correlationId?: string;
   errors?: ErrorDetail[];
   details?: Record<string, unknown>;
@@ -257,6 +258,22 @@ const getMongooseErrorInfo = (err: Error): MongooseErrorInfo => {
     };
   }
 
+  // Rate limit errors from express-rate-limit or custom limiters
+  const rateLimitErr = err as ExtendedError & { status?: number; statusCode?: number; retryAfter?: number };
+  if (
+    rateLimitErr.statusCode === 429 ||
+    rateLimitErr.status === 429 ||
+    err.message?.toLowerCase().includes('too many requests')
+  ) {
+    return {
+      code: ERROR_CODES.RATE_LIMIT_EXCEEDED,
+      statusCode: 429,
+      message: err.message || 'Please wait a moment before trying again',
+      errors: [],
+      details: { retryAfter: rateLimitErr.retryAfter || 60 },
+    };
+  }
+
   // Default to internal error
   return {
     code: ERROR_CODES.INTERNAL_ERROR,
@@ -420,7 +437,9 @@ export const errorHandler = (
 
   // Set retry-after header for rate limit errors
   if (category === 'rate_limit') {
-    retryAfter = 60; // Default 60 seconds
+    const errorWithRetry = err as Error & { retryAfter?: number };
+    const detailsRetryAfter = typeof details.retryAfter === 'number' ? details.retryAfter : undefined;
+    retryAfter = errorWithRetry.retryAfter || detailsRetryAfter || 60;
     res.setHeader('Retry-After', String(retryAfter));
   }
 
@@ -504,6 +523,7 @@ export const errorHandler = (
   // Add retry-after for rate limit errors
   if (retryAfter) {
     response.retryAfter = retryAfter;
+    response.error = 'Too many requests';
   }
 
   // Send response (only if headers not already sent)

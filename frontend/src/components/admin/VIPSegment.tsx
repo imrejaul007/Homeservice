@@ -1,3 +1,4 @@
+import { getAdminFetchErrorMessage } from '../../utils/adminDataHelpers';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Crown,
@@ -123,125 +124,11 @@ export const VIPSegment: React.FC<VIPSegmentProps> = ({
         setCustomers(response.data.data.customers || []);
         setStats(response.data.data.stats);
       } else {
-        // Mock data
-        setCustomers([
-          {
-            id: 'vip-001',
-            customerId: 'cust-001',
-            name: 'Ahmed Al-Maktoum',
-            email: 'ahmed@email.com',
-            phone: '+971501234567',
-            tier: 'platinum',
-            lifetimeValue: 156000,
-            totalBookings: 234,
-            avgOrderValue: 667,
-            lastBooking: new Date().toISOString(),
-            joinedAt: '2021-03-15',
-            preferences: ['Premium Services', 'Same-day Booking', 'Luxury Spa'],
-            engagement: 95,
-            upgradePotential: 'low'
-          },
-          {
-            id: 'vip-002',
-            customerId: 'cust-002',
-            name: 'Fatima Hassan',
-            email: 'fatima@email.com',
-            phone: '+971502345678',
-            tier: 'gold',
-            lifetimeValue: 89000,
-            totalBookings: 156,
-            avgOrderValue: 571,
-            lastBooking: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            joinedAt: '2021-08-22',
-            preferences: ['Home Cleaning', 'Deep Cleaning', 'Move-in/Move-out'],
-            engagement: 88,
-            upgradePotential: 'high'
-          },
-          {
-            id: 'vip-003',
-            customerId: 'cust-003',
-            name: 'Mohammed Al-Rashid',
-            email: 'mohammed@email.com',
-            phone: '+971503456789',
-            tier: 'gold',
-            lifetimeValue: 72000,
-            totalBookings: 98,
-            avgOrderValue: 735,
-            lastBooking: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            joinedAt: '2022-01-10',
-            preferences: ['Electrical', 'Plumbing', 'AC Maintenance'],
-            engagement: 82,
-            upgradePotential: 'medium'
-          },
-          {
-            id: 'vip-004',
-            customerId: 'cust-004',
-            name: 'Sarah Khan',
-            email: 'sarah@email.com',
-            phone: '+971504567890',
-            tier: 'silver',
-            lifetimeValue: 45000,
-            totalBookings: 67,
-            avgOrderValue: 672,
-            lastBooking: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-            joinedAt: '2022-06-05',
-            preferences: ['Beauty Services', 'Hair Styling', 'Massage'],
-            engagement: 75,
-            upgradePotential: 'high'
-          },
-          {
-            id: 'vip-005',
-            customerId: 'cust-005',
-            name: 'Omar Farouk',
-            email: 'omar@email.com',
-            phone: '+971505678901',
-            tier: 'bronze',
-            lifetimeValue: 23000,
-            totalBookings: 34,
-            avgOrderValue: 676,
-            lastBooking: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-            joinedAt: '2022-11-20',
-            preferences: ['Gardening', 'Pool Maintenance'],
-            engagement: 65,
-            upgradePotential: 'medium'
-          }
-        ]);
-        setStats({
-          totalVIP: 1247,
-          byTier: { bronze: 567, silver: 345, gold: 234, platinum: 101 },
-          totalRevenue: 45678900,
-          avgLifetimeValue: 36640,
-          avgOrderValue: 425,
-          avgBookings: 45,
-          retentionRate: 94.5,
-          growthRate: 12.3,
-          tierDistribution: [
-            { tier: 'Platinum', count: 101, revenue: 15678900, color: '#8B5CF6' },
-            { tier: 'Gold', count: 234, revenue: 16845600, color: '#FFD700' },
-            { tier: 'Silver', count: 345, revenue: 8970000, color: '#C0C0C0' },
-            { tier: 'Bronze', count: 567, revenue: 4184400, color: '#CD7F32' }
-          ],
-          monthlyTrend: [
-            { month: 'Jan', vipCount: 1102, revenue: 6500000 },
-            { month: 'Feb', vipCount: 1145, revenue: 7120000 },
-            { month: 'Mar', vipCount: 1189, revenue: 7560000 },
-            { month: 'Apr', vipCount: 1212, revenue: 7890000 },
-            { month: 'May', vipCount: 1247, revenue: 8230000 },
-            { month: 'Jun', vipCount: 1289, revenue: 8789000 }
-          ],
-          topCategories: [
-            { category: 'Home Cleaning', percentage: 28 },
-            { category: 'Beauty & Spa', percentage: 22 },
-            { category: 'AC Maintenance', percentage: 18 },
-            { category: 'Electrical', percentage: 15 },
-            { category: 'Plumbing', percentage: 12 },
-            { category: 'Other', percentage: 5 }
-          ]
-        });
+        setError('No data available from the server');
       }
     } catch (err) {
       console.error('Error fetching VIP data:', err);
-      setError('Failed to load VIP segment data');
+      setError(getAdminFetchErrorMessage(err));
     } finally {
       setLoading(false);
     }

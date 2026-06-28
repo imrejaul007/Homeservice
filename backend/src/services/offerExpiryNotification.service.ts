@@ -327,11 +327,20 @@ export class OfferExpiryNotificationService {
 
       logger.info('Processing expired claims', { count: expiredClaims.length });
 
-      for (const claim of expiredClaims) {
-        // Mark claim as expired
-        await OfferClaim.findByIdAndUpdate(claim._id, { status: 'expired' });
+      if (expiredClaims.length === 0) {
+        return;
+      }
 
-        // Send notification
+      const expiredClaimIds = expiredClaims.map(claim => claim._id);
+
+      // Bulk update expired claims
+      await OfferClaim.updateMany(
+        { _id: { $in: expiredClaimIds }, status: 'claimed' },
+        { $set: { status: 'expired' } }
+      );
+
+      // Send notifications for each expired claim
+      for (const claim of expiredClaims) {
         const user = claim.userId as any;
         if (user?._id) {
           await this.notifyClaimExpired(user._id.toString(), claim.couponCode);

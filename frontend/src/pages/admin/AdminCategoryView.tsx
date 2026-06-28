@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Loader2,
 } from 'lucide-react';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import authService from '../../services/AuthService';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
@@ -97,7 +98,7 @@ const AdminCategoryView: React.FC = () => {
       } else {
         setError('Category not found');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching category:', err);
       setError(err?.response?.data?.message || 'Failed to load category');
     } finally {
@@ -159,7 +160,7 @@ const AdminCategoryView: React.FC = () => {
 
   const handleEditCategory = () => {
     if (category) {
-      navigate(`/admin/categories/edit/${category._id || categoryId}`);
+      navigate(`/admin/categories?edit=${category._id || categoryId}`);
     }
   };
 
@@ -167,24 +168,28 @@ const AdminCategoryView: React.FC = () => {
     navigate(`/admin/subcategory/${subcat._id}`);
   };
 
+  // Loading state
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-nilin-cream flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral mx-auto mb-4"></div>
-          <p className="text-nilin-warmGray">Loading category...</p>
+      <AdminPageShell title="Category Details" wideLayout>
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral mx-auto mb-4"></div>
+            <p className="text-nilin-warmGray">Loading category...</p>
+          </div>
         </div>
-      </div>
+      </AdminPageShell>
     );
   }
 
+  // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-nilin-cream flex items-center justify-center">
-        <div className="max-w-md w-full mx-4">
+      <AdminPageShell title="Category Not Found" wideLayout>
+        <div className="max-w-md w-full mx-auto">
           <div className="bg-white rounded-2xl shadow-nilin p-8 text-center">
-            <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
-              <AlertCircle className="w-8 h-8 text-red-500" />
+            <div className="w-16 h-16 rounded-full bg-nilin-rose/10 flex items-center justify-center mx-auto mb-4">
+              <AlertCircle className="w-8 h-8 text-nilin-rose" />
             </div>
             <h2 className="text-xl font-semibold text-nilin-charcoal mb-2">Category Not Found</h2>
             <p className="text-nilin-warmGray mb-6">{error}</p>
@@ -197,87 +202,76 @@ const AdminCategoryView: React.FC = () => {
             </button>
           </div>
         </div>
-      </div>
+      </AdminPageShell>
     );
   }
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-nilin-cream">
-      <div className="max-w-5xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-6">
-          <button
-            onClick={() => navigate('/admin/dashboard')}
-            className="inline-flex items-center text-nilin-warmGray hover:text-nilin-charcoal transition-colors mb-4"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
-          </button>
+      {/* Skip link */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+      >
+        Skip to main content
+      </a>
 
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              {category?.icon && (
-                <div className="w-14 h-14 bg-nilin-coral/10 rounded-xl flex items-center justify-center">
-                  <span className="text-2xl">{category.icon}</span>
-                </div>
-              )}
-              <div>
-                <h1 className="text-2xl font-semibold text-nilin-charcoal">
-                  {category?.name || 'Category Details'}
-                </h1>
-                <p className="text-nilin-warmGray">Category management and overview</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="p-2 border border-nilin-border rounded-lg hover:bg-nilin-lightGray transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className={`w-5 h-5 text-nilin-charcoal ${isRefreshing ? 'animate-spin' : ''}`} />
-              </button>
-              <button
-                onClick={handleEditCategory}
-                className="inline-flex items-center px-4 py-2 bg-nilin-coral text-white rounded-xl hover:bg-nilin-rose transition-colors"
-              >
-                <Edit className="w-4 h-4 mr-2" />
-                Edit Category
-              </button>
-              <button
-                onClick={handleViewPublicPage}
-                className="inline-flex items-center px-4 py-2 border border-nilin-border text-nilin-charcoal rounded-xl hover:bg-nilin-lightGray transition-colors"
-              >
-                <ExternalLink className="w-4 h-4 mr-2" />
-                View Public Page
-              </button>
-            </div>
-          </div>
-        </div>
+      <AdminPageShell
+        title={category?.name || 'Category Details'}
+        subtitle="Category management and overview"
+        backHref="/admin/dashboard"
+        wideLayout
+        headerActions={
+          <>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="flex items-center justify-center w-11 h-11 border border-nilin-border rounded-xl hover:bg-nilin-blush/50 transition-colors disabled:opacity-50"
+              aria-label="Refresh category data"
+            >
+              <RefreshCw className={`w-5 h-5 text-nilin-charcoal ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={handleEditCategory}
+              className="inline-flex items-center px-4 py-2.5 bg-nilin-coral text-white rounded-xl hover:bg-nilin-rose transition-colors"
+            >
+              <Edit className="w-4 h-4 mr-2" />
+              Edit Category
+            </button>
+            <button
+              onClick={handleViewPublicPage}
+              className="inline-flex items-center px-4 py-2.5 border border-nilin-border text-nilin-charcoal rounded-xl hover:bg-nilin-lightGray transition-colors"
+            >
+              <ExternalLink className="w-4 h-4 mr-2" />
+              View Public Page
+            </button>
+          </>
+        }
+      >
+        <main id="main-content" className="space-y-6">
 
         {category && (
           <div className="space-y-6">
             {/* Status Banner */}
             <div className={`rounded-xl p-4 ${
               category.isActive
-                ? 'bg-green-50 border border-green-200'
-                : 'bg-amber-50 border border-amber-200'
+                ? 'bg-nilin-green/10 border border-nilin-green/20'
+                : 'bg-nilin-amber/10 border border-nilin-amber/20'
             }`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    category.isActive ? 'bg-green-100' : 'bg-amber-100'
+                    category.isActive ? 'bg-nilin-green/20' : 'bg-nilin-amber/20'
                   }`}>
-                    <span className={category.isActive ? 'text-green-600' : 'text-amber-600'}>
+                    <span className={category.isActive ? 'text-nilin-green' : 'text-nilin-amber'}>
                       {category.isActive ? '✓' : '!'}
                     </span>
                   </div>
                   <div>
-                    <p className={`font-medium ${category.isActive ? 'text-green-800' : 'text-amber-800'}`}>
+                    <p className={`font-medium ${category.isActive ? 'text-nilin-green' : 'text-nilin-amber'}`}>
                       {category.isActive ? 'Active' : 'Inactive'}
                     </p>
-                    <p className={`text-sm ${category.isActive ? 'text-green-600' : 'text-amber-600'}`}>
+                    <p className={`text-sm ${category.isActive ? 'text-nilin-green/80' : 'text-nilin-amber/80'}`}>
                       {category.isActive
                         ? 'This category is visible to users'
                         : 'This category is hidden from users'}
@@ -444,8 +438,8 @@ const AdminCategoryView: React.FC = () => {
                         )}
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           subcat.isActive
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-amber-100 text-amber-700'
+                            ? 'bg-nilin-green/10 text-nilin-green'
+                            : 'bg-nilin-amber/10 text-nilin-amber'
                         }`}>
                           {subcat.isActive ? 'Active' : 'Inactive'}
                         </span>
@@ -485,8 +479,8 @@ const AdminCategoryView: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </main>
+    </AdminPageShell>
     </ErrorBoundary>
   );
 };
@@ -502,11 +496,11 @@ interface StatCardProps {
 
 const StatCard: React.FC<StatCardProps> = ({ icon, label, value, color, trend }) => {
   const colorClasses = {
-    blue: 'bg-blue-50 text-blue-600',
-    green: 'bg-green-50 text-green-600',
-    yellow: 'bg-yellow-50 text-yellow-600',
-    red: 'bg-red-50 text-red-600',
-    purple: 'bg-purple-50 text-purple-600',
+    blue: 'bg-nilin-blue/10 text-nilin-blue',
+    green: 'bg-nilin-green/10 text-nilin-green',
+    yellow: 'bg-nilin-amber/10 text-nilin-amber',
+    red: 'bg-nilin-rose/10 text-nilin-rose',
+    purple: 'bg-nilin-purple/10 text-nilin-purple',
   };
 
   return (
@@ -518,7 +512,7 @@ const StatCard: React.FC<StatCardProps> = ({ icon, label, value, color, trend })
       <div className="flex items-center gap-1">
         <p className="text-sm text-nilin-warmGray">{label}</p>
         {trend !== undefined && trend !== 0 && (
-          <span className={`text-xs ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
+          <span className={`text-xs ${trend > 0 ? 'text-nilin-green' : 'text-nilin-rose'}`}>
             {trend > 0 ? '↑' : '↓'}
           </span>
         )}

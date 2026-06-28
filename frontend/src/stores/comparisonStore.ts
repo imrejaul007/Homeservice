@@ -18,7 +18,7 @@ interface ComparisonState {
   toggleService: (service: Service) => boolean;
   clearAll: () => void;
   isSelected: (id: string) => boolean;
-  canAdd: boolean;
+  canAdd: () => boolean;
 }
 
 export const useComparisonStore = create<ComparisonState>()(
@@ -59,7 +59,7 @@ export const useComparisonStore = create<ComparisonState>()(
         return get().items.some((item) => item.id === id);
       },
 
-      get canAdd(): boolean {
+      canAdd: (): boolean => {
         return get().items.length < MAX_COMPARISON_ITEMS;
       },
     }),

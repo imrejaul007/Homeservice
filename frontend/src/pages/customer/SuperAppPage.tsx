@@ -20,6 +20,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 import { superAppApi, StreakData, Achievement } from '../../services/superappApi';
 import { loyaltyApi, LoyaltyStatus } from '../../services/loyaltyApi';
 import { StreakWidget } from '../../components/superapp/AchievementBadges';
@@ -77,10 +78,11 @@ const SuperAppPage: React.FC = () => {
       if (response.success && response.data) {
         setState(prev => ({ ...prev, streak: response.data }));
       }
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || 'Failed to fetch streak data';
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string };
+      const errorMessage = axiosErr.response?.data?.message || axiosErr.message || 'Failed to fetch streak data';
       setErrors(prev => ({ ...prev, streak: { message: errorMessage } }));
-      console.error('Streak fetch error:', err);
+      showDeduplicatedError('Failed to load streak', errorMessage);
     } finally {
       setLoading(prev => ({ ...prev, streak: false }));
     }
@@ -98,10 +100,11 @@ const SuperAppPage: React.FC = () => {
           achievements: response.data.achievements || [],
         }));
       }
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || 'Failed to fetch achievements';
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string };
+      const errorMessage = axiosErr.response?.data?.message || axiosErr.message || 'Failed to fetch achievements';
       setErrors(prev => ({ ...prev, habits: { message: errorMessage } }));
-      console.error('Habits fetch error:', err);
+      showDeduplicatedError('Failed to load achievements', errorMessage);
     } finally {
       setLoading(prev => ({ ...prev, habits: false }));
     }
@@ -116,10 +119,11 @@ const SuperAppPage: React.FC = () => {
       if (response.success && response.data) {
         setState(prev => ({ ...prev, loyalty: response.data }));
       }
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || 'Failed to fetch loyalty status';
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string };
+      const errorMessage = axiosErr.response?.data?.message || axiosErr.message || 'Failed to fetch loyalty status';
       setErrors(prev => ({ ...prev, loyalty: { message: errorMessage } }));
-      console.error('Loyalty fetch error:', err);
+      showDeduplicatedError('Failed to load loyalty status', errorMessage);
     } finally {
       setLoading(prev => ({ ...prev, loyalty: false }));
     }
@@ -148,7 +152,8 @@ const SuperAppPage: React.FC = () => {
         await fetchLoyalty();
       }
     } catch (err) {
-      console.error('Check-in error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Check-in failed';
+      showDeduplicatedError('Check-in failed', errorMessage);
     }
   }, [fetchStreak, fetchLoyalty]);
 

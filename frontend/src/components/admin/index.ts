@@ -36,6 +36,24 @@ export { CityPerformance } from './CityPerformance';
 export { PeakHoursAnalysis } from './PeakHoursAnalysis';
 export { MagicNumber } from './MagicNumber';
 
+// Bulk Actions
+export {
+  BulkActionToolbar,
+  CompactBulkToolbar,
+  SelectionHeader,
+  createDefaultBulkActions,
+  type BulkAction,
+  type BulkActionToolbarProps,
+  type CompactBulkToolbarProps,
+  type SelectionHeaderProps,
+} from './BulkActionToolbar';
+export {
+  BulkActionProvider,
+  useBulkSelection,
+  useBulkSelectionWithItems,
+  type BulkActionContextValue,
+} from './BulkActionContext';
+
 // Layout
 export { AdminPageShell } from './AdminPageShell';
 export { AdminNav } from './AdminNav';

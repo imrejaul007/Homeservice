@@ -112,7 +112,7 @@ export const CorporateWallet: React.FC<CorporateWalletProps> = ({
       console.error('Failed to load more:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to load more transactions';
       setError(errorMessage);
-      toast.error('Failed to load more transactions', errorMessage);
+      toast.error('Failed to load more transactions', { description: errorMessage });
     }
   };
 
@@ -136,7 +136,7 @@ export const CorporateWallet: React.FC<CorporateWalletProps> = ({
       console.error('Failed to submit request:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to submit limit increase request';
       setError(errorMessage);
-      toast.error('Failed to submit request', errorMessage);
+      toast.error('Failed to submit request', { description: errorMessage });
     } finally {
       setSubmitting(false);
     }

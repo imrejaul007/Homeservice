@@ -212,6 +212,8 @@ const HeroSlider: React.FC = () => {
     <section
       ref={parallaxRef}
       className="relative overflow-hidden min-h-[600px] md:min-h-[700px]"
+      aria-roledescription="carousel"
+      aria-label="Feature highlights"
     >
       {/* Animated Gradient Background */}
       <div className="absolute inset-0">
@@ -402,17 +404,17 @@ const HeroSlider: React.FC = () => {
       {/* Arrow Navigation - Glass buttons */}
       <button
         onClick={prevSlide}
-        className="hidden md:flex absolute left-4 lg:left-8 top-1/2 -translate-y-1/2 p-3 rounded-full glass-nilin-strong hover:bg-white/90 shadow-nilin transition-all duration-300 hover:scale-110 z-20 group"
+        className="hidden md:flex absolute left-4 lg:left-8 top-1/2 -translate-y-1/2 w-12 h-12 items-center justify-center rounded-full glass-nilin-strong hover:bg-white/90 shadow-nilin transition-all duration-300 hover:scale-110 z-20 group focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
         aria-label="Previous slide"
       >
-        <ChevronLeft className="w-6 h-6 text-nilin-charcoal transition-transform duration-300 group-hover:-translate-x-1" />
+        <ChevronLeft className="w-6 h-6 text-nilin-charcoal transition-transform duration-300 group-hover:-translate-x-1" aria-hidden="true" />
       </button>
       <button
         onClick={nextSlide}
-        className="hidden md:flex absolute right-4 lg:right-8 top-1/2 -translate-y-1/2 p-3 rounded-full glass-nilin-strong hover:bg-white/90 shadow-nilin transition-all duration-300 hover:scale-110 z-20 group"
+        className="hidden md:flex absolute right-4 lg:right-8 top-1/2 -translate-y-1/2 w-12 h-12 items-center justify-center rounded-full glass-nilin-strong hover:bg-white/90 shadow-nilin transition-all duration-300 hover:scale-110 z-20 group focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
         aria-label="Next slide"
       >
-        <ChevronRight className="w-6 h-6 text-nilin-charcoal transition-transform duration-300 group-hover:translate-x-1" />
+        <ChevronRight className="w-6 h-6 text-nilin-charcoal transition-transform duration-300 group-hover:translate-x-1" aria-hidden="true" />
       </button>
 
       {/* Progress indicator */}

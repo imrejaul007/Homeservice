@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import Joi from 'joi';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import Booking from '../models/booking.model';
@@ -20,6 +21,47 @@ import { escapeRegex } from '../utils/formatBookingListItem';
 import Review, { PUBLIC_REVIEW_QUERY } from '../models/review.model';
 import { getCommissionRate, DEFAULT_PLATFORM_FEE_CONFIG } from '../services/settlement.service';
 import { deleteFromCloudinary } from '../utils/cloudinary';
+import AuditLog from '../models/auditLog.model';
+import Wallet from '../models/wallet.model';
+
+// Joi validation schema for provider settings update
+const providerSettingsSchema = Joi.object({
+  businessSettings: Joi.object({
+    autoAcceptBookings: Joi.boolean(),
+    cancellationPolicyHours: Joi.number().integer().min(0).max(168),
+    maxAdvanceBookingDays: Joi.number().integer().min(1).max(365),
+    minBookingNoticeHours: Joi.number().integer().min(0).max(168),
+  }).optional(),
+  locationInfo: Joi.object({
+    serviceAreas: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.string(),
+        Joi.object({
+          city: Joi.string(),
+          state: Joi.string().optional(),
+          country: Joi.string().optional(),
+        }),
+      ),
+    ).optional(),
+  }).optional(),
+  privacySettings: Joi.object({
+    showEmail: Joi.boolean(),
+    showPhone: Joi.boolean(),
+    showReviewsPublicly: Joi.boolean(),
+    showLastName: Joi.boolean(),
+    allowDirectMessages: Joi.boolean(),
+  }).optional(),
+  reviewDisplaySettings: Joi.object({
+    showReviews: Joi.boolean(),
+    hideNegativeReviews: Joi.boolean(),
+    minimumRating: Joi.number().integer().min(1).max(5),
+  }).optional(),
+  analyticsPreferences: Joi.object({
+    emailReports: Joi.boolean(),
+    weeklyReport: Joi.boolean(),
+    realTimeNotifications: Joi.boolean(),
+  }).optional(),
+});
 
 function buildBookingCityFilter(city?: string): Record<string, unknown> {
   if (!city || city.toLowerCase() === 'all') return {};
@@ -254,7 +296,11 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
     startDate,
     endDate,
     category,
-    search
+    search,
+    minRating,
+    minPrice,
+    maxPrice,
+    featured
   } = req.query;
 
   // Build query - EXCLUDE soft-deleted services
@@ -287,15 +333,34 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
     query.category = { $regex: new RegExp(escapeRegex(category as string), 'i') };
   }
 
-  // Search filter
+  // Search filter - comprehensive search across multiple fields
   if (search) {
     // FIX: Escape regex special characters to prevent regex injection
     const escapedSearch = escapeRegex(search as string);
     query.$or = [
       { name: { $regex: new RegExp(escapedSearch, 'i') } },
       { description: { $regex: new RegExp(escapedSearch, 'i') } },
-      { category: { $regex: new RegExp(escapedSearch, 'i') } }
+      { category: { $regex: new RegExp(escapedSearch, 'i') } },
+      { shortDescription: { $regex: new RegExp(escapedSearch, 'i') } },
+      { tags: { $regex: new RegExp(escapedSearch, 'i') } }
     ];
+  }
+
+  // Rating filter (minRating = minimum 4 stars means 4+)
+  if (minRating) {
+    query['rating.average'] = { $gte: Number(minRating) };
+  }
+
+  // Price range filter
+  if (minPrice || maxPrice) {
+    query['price.amount'] = {};
+    if (minPrice) query['price.amount'].$gte = Number(minPrice);
+    if (maxPrice) query['price.amount'].$lte = Number(maxPrice);
+  }
+
+  // Featured filter
+  if (featured === 'true') {
+    query.isFeatured = true;
   }
   
   // Calculate pagination
@@ -323,6 +388,10 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
       break;
     case 'status':
       sortObj.status = sortOrder;
+      break;
+    case 'rating':
+    case 'rating-average':
+      sortObj['rating.average'] = sortOrder;
       break;
     default:
       sortObj.createdAt = sortOrder;
@@ -1018,6 +1087,22 @@ export const restoreService = asyncHandler(async (req: Request, res: Response) =
 });
 
 /**
+ * Get count of deleted services (trash) for the authenticated provider
+ * GET /api/provider/services/trash/count
+ */
+export const getDeletedServicesCount = asyncHandler(async (req: Request, res: Response) => {
+  const count = await Service.countDocuments({
+    providerId: (req.user as IUser)._id.toString(),
+    isDeleted: true
+  });
+
+  res.json({
+    success: true,
+    data: { count }
+  });
+});
+
+/**
  * Get deleted services (trash)
  * GET /api/provider/services/trash
  * FIX: New endpoint to list soft-deleted services
@@ -1169,6 +1254,259 @@ export const toggleServiceStatus = asyncHandler(async (req: Request, res: Respon
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update service status', error.message);
   }
+});
+
+// ===========================================
+// BULK SERVICE OPERATIONS
+// ===========================================
+
+/**
+ * Bulk activate services
+ * POST /api/provider/services/bulk/activate
+ * SECURITY: Verifies ownership for ALL services before processing
+ */
+export const bulkActivateServices = asyncHandler(async (req: Request, res: Response) => {
+  const { serviceIds } = req.body as { serviceIds: string[] };
+  const user = req.user as IUser;
+
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    throw new ApiError(400, 'serviceIds must be a non-empty array');
+  }
+
+  const userId = user._id.toString();
+  const errors: Array<{ id: string; reason: string }> = [];
+  const validServiceIds: string[] = [];
+
+  // Verify ownership for each service
+  for (const serviceId of serviceIds) {
+    try {
+      const { service } = await verifyServiceOwnership(serviceId, user);
+
+      // Check if service can be activated (must be 'active' or 'inactive' status)
+      const toggleableStatuses = ['active', 'inactive'];
+      if (!toggleableStatuses.includes(service.status)) {
+        errors.push({
+          id: serviceId,
+          reason: `Service with status '${service.status}' cannot be activated. Only active or inactive services can be activated.`
+        });
+        continue;
+      }
+
+      validServiceIds.push(serviceId);
+    } catch (error) {
+      // verifyServiceOwnership throws 404 for not found/not owned
+      if (error instanceof ApiError && error.statusCode === 404) {
+        errors.push({ id: serviceId, reason: 'Service not found or access denied' });
+      } else {
+        errors.push({ id: serviceId, reason: 'Failed to verify service ownership' });
+      }
+    }
+  }
+
+  let succeeded = 0;
+
+  // Perform bulk update for valid services
+  if (validServiceIds.length > 0) {
+    const result = await Service.updateMany(
+      { _id: { $in: validServiceIds } },
+      {
+        $set: {
+          status: 'active',
+          isActive: true,
+          updatedBy: user._id,
+          updatedAt: new Date()
+        }
+      }
+    );
+    succeeded = result.modifiedCount;
+
+    logger.info('Bulk services activated', {
+      context: 'ProviderController',
+      action: 'BULK_SERVICES_ACTIVATED',
+      providerId: userId,
+      count: succeeded,
+      serviceIds: validServiceIds
+    });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      processed: serviceIds.length,
+      succeeded,
+      failed: errors.length,
+      ...(errors.length > 0 && { errors })
+    }
+  });
+});
+
+/**
+ * Bulk deactivate services
+ * POST /api/provider/services/bulk/deactivate
+ * SECURITY: Verifies ownership for ALL services before processing
+ */
+export const bulkDeactivateServices = asyncHandler(async (req: Request, res: Response) => {
+  const { serviceIds } = req.body as { serviceIds: string[] };
+  const user = req.user as IUser;
+
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    throw new ApiError(400, 'serviceIds must be a non-empty array');
+  }
+
+  const userId = user._id.toString();
+  const errors: Array<{ id: string; reason: string }> = [];
+  const validServiceIds: string[] = [];
+
+  // Verify ownership for each service
+  for (const serviceId of serviceIds) {
+    try {
+      const { service } = await verifyServiceOwnership(serviceId, user);
+
+      // Only services with status 'active' can be deactivated
+      if (service.status !== 'active') {
+        errors.push({
+          id: serviceId,
+          reason: `Only active services can be deactivated. Current status: '${service.status}'`
+        });
+        continue;
+      }
+
+      validServiceIds.push(serviceId);
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 404) {
+        errors.push({ id: serviceId, reason: 'Service not found or access denied' });
+      } else {
+        errors.push({ id: serviceId, reason: 'Failed to verify service ownership' });
+      }
+    }
+  }
+
+  let succeeded = 0;
+
+  // Perform bulk update for valid services
+  if (validServiceIds.length > 0) {
+    const result = await Service.updateMany(
+      { _id: { $in: validServiceIds } },
+      {
+        $set: {
+          status: 'inactive',
+          isActive: false,
+          updatedBy: user._id,
+          updatedAt: new Date()
+        }
+      }
+    );
+    succeeded = result.modifiedCount;
+
+    logger.info('Bulk services deactivated', {
+      context: 'ProviderController',
+      action: 'BULK_SERVICES_DEACTIVATED',
+      providerId: userId,
+      count: succeeded,
+      serviceIds: validServiceIds
+    });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      processed: serviceIds.length,
+      succeeded,
+      failed: errors.length,
+      ...(errors.length > 0 && { errors })
+    }
+  });
+});
+
+/**
+ * Bulk delete services (soft delete)
+ * DELETE /api/provider/services/bulk/delete
+ * SECURITY: Verifies ownership for ALL services before processing
+ * REJECT entire operation if ANY service has active bookings
+ */
+export const bulkDeleteServices = asyncHandler(async (req: Request, res: Response) => {
+  const { serviceIds } = req.body as { serviceIds: string[] };
+  const user = req.user as IUser;
+
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    throw new ApiError(400, 'serviceIds must be a non-empty array');
+  }
+
+  const userId = user._id.toString();
+  const errors: Array<{ id: string; reason: string }> = [];
+  const validServiceIds: string[] = [];
+
+  // Verify ownership for each service
+  for (const serviceId of serviceIds) {
+    try {
+      const { service } = await verifyServiceOwnership(serviceId, user);
+      validServiceIds.push(serviceId);
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 404) {
+        errors.push({ id: serviceId, reason: 'Service not found or access denied' });
+      } else {
+        errors.push({ id: serviceId, reason: 'Failed to verify service ownership' });
+      }
+    }
+  }
+
+  // If any services couldn't be verified, don't proceed
+  if (errors.length > 0) {
+    res.json({
+      success: true,
+      data: {
+        processed: serviceIds.length,
+        succeeded: 0,
+        failed: errors.length,
+        errors
+      }
+    });
+    return;
+  }
+
+  // Check for active bookings on ANY of the services
+  // If ANY service has active bookings, reject the ENTIRE operation
+  const activeBookings = await Booking.findOne({
+    serviceId: { $in: validServiceIds },
+    status: { $in: ['pending', 'confirmed', 'in_progress'] }
+  }).lean();
+
+  if (activeBookings) {
+    throw new ApiError(
+      400,
+      `Cannot delete services while they have active bookings. Service with ID '${activeBookings.serviceId}' has active bookings. Cancel or complete them first.`
+    );
+  }
+
+  // Perform bulk soft delete for all services
+  const result = await Service.updateMany(
+    { _id: { $in: validServiceIds } },
+    {
+      $set: {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deletedBy: user._id,
+        isActive: false
+      }
+    }
+  );
+
+  logger.info('Bulk services deleted', {
+    context: 'ProviderController',
+    action: 'BULK_SERVICES_DELETED',
+    providerId: userId,
+    count: result.modifiedCount,
+    serviceIds: validServiceIds
+  });
+
+  res.json({
+    success: true,
+    data: {
+      processed: serviceIds.length,
+      succeeded: result.modifiedCount,
+      failed: 0
+    }
+  });
 });
 
 // ===================================
@@ -1554,6 +1892,7 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         monthlyRevenue,
         monthlyGrossEarnings,
         monthlyNetEarnings,
+        totalEarnings: monthlyGrossEarnings, // Alias for frontend compatibility
         avgBookingValue: Math.round(avgBookingValue * 100) / 100
       },
       statusBreakdown: {
@@ -2027,8 +2366,14 @@ export const deletePortfolioItem = asyncHandler(async (req: Request, res: Respon
     }
   });
 
-  // Fire and forget - don't wait for cleanup
-  Promise.all(imageCleanupPromises).catch(() => {});
+  // Fire and forget - don't wait for cleanup, but log any errors
+  Promise.all(imageCleanupPromises).catch((cleanupError) => {
+    logger.error('Image cleanup failed during portfolio deletion', {
+      context: 'ProviderController',
+      action: 'PORTFOLIO_IMAGE_CLEANUP_ERROR',
+      error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+    });
+  });
 
   res.json({
     success: true,
@@ -2110,6 +2455,140 @@ export const removePortfolioImage = asyncHandler(async (req: Request, res: Respo
     success: true,
     data: item.images,
     message: 'Image removed successfully',
+  });
+});
+
+// ===========================================
+// SERVICE IMAGE MANAGEMENT
+// ===========================================
+
+/**
+ * Upload images to an existing service
+ * PATCH /api/provider/services/:id/images
+ */
+export const addServiceImage = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as IUser;
+  const { id } = req.params;
+
+  // SECURITY: Use reusable helper for ownership verification
+  const { service } = await verifyServiceOwnership(id, user);
+
+  if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+    throw new ApiError(400, 'No images provided');
+  }
+
+  // Limit to 5 images total
+  const currentImages = service.images || [];
+  if (currentImages.length + req.files.length > 5) {
+    throw new ApiError(400, 'Maximum 5 images allowed per service');
+  }
+
+  // Extract image URLs from uploaded files
+  const newImageUrls = req.files.map((file: any) => file.path || file.secure_url || file.url);
+
+  // Add new images to service
+  const updatedImages = [...currentImages, ...newImageUrls];
+  await Service.updateOne({ _id: id }, { $set: { images: updatedImages } });
+
+  logger.info('Service images uploaded', {
+    context: 'ProviderController',
+    action: 'SERVICE_IMAGES_UPLOADED',
+    serviceId: id,
+    userId: user._id.toString(),
+    count: req.files.length,
+  });
+
+  res.json({
+    success: true,
+    data: updatedImages,
+    message: `${req.files.length} image(s) uploaded successfully`,
+  });
+});
+
+/**
+ * Remove an image from a service
+ * DELETE /api/provider/services/:id/images/:imageUrl
+ */
+export const removeServiceImage = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as IUser;
+  const { id, imageUrl } = req.params;
+
+  // SECURITY: Use reusable helper for ownership verification
+  const { service } = await verifyServiceOwnership(id, user);
+
+  // Decode the URL-encoded image URL
+  const decodedImageUrl = decodeURIComponent(imageUrl);
+  const currentImages = service.images || [];
+
+  if (!currentImages.includes(decodedImageUrl)) {
+    throw new ApiError(404, 'Image not found in this service');
+  }
+
+  // Remove the image
+  const updatedImages = currentImages.filter((url: string) => url !== decodedImageUrl);
+  await Service.updateOne({ _id: id }, { $set: { images: updatedImages } });
+
+  // Optionally delete from Cloudinary
+  try {
+    const { extractPublicIdFromUrl } = require('../utils/cloudinary');
+    const publicId = extractPublicIdFromUrl(decodedImageUrl);
+    if (publicId) {
+      await deleteFromCloudinary(publicId);
+    }
+  } catch (error) {
+    // Log but don't fail - image may not be on Cloudinary
+    logger.warn('Failed to delete image from Cloudinary', {
+      context: 'ProviderController',
+      action: 'CLOUDINARY_DELETE_FAILED',
+      imageUrl: decodedImageUrl,
+      error: (error as Error).message,
+    });
+  }
+
+  logger.info('Service image removed', {
+    context: 'ProviderController',
+    action: 'SERVICE_IMAGE_REMOVED',
+    serviceId: id,
+    userId: user._id.toString(),
+  });
+
+  res.json({
+    success: true,
+    data: updatedImages,
+    message: 'Image removed successfully',
+  });
+});
+
+/**
+ * Direct upload images without associating to a service yet
+ * POST /api/provider/services/upload-images
+ * Returns URLs of uploaded images for later association with a service
+ */
+export const uploadServiceImagesDirect = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as IUser;
+
+  if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+    throw new ApiError(400, 'No images provided');
+  }
+
+  if (req.files.length > 5) {
+    throw new ApiError(400, 'Maximum 5 images allowed');
+  }
+
+  // Extract image URLs from uploaded files
+  const imageUrls = req.files.map((file: any) => file.path || file.secure_url || file.url);
+
+  logger.info('Direct service images uploaded', {
+    context: 'ProviderController',
+    action: 'SERVICE_IMAGES_DIRECT_UPLOAD',
+    userId: user._id.toString(),
+    count: req.files.length,
+  });
+
+  res.json({
+    success: true,
+    data: imageUrls,
+    message: `${req.files.length} image(s) uploaded successfully`,
   });
 });
 
@@ -2401,13 +2880,20 @@ export const getProviderSettings = asyncHandler(async (req: Request, res: Respon
  */
 export const updateProviderSettings = asyncHandler(async (req: Request, res: Response) => {
   const providerId = (req.user as IUser)._id;
+
+  // Validate input using Joi schema
+  const { error, value } = providerSettingsSchema.validate(req.body, { abortEarly: false, stripUnknown: true });
+  if (error) {
+    throw new ApiError(400, error.details.map(d => d.message).join(', '));
+  }
+
   const {
     businessSettings,
     locationInfo,
     privacySettings,
     reviewDisplaySettings,
     analyticsPreferences,
-  } = req.body;
+  } = value;
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
   if (!providerProfile) {
@@ -2638,6 +3124,17 @@ export const cloneService = asyncHandler(async (req: Request, res: Response) => 
 
     await clonedService.save();
 
+    // Audit log for service cloning
+    await AuditLog.create({
+      userId: user._id,
+      action: 'SERVICE_CLONED',
+      resource: 'Service',
+      resourceId: clonedService._id,
+      details: { sourceServiceId: id },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent')
+    });
+
     logger.info('Service cloned successfully', {
       context: 'ProviderController',
       action: 'SERVICE_CLONED',
@@ -2657,4 +3154,322 @@ export const cloneService = asyncHandler(async (req: Request, res: Response) => 
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to clone service', error.message);
   }
+});
+
+// ===========================================
+// SERVICE EXPORT
+// ===========================================
+
+/**
+ * Export provider's services
+ * GET /api/provider/services/export?format=json|csv&status=all|active|inactive|pending_review|rejected|draft&page=1&limit=1000
+ * Exports only the provider's own services (not deleted)
+ * Supports pagination for large datasets
+ */
+export const exportServices = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as IUser)._id.toString();
+  const {
+    format = 'json',
+    status = 'all',
+    category,
+    search,
+    minPrice,
+    maxPrice,
+    startDate,
+    endDate,
+    minRating,
+    featured,
+    page = '1',
+    limit = '1000'
+  } = req.query;
+
+  // Parse pagination params
+  const pageNum = Math.max(1, parseInt(page as string) || 1);
+  const limitNum = Math.min(10000, Math.max(1, parseInt(limit as string) || 1000));
+  const skip = (pageNum - 1) * limitNum;
+
+  // Build query - always exclude soft-deleted services
+  const query: Record<string, unknown> = {
+    providerId,
+    isDeleted: { $ne: true }
+  };
+
+  // Filter by status if specified
+  if (status && status !== 'all') {
+    query.status = status as string;
+  }
+
+  // Category filter
+  if (category && category !== 'all') {
+    query.category = { $regex: new RegExp(escapeRegex(category as string), 'i') };
+  }
+
+  // Search filter
+  if (search) {
+    const escapedSearch = escapeRegex(search as string);
+    query.$or = [
+      { name: { $regex: new RegExp(escapedSearch, 'i') } },
+      { description: { $regex: new RegExp(escapedSearch, 'i') } },
+      { category: { $regex: new RegExp(escapedSearch, 'i') } },
+      { shortDescription: { $regex: new RegExp(escapedSearch, 'i') } },
+      { tags: { $regex: new RegExp(escapedSearch, 'i') } }
+    ];
+  }
+
+  // Price range filter
+  if (minPrice || maxPrice) {
+    const priceFilter: Record<string, number> = {};
+    if (minPrice) priceFilter.$gte = Number(minPrice);
+    if (maxPrice) priceFilter.$lte = Number(maxPrice);
+    query['price.amount'] = priceFilter;
+  }
+
+  // Date range filter
+  if (startDate || endDate) {
+    const dateFilter: Record<string, Date> = {};
+    if (startDate) {
+      dateFilter.$gte = new Date(startDate as string);
+    }
+    if (endDate) {
+      const endDateObj = new Date(endDate as string);
+      endDateObj.setHours(23, 59, 59, 999);
+      dateFilter.$lte = endDateObj;
+    }
+    query.createdAt = dateFilter;
+  }
+
+  // Rating filter
+  if (minRating) {
+    query['rating.average'] = { $gte: Number(minRating) };
+  }
+
+  // Featured filter
+  if (featured === 'true') {
+    query.isFeatured = true;
+  }
+
+  // Fetch total count for pagination info
+  const totalCount = await Service.countDocuments(query);
+
+  // Fetch services with pagination
+  const services = await Service.find(query)
+    .select('-__v -searchMetadata') // Exclude unnecessary fields
+    .sort({ createdAt: -1 }) // Most recent first
+    .skip(skip)
+    .limit(limitNum)
+    .lean();
+
+  const exportData = services.map((service) => ({
+    id: service._id.toString(),
+    name: service.name,
+    category: service.category,
+    subcategory: service.subcategory,
+    status: service.status,
+    isActive: service.isActive,
+    description: service.description,
+    shortDescription: service.shortDescription,
+    duration: service.duration,
+    price: service.price,
+    tags: service.tags,
+    images: service.images,
+    requirements: service.requirements,
+    includedItems: service.includedItems,
+    location: service.location,
+    durationOptions: service.durationOptions,
+    addOns: service.addOns,
+    rating: service.rating,
+    createdAt: service.createdAt,
+    updatedAt: service.updatedAt,
+  }));
+
+  const totalPages = Math.ceil(totalCount / limitNum);
+
+  const filename = `my-services-export-${new Date().toISOString().split('T')[0]}`;
+
+  if (format === 'csv') {
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
+
+    if (exportData.length === 0) {
+      return res.send('No services to export');
+    }
+
+    // Get headers from first record
+    const headers = Object.keys(exportData[0]);
+
+    // Build CSV content
+    const csvRows: string[] = [];
+    csvRows.push(headers.join(','));
+
+    for (const row of exportData) {
+      const values = headers.map((header) => {
+        const value = (row as any)[header];
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'object') return `"${JSON.stringify(value).replace(/"/g, '""')}"`;
+        return `"${String(value).replace(/"/g, '""')}"`;
+      });
+      csvRows.push(values.join(','));
+    }
+
+    return res.send(csvRows.join('\n'));
+  }
+
+  // Default to JSON
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
+
+  return res.json({
+    success: true,
+    data: exportData,
+    metadata: {
+      exportFormat: format,
+      status: status as string,
+      recordCount: exportData.length,
+      totalRecords: totalCount,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      },
+      exportedAt: new Date().toISOString()
+    }
+  });
+});
+
+/**
+ * Provider-side dashboard stats (CRITICAL FIX)
+ * Provides provider-specific stats for the Operations Dashboard.
+ * Was incorrectly using admin-only endpoint which returned 403 for providers.
+ *
+ * @route   GET /api/provider/dashboard/stats
+ * @access  Provider (own data only)
+ */
+export const getProviderDashboardStats = asyncHandler(async (req: Request, res: Response) => {
+  // Allow admins to specify a providerId via query param; providers always see their own data
+  const user = req.user as IUser;
+  const providerId = user.role === 'admin' && req.query.providerId
+    ? String(req.query.providerId)
+    : user._id.toString();
+
+  // Guard: ObjectId-required for aggregations
+  if (!mongoose.Types.ObjectId.isValid(providerId)) {
+    return res.json({
+      success: true,
+      data: {
+        metrics: {
+          totalEarnings: 0,
+          pendingPayout: 0,
+          completedBookings: 0,
+          avgRating: 0,
+          responseRate: 0,
+          acceptanceRate: 0,
+          qualityScore: 0,
+        },
+        growth: { earnings: 0, bookings: 0 },
+        providers: { pending: 0 },
+      },
+    });
+  }
+
+  // Compute current and previous period boundaries
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+  const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+  const [
+    completedBookings,
+    previousCompletedBookings,
+    pendingBookings,
+    reviews,
+    services,
+    providerProfile,
+    earningsAgg,
+    wallet,
+  ] = await Promise.all([
+    Booking.countDocuments({ providerId, status: 'completed' }),
+    Booking.countDocuments({
+      providerId,
+      status: 'completed',
+      createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo },
+    }),
+    Booking.countDocuments({ providerId, status: { $in: ['pending', 'confirmed'] } }),
+    Review.find({ providerId }),
+    Service.countDocuments({ providerId, status: 'active' }),
+    ProviderProfile.findOne({ userId: providerId }).lean(),
+    Booking.aggregate([
+      { $match: { providerId: providerObjectId, status: 'completed' } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$pricing.totalAmount', 0] } } } },
+    ]),
+    Wallet.findOne({ userId: providerId }).select('pendingBalance').lean(),
+  ]);
+
+  const avgRating = reviews.length > 0
+    ? reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / reviews.length
+    : 0;
+
+  const totalBookings = completedBookings + pendingBookings;
+  const acceptanceRate = totalBookings > 0
+    ? Math.round((completedBookings / totalBookings) * 100)
+    : 0;
+
+  // Quality score: blend of rating (60%) and active services (40%)
+  const qualityScore = services > 0
+    ? Math.min(100, Math.round((avgRating / 5) * 60 + Math.min(services * 8, 40)))
+    : 0;
+
+  // Realistic response rate: use stored value or compute from pending/completed ratio
+  const computedResponseRate = pendingBookings > 0
+    ? Math.min(100, Math.round((completedBookings / (completedBookings + pendingBookings)) * 100))
+    : 100;
+
+  const finalResponseRate = (providerProfile?.analytics?.performanceMetrics as any)?.responseRate
+    ? Number((providerProfile!.analytics!.performanceMetrics as any).responseRate)
+    : computedResponseRate;
+
+  // Earnings growth vs previous period
+  const totalEarnings = earningsAgg[0]?.total || 0;
+  const previousEarningsAgg = await Booking.aggregate([
+    {
+      $match: {
+        providerId: providerObjectId,
+        status: 'completed',
+        createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo },
+      },
+    },
+    { $group: { _id: null, total: { $sum: { $ifNull: ['$pricing.totalAmount', 0] } } } },
+  ]);
+  const previousEarnings = previousEarningsAgg[0]?.total || 0;
+  const earningsGrowthPct = previousEarnings > 0
+    ? Math.round(((totalEarnings - previousEarnings) / previousEarnings) * 100)
+    : 0;
+
+  // Compute bookings growth
+  const bookingsGrowthPct = previousCompletedBookings > 0
+    ? Math.round(((completedBookings - previousCompletedBookings) / previousCompletedBookings) * 100)
+    : 0;
+
+  return res.json({
+    success: true,
+    data: {
+      metrics: {
+        totalEarnings,
+        pendingPayout: wallet?.pendingBalance ?? 0,
+        completedBookings,
+        avgRating: Math.round(avgRating * 10) / 10,
+        responseRate: Math.round(finalResponseRate),
+        acceptanceRate,
+        qualityScore,
+      },
+      growth: {
+        earnings: earningsGrowthPct,
+        bookings: bookingsGrowthPct,
+      },
+      providers: {
+        pending: 0, // Not applicable to provider-side view
+      },
+    },
+  });
 });

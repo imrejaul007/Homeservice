@@ -6,7 +6,7 @@ import Footer from '../components/layout/Footer';
 import { useCategory } from '../hooks/useCategories';
 import { useProvidersBySubcategory } from '../hooks/useProvider';
 import { SUBCATEGORY_IMAGES, CATEGORY_IMAGES } from '../constants/images';
-import { SERVICE_CONTENT } from '../constants/serviceContent';
+import type { ServiceContent } from '../constants/serviceContent';
 import RecommendedProviders from '../components/service/RecommendedProviders';
 import ServiceVariants from '../components/service/ServiceVariants';
 import ServiceProcedure from '../components/service/ServiceProcedure';
@@ -157,6 +157,19 @@ const SubcategoryServicePage: React.FC = () => {
   // State for real services from database
   const [services, setServices] = useState<Service[]>([]);
   const [servicesLoading, setServicesLoading] = useState(true);
+  const [serviceContentMap, setServiceContentMap] = useState<
+    Record<string, Record<string, ServiceContent>> | null
+  >(null);
+
+  useEffect(() => {
+    let active = true;
+    import('../constants/serviceContent').then((mod) => {
+      if (active) setServiceContentMap(mod.SERVICE_CONTENT);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
   const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
 
   // Fetch real services for this subcategory
@@ -195,8 +208,8 @@ const SubcategoryServicePage: React.FC = () => {
   const contentKey = categorySlug && subcategorySlug
     ? getServiceContentKey(categorySlug, subcategorySlug)
     : undefined;
-  const content = categorySlug && contentKey
-    ? SERVICE_CONTENT?.[categorySlug]?.[contentKey]
+  const content = categorySlug && contentKey && serviceContentMap
+    ? serviceContentMap?.[categorySlug]?.[contentKey]
     : undefined;
 
   const transformedProviders = useMemo((): TransformedProvider[] => {
@@ -225,7 +238,6 @@ const SubcategoryServicePage: React.FC = () => {
     if (services.length > 0) {
       const service = services[0];
       const serviceId = service._id ?? (service as {id?: string}).id ?? (service as {serviceId?: string}).serviceId;
-      console.log('[SubcategoryServicePage] Booking service from DB:', service.name);
       navigate(`/book/${serviceId}`, { state: { service } });
       return;
     }
@@ -237,7 +249,6 @@ const SubcategoryServicePage: React.FC = () => {
     }
 
     // Last resort: Navigate to search with filters
-    console.log('[SubcategoryServicePage] No services found, navigating to search');
     navigate(`/search?category=${categorySlug}&subcategory=${subcategorySlug}`);
   };
 
@@ -254,12 +265,6 @@ const SubcategoryServicePage: React.FC = () => {
 
       // Get the selected variant details
       const selectedVariant = content?.variants?.[selectedVariantIndex];
-
-      console.log('[SubcategoryServicePage] Booking from variants:', {
-        serviceName: service.name,
-        variantIndex: selectedVariantIndex,
-        selectedVariant
-      });
 
       // Create enhanced service object with variant details
       const serviceWithVariant = {

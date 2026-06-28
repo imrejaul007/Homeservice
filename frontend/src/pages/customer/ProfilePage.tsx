@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { showDeduplicatedError } from '../../utils/toastUtils';
 import {
   User,
   Mail,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import * as Tabs from '@radix-ui/react-tabs';
 import NavigationHeader from '../../components/layout/NavigationHeader';
+import CustomerHubNav from '../../components/customer/CustomerHubNav';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import ProfileSettings from '../../components/customer/ProfileSettings';
@@ -28,7 +30,6 @@ import { useAuthStore } from '../../stores/authStore';
 import { useBookingStore } from '../../stores/bookingStore';
 import { api } from '../../services/api';
 import { PageErrorBoundary } from '../../components/common/PageErrorBoundary';
-import toast from 'react-hot-toast';
 
 const VALID_TABS = ['profile', 'settings', 'security', 'referrals', 'notifications'] as const;
 type ProfileTab = typeof VALID_TABS[number];
@@ -70,9 +71,8 @@ const ProfilePage: React.FC = () => {
         setBookingError(null);
         await getCustomerBookings({ limit: 100 });
       } catch (error) {
-        console.error('Failed to fetch bookings:', error);
+        showDeduplicatedError('Failed to load booking history');
         setBookingError('Failed to load booking history. Please try again.');
-        toast.error('Failed to load booking history');
       }
     };
     fetchBookings();
@@ -111,6 +111,11 @@ const ProfilePage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [profileImage, setProfileImage] = useState<string | null>(user?.avatar ?? null);
   const [isUploading, setIsUploading] = useState(false);
+  const [errors, setErrors] = useState<{
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+  }>({});
 
   // Update personal info when user changes
   useEffect(() => {
@@ -130,6 +135,25 @@ const ProfilePage: React.FC = () => {
   const handlePersonalInfoChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setPersonalInfo(prev => ({ ...prev, [name]: value }));
+    // Clear error when user starts typing
+    if (name === 'firstName') setErrors(prev => ({ ...prev, firstName: undefined }));
+    if (name === 'lastName') setErrors(prev => ({ ...prev, lastName: undefined }));
+    if (name === 'phone') setErrors(prev => ({ ...prev, phone: undefined }));
+  };
+
+  const validatePersonalInfo = () => {
+    const newErrors: typeof errors = {};
+    if (!personalInfo.firstName.trim()) {
+      newErrors.firstName = 'First name is required';
+    }
+    if (!personalInfo.lastName.trim()) {
+      newErrors.lastName = 'Last name is required';
+    }
+    if (personalInfo.phone && !/^\+?[\d\s-]{10,}$/.test(personalInfo.phone)) {
+      newErrors.phone = 'Please enter a valid phone number';
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -188,6 +212,9 @@ const ProfilePage: React.FC = () => {
   };
 
   const handleSavePersonalInfo = async () => {
+    if (!validatePersonalInfo()) {
+      return;
+    }
     try {
       const profileData: {
         firstName: string;
@@ -208,6 +235,7 @@ const ProfilePage: React.FC = () => {
 
       setSaveMessage('Personal information updated successfully!');
       setIsEditingPersonal(false);
+      setErrors({});
       setTimeout(() => setSaveMessage(''), 3000);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to update personal information';
@@ -232,6 +260,15 @@ const ProfilePage: React.FC = () => {
     <PageErrorBoundary pageName="Profile">
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
+      <CustomerHubNav />
+
+      {/* Skip to main content link */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+      >
+        Skip to main content
+      </a>
 
       <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
@@ -245,56 +282,59 @@ const ProfilePage: React.FC = () => {
             <p className="text-nilin-warmGray">Manage your account information and preferences</p>
           </div>
 
-          {/* Success/Error Messages */}
-          {saveMessage && (
-            <div className="mb-6 p-4 rounded-nilin bg-green-50 border border-green-200 flex items-center gap-3">
-              <Check className="h-5 w-5 text-green-600" />
-              <span className="text-green-800">{saveMessage}</span>
-            </div>
-          )}
-          {errorMessage && (
-            <div className="mb-6 p-4 rounded-nilin bg-red-50 border border-red-200 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-red-600" />
-              <span className="text-red-800">{errorMessage}</span>
-            </div>
-          )}
+          {/* Success/Error Messages with aria-live */}
+          <div role="status" aria-live="polite" aria-atomic="true">
+            {saveMessage && (
+              <div className="mb-6 p-4 rounded-nilin bg-green-50 border border-green-200 flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600" />
+                <span className="text-green-800">{saveMessage}</span>
+              </div>
+            )}
+            {errorMessage && (
+              <div role="alert" aria-live="assertive" className="mb-6 p-4 rounded-nilin bg-red-50 border border-red-200 flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-red-600" />
+                <span className="text-red-800">{errorMessage}</span>
+              </div>
+            )}
+          </div>
 
+          <main id="main-content">
           <Tabs.Root value={activeTab} onValueChange={handleTabChange} className="w-full">
             <Tabs.List
-              className="flex gap-2 mb-8 p-1 bg-white rounded-nilin shadow-nilin overflow-x-auto"
+              className="flex gap-2 mb-8 p-1 bg-white rounded-nilin shadow-nilin overflow-x-auto scrollbar-hide"
               aria-label="Profile sections"
             >
               <Tabs.Trigger
                 value="profile"
-                className="flex-1 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all whitespace-nowrap"
+                className="flex-shrink-0 min-h-11 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 <User className="w-4 h-4 inline mr-2" />
                 My Profile
               </Tabs.Trigger>
               <Tabs.Trigger
                 value="settings"
-                className="flex-1 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all whitespace-nowrap"
+                className="flex-shrink-0 min-h-11 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 <Settings className="w-4 h-4 inline mr-2" />
                 Settings
               </Tabs.Trigger>
               <Tabs.Trigger
                 value="security"
-                className="flex-1 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all whitespace-nowrap"
+                className="flex-shrink-0 min-h-11 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 <Shield className="w-4 h-4 inline mr-2" />
                 Security
               </Tabs.Trigger>
               <Tabs.Trigger
                 value="referrals"
-                className="flex-1 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all whitespace-nowrap"
+                className="flex-shrink-0 min-h-11 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 <Gift className="w-4 h-4 inline mr-2" />
                 Referrals
               </Tabs.Trigger>
               <Tabs.Trigger
                 value="notifications"
-                className="flex-1 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all whitespace-nowrap"
+                className="flex-shrink-0 min-h-11 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
                 <Bell className="w-4 h-4 inline mr-2" />
                 Notifications
@@ -322,7 +362,7 @@ const ProfilePage: React.FC = () => {
                       <label
                         htmlFor="profile-upload"
                         aria-label="Upload profile photo"
-                        className={`absolute bottom-4 right-0 bg-nilin-coral rounded-full p-2 transition-colors shadow-nilin-warm ${
+                        className={`absolute bottom-4 right-0 bg-nilin-coral rounded-full w-11 h-11 flex items-center justify-center transition-colors shadow-nilin-warm focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
                           isUploading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-nilin-rose'
                         }`}
                       >
@@ -356,7 +396,7 @@ const ProfilePage: React.FC = () => {
                       </div>
                     )}
                     {isLoadingBookings ? (
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="text-center p-3 bg-nilin-muted rounded-nilin animate-pulse">
                           <div className="w-5 h-5 bg-nilin-border rounded mx-auto mb-1" />
                           <div className="h-6 bg-nilin-border rounded w-12 mx-auto mb-1" />
@@ -369,7 +409,7 @@ const ProfilePage: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="text-center p-3 bg-nilin-muted rounded-nilin">
                           <Calendar className="w-5 h-5 text-nilin-coral mx-auto mb-1" />
                           <p className="text-lg font-bold text-nilin-charcoal">{stats.bookingsCompleted}</p>
@@ -416,7 +456,7 @@ const ProfilePage: React.FC = () => {
                       {!isEditingPersonal && (
                         <button
                           onClick={() => setIsEditingPersonal(true)}
-                          className="px-4 py-2 text-sm font-medium text-nilin-coral hover:bg-nilin-coral/10 rounded-nilin transition-colors"
+                          className="px-4 py-2.5 min-h-[44px] text-sm font-medium text-nilin-coral hover:bg-nilin-coral/10 rounded-nilin transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                         >
                           Edit
                         </button>
@@ -426,36 +466,57 @@ const ProfilePage: React.FC = () => {
                     <div className="space-y-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-sm font-medium text-nilin-charcoal mb-2">First Name</label>
+                          <label htmlFor="first-name" className="block text-sm font-medium text-nilin-charcoal mb-2">First Name</label>
                           <input
                             type="text"
+                            id="first-name"
                             name="firstName"
                             value={personalInfo.firstName}
                             onChange={handlePersonalInfoChange}
                             disabled={!isEditingPersonal}
-                            className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all"
+                            aria-invalid={!!errors.firstName}
+                            aria-describedby={errors.firstName ? 'firstName-error' : undefined}
+                            className={`w-full px-4 py-3 rounded-nilin bg-white border transition-all outline-none disabled:bg-nilin-muted text-nilin-charcoal ${
+                              errors.firstName ? 'border-nilin-rose focus:border-nilin-rose focus:ring-2 focus:ring-nilin-rose/20' : 'border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20'
+                            }`}
                           />
+                          {errors.firstName && (
+                            <p id="firstName-error" className="mt-1 text-sm text-nilin-rose" role="alert">
+                              {errors.firstName}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium text-nilin-charcoal mb-2">Last Name</label>
+                          <label htmlFor="last-name" className="block text-sm font-medium text-nilin-charcoal mb-2">Last Name</label>
                           <input
                             type="text"
+                            id="last-name"
                             name="lastName"
                             value={personalInfo.lastName}
                             onChange={handlePersonalInfoChange}
                             disabled={!isEditingPersonal}
-                            className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all"
+                            aria-invalid={!!errors.lastName}
+                            aria-describedby={errors.lastName ? 'lastName-error' : undefined}
+                            className={`w-full px-4 py-3 rounded-nilin bg-white border transition-all outline-none disabled:bg-nilin-muted text-nilin-charcoal ${
+                              errors.lastName ? 'border-nilin-rose focus:border-nilin-rose focus:ring-2 focus:ring-nilin-rose/20' : 'border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20'
+                            }`}
                           />
+                          {errors.lastName && (
+                            <p id="lastName-error" className="mt-1 text-sm text-nilin-rose" role="alert">
+                              {errors.lastName}
+                            </p>
+                          )}
                         </div>
                       </div>
 
                       <div>
-                        <label className="block text-sm font-medium text-nilin-charcoal mb-2">Email Address</label>
+                        <label htmlFor="email-address" className="block text-sm font-medium text-nilin-charcoal mb-2">Email Address</label>
                         <div className="relative">
-                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" />
+                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" aria-hidden="true" />
                           <input
                             type="email"
+                            id="email-address"
                             name="email"
                             value={personalInfo.email}
                             disabled
@@ -466,25 +527,36 @@ const ProfilePage: React.FC = () => {
                       </div>
 
                       <div>
-                        <label className="block text-sm font-medium text-nilin-charcoal mb-2">Phone Number</label>
+                        <label htmlFor="phone-number" className="block text-sm font-medium text-nilin-charcoal mb-2">Phone Number</label>
                         <div className="relative">
-                          <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" />
+                          <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" aria-hidden="true" />
                           <input
                             type="tel"
+                            id="phone-number"
                             name="phone"
                             value={personalInfo.phone}
                             onChange={handlePersonalInfoChange}
                             disabled={!isEditingPersonal}
                             placeholder="+971 XX XXX XXXX"
-                            className="w-full pl-12 pr-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all"
+                            aria-invalid={!!errors.phone}
+                            aria-describedby={errors.phone ? 'phone-error' : undefined}
+                            className={`w-full pl-12 pr-4 py-3 rounded-nilin bg-white border transition-all outline-none disabled:bg-nilin-muted text-nilin-charcoal ${
+                              errors.phone ? 'border-nilin-rose focus:border-nilin-rose focus:ring-2 focus:ring-nilin-rose/20' : 'border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20'
+                            }`}
                           />
                         </div>
+                        {errors.phone && (
+                          <p id="phone-error" className="mt-1 text-sm text-nilin-rose" role="alert">
+                            {errors.phone}
+                          </p>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-sm font-medium text-nilin-charcoal mb-2">Gender</label>
+                          <label htmlFor="gender-select" className="block text-sm font-medium text-nilin-charcoal mb-2">Gender</label>
                           <select
+                            id="gender-select"
                             name="gender"
                             value={personalInfo.gender}
                             onChange={handlePersonalInfoChange}
@@ -500,9 +572,10 @@ const ProfilePage: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium text-nilin-charcoal mb-2">Date of Birth</label>
+                          <label htmlFor="date-of-birth" className="block text-sm font-medium text-nilin-charcoal mb-2">Date of Birth</label>
                           <input
                             type="date"
+                            id="date-of-birth"
                             name="dateOfBirth"
                             value={personalInfo.dateOfBirth}
                             onChange={handlePersonalInfoChange}
@@ -516,14 +589,14 @@ const ProfilePage: React.FC = () => {
                         <div className="flex gap-3 pt-4">
                           <button
                             onClick={handleSavePersonalInfo}
-                            className="flex-1 btn-nilin flex items-center justify-center gap-2"
+                            className="flex-1 btn-nilin flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                           >
                             <Save className="h-4 w-4" />
                             Save Changes
                           </button>
                           <button
                             onClick={handleCancelPersonal}
-                            className="flex-1 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+                            className="flex-1 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                           >
                             <X className="h-4 w-4 inline mr-2" />
                             Cancel
@@ -552,6 +625,7 @@ const ProfilePage: React.FC = () => {
               </div>
             </div>
           </Tabs.Root>
+          </main>
         </div>
       </div>
 

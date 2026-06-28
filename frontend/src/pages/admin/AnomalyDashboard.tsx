@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import {
   Shield,
   AlertTriangle,
@@ -42,8 +43,27 @@ import type {
   AnomalyStatus,
   AnomalyFilters,
   AnomalyStats,
+  EntityType,
 } from '../../services/anomalyApi';
 import { useAuthStore } from '../../stores/authStore';
+
+// ============================================
+// Entity admin link helper
+// ============================================
+
+const getEntityAdminHref = (entityType: EntityType, entityId: string): string => {
+  switch (entityType) {
+    case 'provider':
+      return `/admin/providers?providerId=${entityId}`;
+    case 'booking':
+      return `/admin/bookings?bookingId=${entityId}`;
+    case 'payment':
+      return '/admin/refunds';
+    case 'user':
+    default:
+      return `/admin/customers?customerId=${entityId}`;
+  }
+};
 
 // ============================================
 // Severity Badge Component
@@ -197,6 +217,7 @@ const AnomalyDetailModal: React.FC<{
   onClose: () => void;
   onUpdateStatus: (id: string, status: AnomalyStatus, resolution?: string) => Promise<void>;
 }> = ({ anomaly, onClose, onUpdateStatus }) => {
+  const navigate = useNavigate();
   const [isUpdating, setIsUpdating] = useState(false);
   const [resolution, setResolution] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<AnomalyStatus | ''>('');
@@ -350,7 +371,7 @@ const AnomalyDetailModal: React.FC<{
           {/* Actions */}
           <div className="flex gap-3 mt-6">
             <button
-              onClick={() => window.open(`/admin/users/${anomaly.entityId}`, '_blank')}
+              onClick={() => navigate(getEntityAdminHref(anomaly.entityType, anomaly.entityId))}
               className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center justify-center gap-2 text-gray-700 dark:text-gray-300"
             >
               <ExternalLink className="w-4 h-4" />
@@ -393,6 +414,7 @@ const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
   const [stats, setStats] = useState<AnomalyStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -421,7 +443,7 @@ const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
       const response = await anomalyApi.listAnomalies(refreshFilters || filters);
       setAnomalies(response.data);
       setPagination(response.pagination);
-    } catch (err: any) {
+    } catch (err) {
       setError(err.message || 'Failed to load anomalies');
     }
   }, [filters]);
@@ -429,9 +451,12 @@ const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
   // Fetch stats
   const fetchStats = useCallback(async () => {
     try {
+      setStatsError(null);
       const response = await anomalyApi.getAnomalyStats();
       setStats(response);
     } catch (err) {
+      const errorMessage = err.message || 'Failed to load statistics';
+      setStatsError(errorMessage);
       console.error('Failed to load stats:', err);
     }
   }, []);
@@ -511,325 +536,340 @@ const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
     filters.status,
   ].filter(Boolean).length;
 
+  // Header actions
+  const headerActions = (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={handleExport}
+        className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 text-gray-700 dark:text-gray-300"
+      >
+        <Download className="w-4 h-4" />
+        Export
+      </button>
+      <button
+        onClick={handleRefresh}
+        disabled={isRefreshing}
+        className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 text-gray-700 dark:text-gray-300"
+      >
+        <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+        Refresh
+      </button>
+      <button
+        onClick={() => setIsFullscreen(!isFullscreen)}
+        className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+      >
+        {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+      </button>
+    </div>
+  );
+
   return (
     <ErrorBoundary>
-      <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 ${isFullscreen ? 'fixed inset-0 z-50' : ''}`}>
-        {/* Header */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Shield className="w-8 h-8 text-blue-600" />
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-                  Anomaly Detection
-                </h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Monitor and manage detected anomalies across the platform
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleExport}
-                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 text-gray-700 dark:text-gray-300"
-              >
-                <Download className="w-4 h-4" />
-                Export
-              </button>
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 text-gray-700 dark:text-gray-300"
-              >
-                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
-              <button
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
-              >
-                {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats Cards */}
-      {stats && (
-        <div className="px-4 py-6 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatsCard
-              title="Total Anomalies"
-              value={stats.total}
-              icon={<Shield className="w-5 h-5 text-blue-600" />}
-              color="bg-blue-100 dark:bg-blue-900/30"
-            />
-            <StatsCard
-              title="Critical"
-              value={stats.criticalCount}
-              icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
-              color="bg-red-100 dark:bg-red-900/30"
-              subtitle="Requires immediate attention"
-            />
-            <StatsCard
-              title="Pending Review"
-              value={stats.byStatus.pending}
-              icon={<Clock className="w-5 h-5 text-yellow-600" />}
-              color="bg-yellow-100 dark:bg-yellow-900/30"
-            />
-            <StatsCard
-              title="Resolved Today"
-              value={stats.resolvedToday}
-              icon={<CheckCircle className="w-5 h-5 text-green-600" />}
-              color="bg-green-100 dark:bg-green-900/30"
-              trend={{ value: 12, isPositive: true }}
-            />
-          </div>
-
-          {/* Severity Breakdown */}
-          <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
-            {(['critical', 'high', 'medium', 'low'] as AnomalySeverity[]).map((severity) => (
-              <div
-                key={severity}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 cursor-pointer hover:shadow-md transition-shadow"
-                onClick={() => applyFilters({ severity })}
-              >
-                <div className="flex items-center justify-between">
-                  <SeverityBadge severity={severity} />
-                  <span className="text-2xl font-bold text-gray-900 dark:text-white">
-                    {stats.bySeverity[severity]}
-                  </span>
+      <AdminPageShell
+        title="Anomaly Detection"
+        subtitle="Monitor and manage detected anomalies across the platform"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Anomaly Detection', current: true },
+        ]}
+        headerActions={headerActions}
+        wideLayout
+      >
+        <div className={`${isFullscreen ? 'fixed inset-0 z-50 overflow-auto' : ''}`}>
+          {/* Stats Cards */}
+          {statsError ? (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                  <div>
+                    <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                      Failed to load statistics
+                    </p>
+                    <p className="text-sm text-red-600 dark:text-red-400">{statsError}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Filters Bar */}
-      <div className="px-4 sm:px-6 lg:px-8">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setShowFilters(!showFilters)}
-                  className={`px-3 py-2 border rounded-lg flex items-center gap-2 ${
-                    showFilters
-                      ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
-                      : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  onClick={fetchStats}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/70 transition-colors"
                 >
-                  <Filter className="w-4 h-4" />
-                  Filters
-                  {activeFilterCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-blue-600 text-white text-xs rounded-full">
-                      {activeFilterCount}
-                    </span>
-                  )}
-                </button>
-
-                {activeFilterCount > 0 && (
-                  <button
-                    onClick={clearFilters}
-                    className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 flex items-center gap-1"
-                  >
-                    <FilterX className="w-4 h-4" />
-                    Clear all
-                  </button>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {pagination.total} total anomalies
-                </span>
-              </div>
-            </div>
-
-            {/* Expanded Filters */}
-            {showFilters && (
-              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {/* Type Filter */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Type
-                  </label>
-                  <select
-                    value={filters.type || ''}
-                    onChange={(e) => applyFilters({ type: e.target.value as AnomalyType || undefined })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="">All Types</option>
-                    <option value="fraud">Fraud</option>
-                    <option value="booking">Booking</option>
-                    <option value="payment">Payment</option>
-                    <option value="behavior">Behavior</option>
-                  </select>
-                </div>
-
-                {/* Severity Filter */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Severity
-                  </label>
-                  <select
-                    value={filters.severity || ''}
-                    onChange={(e) => applyFilters({ severity: e.target.value as AnomalySeverity || undefined })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="">All Severities</option>
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                  </select>
-                </div>
-
-                {/* Status Filter */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Status
-                  </label>
-                  <select
-                    value={filters.status || ''}
-                    onChange={(e) => applyFilters({ status: e.target.value as AnomalyStatus || undefined })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="">All Statuses</option>
-                    <option value="pending">Pending</option>
-                    <option value="investigating">Investigating</option>
-                    <option value="resolved">Resolved</option>
-                    <option value="false_positive">False Positive</option>
-                  </select>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Anomaly List */}
-          <div className="divide-y divide-gray-200 dark:divide-gray-700">
-            {isLoading ? (
-              <div className="p-8 text-center">
-                <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-600" />
-                <p className="mt-2 text-gray-500 dark:text-gray-400">Loading anomalies...</p>
-              </div>
-            ) : error ? (
-              <div className="p-8 text-center">
-                <AlertCircle className="w-8 h-8 mx-auto text-red-500" />
-                <p className="mt-2 text-gray-500 dark:text-gray-400">{error}</p>
-                <button
-                  onClick={handleRefresh}
-                  className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                >
+                  <RefreshCw className="w-4 h-4" />
                   Retry
                 </button>
               </div>
-            ) : anomalies.length === 0 ? (
-              <div className="p-8 text-center">
-                <CheckCircle className="w-8 h-8 mx-auto text-green-500" />
-                <p className="mt-2 text-gray-900 dark:text-white font-medium">No anomalies found</p>
-                <p className="mt-1 text-gray-500 dark:text-gray-400">
-                  {activeFilterCount > 0
-                    ? 'Try adjusting your filters'
-                    : 'All clear! No anomalies detected.'}
-                </p>
+            </div>
+          ) : stats ? (
+            <>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatsCard
+                  title="Total Anomalies"
+                  value={stats.total}
+                  icon={<Shield className="w-5 h-5 text-blue-600" />}
+                  color="bg-blue-100 dark:bg-blue-900/30"
+                />
+                <StatsCard
+                  title="Critical"
+                  value={stats.criticalCount}
+                  icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
+                  color="bg-red-100 dark:bg-red-900/30"
+                  subtitle="Requires immediate attention"
+                />
+                <StatsCard
+                  title="Pending Review"
+                  value={stats.byStatus.pending}
+                  icon={<Clock className="w-5 h-5 text-yellow-600" />}
+                  color="bg-yellow-100 dark:bg-yellow-900/30"
+                />
+                <StatsCard
+                  title="Resolved Today"
+                  value={stats.resolvedToday}
+                  icon={<CheckCircle className="w-5 h-5 text-green-600" />}
+                  color="bg-green-100 dark:bg-green-900/30"
+                  trend={{ value: 12, isPositive: true }}
+                />
               </div>
-            ) : (
-              anomalies.map((anomaly) => (
-                <div
-                  key={anomaly.id}
-                  className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
-                  onClick={() => setSelectedAnomaly(anomaly)}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <SeverityBadge severity={anomaly.severity} />
-                        <TypeBadge type={anomaly.type} />
-                        <StatusBadge status={anomaly.status} />
-                      </div>
-                      <p className="mt-2 text-gray-900 dark:text-white font-medium line-clamp-1">
-                        {anomaly.description}
-                      </p>
-                      <div className="mt-1 flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
-                        <span className="flex items-center gap-1">
-                          <User className="w-3 h-3" />
-                          {anomaly.entityType}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {new Date(anomaly.detectedAt).toLocaleDateString()}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <BarChart3 className="w-3 h-3" />
-                          {(anomaly.confidence * 100).toFixed(0)}% confidence
-                        </span>
-                      </div>
+
+              {/* Severity Breakdown */}
+              <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {(['critical', 'high', 'medium', 'low'] as AnomalySeverity[]).map((severity) => (
+                  <div
+                    key={severity}
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 cursor-pointer hover:shadow-md transition-shadow"
+                    onClick={() => applyFilters({ severity })}
+                  >
+                    <div className="flex items-center justify-between">
+                      <SeverityBadge severity={severity} />
+                      <span className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {stats.bySeverity[severity]}
+                      </span>
                     </div>
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg">
-                      <ChevronRight className="w-5 h-5 text-gray-400" />
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {/* Filters Bar */}
+          <div className="mt-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowFilters(!showFilters)}
+                    className={`px-3 py-2 border rounded-lg flex items-center gap-2 ${
+                      showFilters
+                        ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                        : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <Filter className="w-4 h-4" />
+                    Filters
+                    {activeFilterCount > 0 && (
+                      <span className="px-1.5 py-0.5 bg-blue-600 text-white text-xs rounded-full">
+                        {activeFilterCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {activeFilterCount > 0 && (
+                    <button
+                      onClick={clearFilters}
+                      className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 flex items-center gap-1"
+                    >
+                      <FilterX className="w-4 h-4" />
+                      Clear all
                     </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    {pagination.total} total anomalies
+                  </span>
+                </div>
+              </div>
+
+              {/* Expanded Filters */}
+              {showFilters && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Type Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Type
+                    </label>
+                    <select
+                      value={filters.type || ''}
+                      onChange={(e) => applyFilters({ type: e.target.value as AnomalyType || undefined })}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="">All Types</option>
+                      <option value="fraud">Fraud</option>
+                      <option value="booking">Booking</option>
+                      <option value="payment">Payment</option>
+                      <option value="behavior">Behavior</option>
+                    </select>
+                  </div>
+
+                  {/* Severity Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Severity
+                    </label>
+                    <select
+                      value={filters.severity || ''}
+                      onChange={(e) => applyFilters({ severity: e.target.value as AnomalySeverity || undefined })}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="">All Severities</option>
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Status
+                    </label>
+                    <select
+                      value={filters.status || ''}
+                      onChange={(e) => applyFilters({ status: e.target.value as AnomalyStatus || undefined })}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="">All Statuses</option>
+                      <option value="pending">Pending</option>
+                      <option value="investigating">Investigating</option>
+                      <option value="resolved">Resolved</option>
+                      <option value="false_positive">False Positive</option>
+                    </select>
                   </div>
                 </div>
-              ))
+              )}
+            </div>
+
+            {/* Anomaly List */}
+            <div className="divide-y divide-gray-200 dark:divide-gray-700">
+              {isLoading ? (
+                <div className="p-8 text-center">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-600" />
+                  <p className="mt-2 text-gray-500 dark:text-gray-400">Loading anomalies...</p>
+                </div>
+              ) : error ? (
+                <div className="p-8 text-center">
+                  <AlertCircle className="w-8 h-8 mx-auto text-red-500" />
+                  <p className="mt-2 text-gray-500 dark:text-gray-400">{error}</p>
+                  <button
+                    onClick={handleRefresh}
+                    className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : anomalies.length === 0 ? (
+                <div className="p-8 text-center">
+                  <CheckCircle className="w-8 h-8 mx-auto text-green-500" />
+                  <p className="mt-2 text-gray-900 dark:text-white font-medium">No anomalies found</p>
+                  <p className="mt-1 text-gray-500 dark:text-gray-400">
+                    {activeFilterCount > 0
+                      ? 'Try adjusting your filters'
+                      : 'All clear! No anomalies detected.'}
+                  </p>
+                </div>
+              ) : (
+                anomalies.map((anomaly) => (
+                  <div
+                    key={anomaly.id}
+                    className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+                    onClick={() => setSelectedAnomaly(anomaly)}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <SeverityBadge severity={anomaly.severity} />
+                          <TypeBadge type={anomaly.type} />
+                          <StatusBadge status={anomaly.status} />
+                        </div>
+                        <p className="mt-2 text-gray-900 dark:text-white font-medium line-clamp-1">
+                          {anomaly.description}
+                        </p>
+                        <div className="mt-1 flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                          <span className="flex items-center gap-1">
+                            <User className="w-3 h-3" />
+                            {anomaly.entityType}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            {new Date(anomaly.detectedAt).toLocaleDateString()}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <BarChart3 className="w-3 h-3" />
+                            {(anomaly.confidence * 100).toFixed(0)}% confidence
+                          </span>
+                        </div>
+                      </div>
+                      <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg">
+                        <ChevronRight className="w-5 h-5 text-gray-400" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Pagination */}
+            {pagination.pages > 1 && (
+              <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
+                  {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(pagination.page - 1)}
+                    disabled={pagination.page <= 1}
+                    className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    Previous
+                  </button>
+                  {Array.from({ length: Math.min(5, pagination.pages) }, (_, i) => {
+                    const page = pagination.page - 2 + i;
+                    if (page < 1 || page > pagination.pages) return null;
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => handlePageChange(page)}
+                        className={`px-3 py-1 rounded-lg ${
+                          page === pagination.page
+                            ? 'bg-blue-600 text-white'
+                            : 'border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={() => handlePageChange(pagination.page + 1)}
+                    disabled={pagination.page >= pagination.pages}
+                    className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 
-          {/* Pagination */}
-          {pagination.pages > 1 && (
-            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
-                {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handlePageChange(pagination.page - 1)}
-                  disabled={pagination.page <= 1}
-                  className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
-                >
-                  Previous
-                </button>
-                {Array.from({ length: Math.min(5, pagination.pages) }, (_, i) => {
-                  const page = pagination.page - 2 + i;
-                  if (page < 1 || page > pagination.pages) return null;
-                  return (
-                    <button
-                      key={page}
-                      onClick={() => handlePageChange(page)}
-                      className={`px-3 py-1 rounded-lg ${
-                        page === pagination.page
-                          ? 'bg-blue-600 text-white'
-                          : 'border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                      }`}
-                    >
-                      {page}
-                    </button>
-                  );
-                })}
-                <button
-                  onClick={() => handlePageChange(pagination.page + 1)}
-                  disabled={pagination.page >= pagination.pages}
-                  className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Detail Modal */}
+          <AnomalyDetailModal
+            anomaly={selectedAnomaly}
+            onClose={() => setSelectedAnomaly(null)}
+            onUpdateStatus={handleUpdateStatus}
+          />
         </div>
-      </div>
-
-      {/* Detail Modal */}
-      <AnomalyDetailModal
-        anomaly={selectedAnomaly}
-        onClose={() => setSelectedAnomaly(null)}
-        onUpdateStatus={handleUpdateStatus}
-      />
-    </div>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

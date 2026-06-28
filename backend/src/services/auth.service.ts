@@ -42,6 +42,14 @@ const generateTokens = (user: any, rememberMe: boolean = false): TokenPair => {
   return { accessToken, refreshToken };
 };
 
+const generatePreAuthToken = (userId: string, rememberMe: boolean): string => {
+  return jwt.sign(
+    { id: userId, purpose: '2fa_login', rememberMe },
+    process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || '',
+    { expiresIn: '5m' }
+  );
+};
+
 const formatUserResponse = (user: any): UserResponse => ({
   id: user._id,
   firstName: user.firstName,
@@ -60,6 +68,16 @@ const formatUserResponse = (user: any): UserResponse => ({
   dateOfBirth: user.dateOfBirth,
   address: user.address,
   lastLogin: user.lastLogin,
+  // Include preferences from communicationPreferences
+  preferences: {
+    email: user.communicationPreferences?.email ?? {},
+    sms: user.communicationPreferences?.sms ?? {},
+    push: user.communicationPreferences?.push ?? {},
+    quietHours: user.communicationPreferences?.quietHours ?? { enabled: false, startTime: '22:00', endTime: '08:00', timezone: 'UTC' },
+    language: user.communicationPreferences?.language ?? 'en',
+    timezone: user.communicationPreferences?.timezone ?? 'Asia/Dubai',
+    currency: user.communicationPreferences?.currency ?? 'AED',
+  },
 });
 
 // ============================================
@@ -796,6 +814,11 @@ export class AuthService {
       result.details = `Referrer made ${recentReferralCount} referrals in last 24 hours`;
     }
 
+    // SECURITY FIX: Block registration when fraud is detected
+    if (result.isFraud) {
+      throw new ApiError(403, 'Registration blocked due to suspicious activity detected');
+    }
+
     return result;
   }
 
@@ -886,32 +909,50 @@ export class AuthService {
       return { success: false, bonusAmount: 0 };
     }
 
+    // First booking conversion bonus amount (in coins)
+    const CONVERSION_BONUS = 100;
+    const bonusAmount = CONVERSION_BONUS;
+
     // Check if user has already received a conversion bonus
-    const hasConversionBonus = user.loyaltySystem.pointsHistory.some(
-      (p: any) => p.description.includes('First booking') || p.description.includes('conversion')
+    // FIX: Use atomic findOneAndUpdate to prevent race conditions
+    const userUpdateResult = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        'loyaltySystem.firstBookingAwarded': false,
+      },
+      {
+        $set: { 'loyaltySystem.firstBookingAwarded': true },
+        $inc: { 'loyaltySystem.coins': bonusAmount, 'loyaltySystem.totalEarned': bonusAmount },
+        $push: {
+          'loyaltySystem.pointsHistory': {
+            amount: bonusAmount,
+            type: 'bonus' as const,
+            description: 'First booking conversion bonus!',
+            date: new Date(),
+          },
+        },
+      },
+      { new: true }
     );
 
-    if (hasConversionBonus) {
+    // If no document was updated, bonus was already awarded (race condition handled)
+    if (!userUpdateResult) {
       return { success: false, bonusAmount: 0 };
     }
 
-    // Award conversion bonus
-    const bonusAmount = 100;
-    await user.addLoyaltyPoints(bonusAmount, 'bonus', 'First booking conversion bonus!', undefined);
-
-    // Also award referrer if user was referred
-    if (user.loyaltySystem.referredBy) {
-      const referrer = await User.findById(user.loyaltySystem.referredBy);
+    // Also award referrer if user was referred (uses the already updated user doc)
+    if (userUpdateResult && userUpdateResult.loyaltySystem?.referredBy) {
+      const referrer = await User.findById(userUpdateResult.loyaltySystem.referredBy);
       if (referrer) {
         // Higher bonus for referrer when referral actually converts (completes booking)
-        await referrer.addLoyaltyPoints(300, 'referral', `Referral conversion bonus - ${user.firstName} completed first booking`, userId);
+        await referrer.addLoyaltyPoints(300, 'referral', `Referral conversion bonus - ${userUpdateResult.firstName} completed first booking`, userId);
       }
     }
 
     logger.info('Conversion bonus awarded', {
       userId,
       bonusAmount,
-      hasReferrer: !!user.loyaltySystem.referredBy,
+      hasReferrer: !!userUpdateResult?.loyaltySystem?.referredBy,
     });
 
     return { success: true, bonusAmount };
@@ -1659,16 +1700,85 @@ export class AuthService {
     // Update last login
     await user.updateLastLogin(ip);
 
+    const roleSpecificData = await this.getRoleSpecificData(user);
+    const redirectUrl = this.getRedirectUrl(user.role, roleSpecificData);
+
+    // If 2FA is enabled, return pre-auth token without session tokens
+    if (user.twoFactor?.enabled) {
+      const preAuthToken = generatePreAuthToken(user._id.toString(), rememberMe);
+      return {
+        user: formatUserResponse(user),
+        requiresEmailVerification: !user.isEmailVerified,
+        requires2FA: true,
+        preAuthToken,
+        redirectUrl,
+        roleSpecificData,
+      };
+    }
+
     // Generate tokens (pass rememberMe to control refresh token expiry)
     const tokens = generateTokens(user, rememberMe);
 
-    // Get role-specific data
-    const roleSpecificData = await this.getRoleSpecificData(user);
+    await this.linkGuestBookingsForCustomer(user);
 
-    // Determine redirect URL
+    return {
+      user: formatUserResponse(user),
+      tokens,
+      requiresEmailVerification: !user.isEmailVerified,
+      redirectUrl,
+      roleSpecificData,
+    };
+  }
+
+  /**
+   * Complete login after successful 2FA verification
+   */
+  async verifyLogin2FA(preAuthToken: string, code: string, ip?: string): Promise<LoginResult> {
+    let decoded: { id: string; purpose?: string; rememberMe?: boolean };
+    try {
+      decoded = jwt.verify(
+        preAuthToken,
+        process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || ''
+      ) as { id: string; purpose?: string; rememberMe?: boolean };
+    } catch {
+      throw new ApiError(401, 'Invalid or expired verification session. Please sign in again.');
+    }
+
+    if (decoded.purpose !== '2fa_login' || !decoded.id) {
+      throw new ApiError(401, 'Invalid verification session');
+    }
+
+    const user = await User.findById(decoded.id).select('+twoFactor.secret');
+    if (!user || !user.twoFactor?.enabled || !user.twoFactor.secret) {
+      throw new ApiError(400, 'Two-factor authentication is not enabled for this account');
+    }
+
+    const { verifyToken, decryptSecret } = await import('./auth/2fa.service');
+    let decryptedSecret: string;
+    try {
+      decryptedSecret = decryptSecret(user.twoFactor.secret);
+    } catch {
+      throw new ApiError(500, 'Unable to verify two-factor code');
+    }
+
+    const isValidCode = verifyToken(decryptedSecret, code);
+    if (!isValidCode) {
+      throw new ApiError(401, 'Invalid verification code');
+    }
+
+    user.twoFactor.lastVerified = new Date();
+    await user.save({ validateBeforeSave: false });
+
+    const rememberMe = decoded.rememberMe === true;
+    const tokens = generateTokens(user, rememberMe);
+    const roleSpecificData = await this.getRoleSpecificData(user);
     const redirectUrl = this.getRedirectUrl(user.role, roleSpecificData);
 
     await this.linkGuestBookingsForCustomer(user);
+
+    if (ip) {
+      await user.updateLastLogin(ip);
+    }
 
     return {
       user: formatUserResponse(user),
@@ -2125,10 +2235,62 @@ export class AuthService {
   // Token Refresh
   // ========================================
 
+  // SECURITY FIX: Refresh token blacklist for invalidated tokens
+  // WARNING: This in-memory Set is LOST on server restart. For production:
+  // - Use Redis with TTL (preferred) - tokens auto-expire after max token lifetime
+  // - Use MongoDB collection for persistence across restarts
+  private refreshTokenBlacklist: Set<string> = new Set();
+
+  /**
+   * Add a token to the refresh token blacklist
+   * SECURITY FIX: For production, implement Redis-based blacklist:
+   *   await redisClient.set(`blacklist:${token}`, '1', 'EX', maxTokenLifetime);
+   */
+  addToRefreshTokenBlacklist(token: string): void {
+    this.refreshTokenBlacklist.add(token);
+    // Clean up old entries periodically (keep last 1000)
+    if (this.refreshTokenBlacklist.size > 1000) {
+      const entries = Array.from(this.refreshTokenBlacklist);
+      this.refreshTokenBlacklist = new Set(entries.slice(-500));
+    }
+  }
+
+  /**
+   * Check if a token is blacklisted
+   * SECURITY FIX: For production, implement Redis-based check:
+   *   const result = await redisClient.get(`blacklist:${token}`);
+   *   return result !== null;
+   */
+  isRefreshTokenBlacklisted(token: string): boolean {
+    return this.refreshTokenBlacklist.has(token);
+  }
+
   async refreshToken(token: string): Promise<{ tokens: TokenPair; user: UserResponse }> {
-    // Verify refresh token
-    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET as string) as any;
+    // Verify refresh token first to get user ID
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET as string);
+    } catch (error) {
+      throw new ApiError(401, 'Invalid or expired refresh token');
+    }
+
     const userId = decoded.id;
+
+    // SECURITY FIX: Check if token is blacklisted (reused token - potential theft)
+    if (this.isRefreshTokenBlacklisted(token)) {
+      logger.warn('Refresh token reuse detected - possible token theft', {
+        action: 'REFRESH_TOKEN_REUSE_DETECTED',
+        userId,
+      });
+      // Invalidate all user sessions as a security precaution
+      const user = await User.findById(userId);
+      if (user) {
+        user.refreshTokens = [];
+        user.tokenVersion = (user.tokenVersion || 1) + 1;
+        await user.save({ validateBeforeSave: false });
+      }
+      throw new ApiError(401, 'Token has been invalidated for security reasons');
+    }
 
     // Acquire Redis lock to prevent race conditions from concurrent refresh requests
     const lockKey = `refresh:lock:${userId}`;
@@ -2195,6 +2357,10 @@ export class AuthService {
 
       // Generate new tokens
       const tokens = generateTokens(user);
+
+      // SECURITY FIX: Blacklist the old refresh token to prevent reuse
+      // This implements proper token rotation - old tokens become invalid after refresh
+      this.addToRefreshTokenBlacklist(token);
 
       // Remove old refresh token and add new one
       user.refreshTokens = user.refreshTokens.filter((t) => t !== token);
@@ -2289,6 +2455,8 @@ export class AuthService {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     user.refreshTokens = [];
+    // SECURITY: Increment tokenVersion to invalidate all existing sessions
+    user.tokenVersion = (user.tokenVersion || 1) + 1;
 
     // FIX: Add old password to history before saving
     const currentHash = await bcrypt.hash(password, 10);
@@ -2335,6 +2503,8 @@ export class AuthService {
     // Update password
     userWithPassword.password = newPassword;
     userWithPassword.refreshTokens = [];
+    // SECURITY: Increment tokenVersion to invalidate all existing sessions
+    userWithPassword.tokenVersion = (userWithPassword.tokenVersion || 1) + 1;
 
     await userWithPassword.save();
 

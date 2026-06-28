@@ -189,7 +189,7 @@ export async function checkTierUpgrades(userId: mongoose.Types.ObjectId): Promis
     // Update user's tier
     await User.updateOne(
       { _id: userId },
-      { 'loyaltySystem.tier': newTier }
+      { 'loyaltySystem.tier': newTier, 'loyaltySystem.tierChangedAt': new Date() }
     );
 
     logger.info('checkTierUpgrades: Tier upgrade celebrated', {
@@ -632,9 +632,67 @@ export async function checkAllTierUpgrades(): Promise<{ checked: number; upgrade
   return { checked: users.length, upgraded };
 }
 
+/**
+ * FIX: Check for tier downgrades based on current totalEarned
+ * Tiers can go down if user redeems points but totalEarned remains same
+ * Runs monthly - only downgrades if user has been below threshold for 30+ days
+ */
+export async function checkAllTierDowngrades(): Promise<{ checked: number; downgraded: number }> {
+  const users = await User.find({ isDeleted: { $ne: true }, role: 'customer' })
+    .select('_id firstName loyaltySystem.tier loyaltySystem.totalEarned loyaltySystem.tierChangedAt')
+    .limit(500);
+
+  let downgraded = 0;
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+  for (const user of users) {
+    const currentTier = user.loyaltySystem.tier as Tier;
+    const totalEarned = user.loyaltySystem.totalEarned;
+    const tierChangedAt = user.loyaltySystem.tierChangedAt;
+
+    // Determine correct tier based on points
+    let correctTier: Tier = 'bronze';
+    if (totalEarned >= TIER_THRESHOLDS.platinum) {
+      correctTier = 'platinum';
+    } else if (totalEarned >= TIER_THRESHOLDS.gold) {
+      correctTier = 'gold';
+    } else if (totalEarned >= TIER_THRESHOLDS.silver) {
+      correctTier = 'silver';
+    }
+
+    // Only downgrade if current tier is higher than correct tier
+    // AND user has been at current tier for 30+ days (prevents flapping)
+    if (TIER_HIERARCHY[currentTier] > TIER_HIERARCHY[correctTier]) {
+      const daysAtCurrentTier = tierChangedAt
+        ? Date.now() - new Date(tierChangedAt).getTime()
+        : Infinity;
+
+      if (daysAtCurrentTier >= THIRTY_DAYS_MS) {
+        await User.updateOne(
+          { _id: user._id },
+          {
+            'loyaltySystem.tier': correctTier,
+            'loyaltySystem.tierChangedAt': new Date(),
+          }
+        );
+        logger.info('Tier downgrade applied', {
+          userId: user._id.toString(),
+          previousTier: currentTier,
+          newTier: correctTier,
+          totalEarned,
+        });
+        downgraded++;
+      }
+    }
+  }
+
+  return { checked: users.length, downgraded };
+}
+
 export default {
   checkTierUpgrades,
   checkAllTierUpgrades,
+  checkAllTierDowngrades,
   manualTierUpgrade,
   getTierInfo,
   getTierBadges,

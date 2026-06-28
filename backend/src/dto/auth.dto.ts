@@ -194,6 +194,36 @@ export interface TokenPair {
   refreshToken: string;
 }
 
+export interface UserPreferencesDTO {
+  email?: {
+    marketing?: boolean;
+    bookingUpdates?: boolean;
+    reminders?: boolean;
+    newsletters?: boolean;
+    promotions?: boolean;
+  };
+  sms?: {
+    bookingUpdates?: boolean;
+    reminders?: boolean;
+    promotions?: boolean;
+  };
+  push?: {
+    bookingUpdates?: boolean;
+    reminders?: boolean;
+    newMessages?: boolean;
+    promotions?: boolean;
+  };
+  quietHours?: {
+    enabled: boolean;
+    startTime: string;
+    endTime: string;
+    timezone: string;
+  };
+  language?: string;
+  timezone?: string;
+  currency?: string;
+}
+
 export interface UserResponse {
   id: string;
   firstName: string;
@@ -212,6 +242,7 @@ export interface UserResponse {
   dateOfBirth?: string;
   address?: any;
   lastLogin?: Date;
+  preferences?: UserPreferencesDTO;
 }
 
 export interface CustomerProfileData {
@@ -235,12 +266,16 @@ export interface ProviderProfileData {
 
 export interface AuthResult {
   user: UserResponse;
-  tokens: TokenPair;
+  tokens?: TokenPair;
   requiresEmailVerification: boolean;
+  requires2FA?: boolean;
+  preAuthToken?: string;
 }
 
 export interface LoginResult extends AuthResult {
   redirectUrl: string;
+  requires2FA?: boolean;
+  preAuthToken?: string;
   roleSpecificData?: {
     customerProfile?: Partial<CustomerProfileData>;
     providerProfile?: Partial<ProviderProfileData>;

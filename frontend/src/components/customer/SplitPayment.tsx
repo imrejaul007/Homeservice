@@ -9,6 +9,7 @@ import {
   Info,
   Sparkles,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { cn, formatPrice } from '../../lib/utils';
 import { Skeleton } from '../common/Skeleton';
 import { Badge } from '../common/Badge';
@@ -302,6 +303,15 @@ export const SplitPayment: React.FC<SplitPaymentProps> = ({
     };
 
     fetchWalletBalance();
+
+    // Refetch wallet balance when tab regains focus
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchWalletBalance();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [currency]);
 
   // Use actual wallet balance from API
@@ -395,6 +405,7 @@ export const SplitPayment: React.FC<SplitPaymentProps> = ({
       await onConfirm(paymentDetails);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Payment failed. Please try again.');
+      toast.error('Payment failed', { description: err instanceof Error ? err.message : 'Please try again.' });
     }
   };
 

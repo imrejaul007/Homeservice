@@ -12,9 +12,11 @@ import {
   Plus,
   Minus,
   Info,
-  Package
+  Package,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { api } from '../../services/api';
 
 interface Equipment {
   _id: string;
@@ -73,34 +75,28 @@ const EquipmentRental: React.FC<EquipmentRentalProps> = ({
   const [notes, setNotes] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
-  // Mock fetch - in production, fetch from API
+  // Fetch equipment from API
   useEffect(() => {
-    const mockEquipment: Equipment = {
-      _id: '1',
-      equipmentId: 'EQ-001',
-      name: 'Professional Steam Cleaner',
-      description: 'Industrial-grade steam cleaner for deep cleaning carpets and upholstery. Includes multiple attachments for different surfaces.',
-      category: 'cleaning',
-      manufacturer: 'Karcher',
-      model: 'SC4 Premium',
-      condition: 'good',
-      images: [],
-      dailyRate: 150,
-      weeklyRate: 750,
-      monthlyRate: 2500,
-      depositAmount: 500,
-      depositRefundable: true,
-      maxRentalDays: 30,
-      minRentalDays: 1,
-      requiresTraining: false,
-      status: 'available',
-      location: { address: 'Dubai Marina, Building 5', distance: 2.5 },
-      rating: 4.8,
-      reviewCount: 124,
+    const loadEquipment = async () => {
+      setIsLoading(true);
+      try {
+        if (equipmentId) {
+          const response = await api.get(`/equipment/${equipmentId}`);
+          if (response.data?.success) {
+            setEquipment(response.data.data);
+          } else {
+            setEquipment(null);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load equipment:', error);
+        setEquipment(null);
+      } finally {
+        setIsLoading(false);
+      }
     };
 
-    setEquipment(mockEquipment);
-    setIsLoading(false);
+    loadEquipment();
   }, [equipmentId]);
 
   const formatPrice = (price: number) => {
@@ -162,10 +158,20 @@ const EquipmentRental: React.FC<EquipmentRentalProps> = ({
     }
   };
 
-  if (isLoading || !equipment) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="h-8 w-8 border-4 border-nilin-coral/30 border-t-nilin-coral rounded-full animate-spin" />
+        <Loader2 className="h-8 w-8 border-4 border-nilin-coral/30 border-t-nilin-coral rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!equipment) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
+        <h3 className="text-lg font-semibold text-nilin-charcoal mb-2">Equipment Not Found</h3>
+        <p className="text-nilin-warmGray">The requested equipment could not be found.</p>
       </div>
     );
   }

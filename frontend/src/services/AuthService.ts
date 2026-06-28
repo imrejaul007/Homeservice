@@ -3,6 +3,7 @@ import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '../stores/authStore';
 import type { CustomerProfile, ProviderProfile } from '../stores/authStore';
 import { getApiUrl } from '../lib/getApiUrl';
+import { secureStorage } from '../lib/security';
 
 /**
  * Custom error class that preserves Axios response structure
@@ -35,6 +36,18 @@ export class ApiError extends Error {
       return new ApiError(error.message);
     }
     return new ApiError('Unknown error occurred');
+  }
+}
+
+export class Requires2FAError extends Error {
+  preAuthToken: string;
+  user: Pick<AuthUser, 'id' | 'email' | 'firstName'>;
+
+  constructor(preAuthToken: string, user: Pick<AuthUser, 'id' | 'email' | 'firstName'>) {
+    super('Two-factor authentication required');
+    this.name = 'Requires2FAError';
+    this.preAuthToken = preAuthToken;
+    this.user = user;
   }
 }
 
@@ -111,11 +124,14 @@ export interface AuthResponse<T = unknown> {
 
 export interface LoginResponse {
   user: AuthUser;
-  tokens: AuthTokens;
+  tokens?: AuthTokens;
   customerProfile?: CustomerProfile;
   providerProfile?: ProviderProfile;
   redirectUrl?: string;
   requiresEmailVerification?: boolean;
+  requires2FA?: boolean;
+  preAuthToken?: string;
+  sessionId?: string;
 }
 
 export interface RegisterResponse {
@@ -130,12 +146,21 @@ export interface RegisterResponse {
  * Industry-grade authentication with automatic token refresh,
  * security monitoring, and comprehensive error handling.
  */
+// Idle timeout configuration
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const IDLE_WARNING_MS = 5 * 60 * 1000; // Show warning 5 minutes before timeout
+const IDLE_CHECK_INTERVAL_MS = 30 * 1000; // Check every 30 seconds
+
 class AuthService {
   private httpClient: ReturnType<typeof axios.create>;
   private refreshPromise: Promise<void> | null = null;
   private isRefreshing = false;
   private isLoggingOut = false;
   private tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private lastActivityTime: number = Date.now();
+  private idleWarningCallback: (() => void) | null = null;
+  private idleTimeoutCallback: (() => void) | null = null;
 
   constructor() {
     this.httpClient = axios.create({
@@ -149,6 +174,76 @@ class AuthService {
 
     this.setupInterceptors();
     this.startTokenRefreshTimer();
+    this.startIdleTimer();
+  }
+
+  /**
+   * Register callbacks for idle timeout warnings and actual timeout
+   */
+  public setIdleCallbacks(warningCallback: (() => void) | null, timeoutCallback: (() => void) | null): void {
+    this.idleWarningCallback = warningCallback;
+    this.idleTimeoutCallback = timeoutCallback;
+  }
+
+  /**
+   * Record user activity to reset idle timer
+   */
+  public recordActivity(): void {
+    this.lastActivityTime = Date.now();
+  }
+
+  /**
+   * Get time remaining until idle timeout
+   */
+  public getIdleTimeRemaining(): number {
+    const elapsed = Date.now() - this.lastActivityTime;
+    return Math.max(0, IDLE_TIMEOUT_MS - elapsed);
+  }
+
+  /**
+   * Start the idle timer to detect inactive sessions
+   */
+  private startIdleTimer(): void {
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer);
+    }
+
+    this.idleTimer = setInterval(() => {
+      const authStore = useAuthStore.getState();
+      if (!authStore.isAuthenticated) return;
+
+      const idleTime = Date.now() - this.lastActivityTime;
+
+      // Trigger warning when approaching timeout
+      if (idleTime >= (IDLE_TIMEOUT_MS - IDLE_WARNING_MS) && idleTime < IDLE_TIMEOUT_MS) {
+        if (this.idleWarningCallback) {
+          this.idleWarningCallback();
+        }
+      }
+
+      // Trigger logout on idle timeout
+      if (idleTime >= IDLE_TIMEOUT_MS) {
+        console.info(JSON.stringify({
+          type: 'SESSION_TIMEOUT',
+          context: 'idle_timeout',
+          timestamp: new Date().toISOString()
+        }));
+        if (this.idleTimeoutCallback) {
+          this.idleTimeoutCallback();
+        } else {
+          this.logout();
+        }
+      }
+    }, IDLE_CHECK_INTERVAL_MS);
+
+    // Listen for user activity events
+    if (typeof window !== 'undefined') {
+      const activityEvents = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+      const handleActivity = () => this.recordActivity();
+      activityEvents.forEach(event => {
+        window.addEventListener(event, handleActivity, { passive: true });
+      });
+    }
   }
 
   /**
@@ -206,7 +301,13 @@ class AuthService {
           // Prevent infinite retry loops for refresh and logout endpoints
           if (originalRequest.url?.includes('/auth/refresh-token') ||
               originalRequest.url?.includes('/auth/logout')) {
-            console.error('Refresh token failed, logging out user');
+            // Structured security logging instead of console.error
+            console.warn(JSON.stringify({
+              type: 'AUTH_FAILURE',
+              context: 'token_refresh_failed',
+              timestamp: new Date().toISOString(),
+              url: originalRequest.url
+            }));
             this.handleAuthFailure();
             return Promise.reject(axiosError);
           }
@@ -238,9 +339,14 @@ class AuthService {
           }
         }
 
-        // Handle other error responses
+        // Handle other error responses - structured logging
         if (axiosError.response?.status === 403) {
-          console.error('Access forbidden:', axiosError.response?.data);
+          console.warn(JSON.stringify({
+            type: 'ACCESS_DENIED',
+            context: 'forbidden_response',
+            timestamp: new Date().toISOString(),
+            status: axiosError.response?.status
+          }));
         }
 
         return Promise.reject(axiosError);
@@ -249,12 +355,12 @@ class AuthService {
   }
 
   /**
-   * Get stored authentication tokens from sessionStorage
-   * Using sessionStorage for improved security - tokens don't persist beyond current tab
+   * Get stored authentication tokens from secureStorage
+   * Using secureStorage for improved XSS protection - consistent with api.ts
    */
   private getStoredTokens(): AuthTokens | null {
     try {
-      const stored = sessionStorage.getItem('auth-storage');
+      const stored = secureStorage.getItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         return parsed.state?.tokens || null;
@@ -281,8 +387,14 @@ class AuthService {
    * Refresh authentication tokens using refresh token
    * Uses promise chain pattern to prevent race conditions when multiple
    * requests try to refresh tokens simultaneously.
+   * P0 FIX: Check if user is logging out before starting refresh
    */
   private async refreshTokens(): Promise<void> {
+    // P0 FIX: Don't start refresh if user is logging out
+    if (this.isLoggingOut) {
+      throw new Error('Logout in progress, skipping token refresh');
+    }
+
     // Prevent multiple simultaneous refresh attempts - return existing promise if refresh is in progress
     if (this.isRefreshing && this.refreshPromise) {
       return this.refreshPromise;
@@ -291,6 +403,12 @@ class AuthService {
     this.isRefreshing = true;
     this.refreshPromise = this.performTokenRefresh()
       .finally(() => {
+        // P0 FIX: Check again in finally - if logout started during refresh, cleanup
+        if (this.isLoggingOut) {
+          this.isRefreshing = false;
+          this.refreshPromise = null;
+          throw new Error('Logout in progress, aborting refresh');
+        }
         this.isRefreshing = false;
         this.refreshPromise = null;
       });
@@ -302,6 +420,11 @@ class AuthService {
    * Perform actual token refresh operation
    */
   private async performTokenRefresh(): Promise<void> {
+    // P0 FIX: Check if user is logging out - abort refresh if so
+    if (this.isLoggingOut) {
+      throw new Error('Logout in progress, aborting token refresh');
+    }
+
     const tokens = this.getStoredTokens();
 
     if (!tokens?.refreshToken) {
@@ -309,23 +432,49 @@ class AuthService {
     }
 
     try {
-      // Use axios directly to avoid interceptor loop
-      const response = await axios.post<AuthResponse<{ tokens: AuthTokens }>>(
+      // P0 FIX: Use AbortController to allow cancellation
+      const abortController = new AbortController();
+      const signal = abortController.signal;
+
+      // Store abort controller for cleanup
+      const currentAbortController = abortController;
+
+      // Wrap the promise to allow abort
+      const refreshPromise = axios.post<AuthResponse<{ tokens: AuthTokens }>>(
         `${this.httpClient.defaults.baseURL}/auth/refresh-token`,
         { refreshToken: tokens.refreshToken },
         {
           withCredentials: true,
-          timeout: 10000
+          timeout: 10000,
+          signal
         }
-      );
+      ).then(async (response) => {
+        // P0 FIX: Double-check logout status before updating tokens
+        if (this.isLoggingOut) {
+          throw new Error('Logout in progress, discarding refresh response');
+        }
 
-      if (response.data.success && response.data.data.tokens) {
-        this.updateStoredTokens(response.data.data.tokens);
-      } else {
-        throw new Error('Invalid refresh response format');
-      }
+        if (response.data.success && response.data.data?.tokens) {
+          this.updateStoredTokens(response.data.data.tokens);
+        } else {
+          throw new Error('Invalid refresh response format');
+        }
+      }).catch((error) => {
+        // Don't log abort errors - they are expected during logout
+        if (error.name !== 'CanceledError' && error.name !== 'AbortError') {
+          console.error('Token refresh failed:', error);
+        }
+        throw error;
+      });
+
+      // Wait for the refresh to complete
+      await refreshPromise;
+
     } catch (error) {
-      console.error('Token refresh failed:', error);
+      // P0 FIX: Check if this was aborted due to logout
+      if (this.isLoggingOut) {
+        throw new Error('Logout in progress');
+      }
       throw error;
     }
   }
@@ -363,7 +512,10 @@ class AuthService {
       const authStore = useAuthStore.getState();
       authStore.clearAuth();
 
-      // Clear any sessionStorage auth data directly as backup
+      // Clear secureStorage auth data (consistent with api.ts)
+      secureStorage.removeItem('auth-storage');
+
+      // Clear legacy sessionStorage auth data as backup
       sessionStorage.removeItem('auth-storage');
 
       // Clear any cookies
@@ -490,10 +642,20 @@ class AuthService {
     this.tokenRefreshTimer = setInterval(async () => {
       if (this.isAuthenticated() && this.shouldRefreshToken()) {
         try {
-          console.log('Proactively refreshing token before expiration');
+          // Structured logging for token refresh
+          console.info(JSON.stringify({
+            type: 'TOKEN_REFRESH',
+            context: 'proactive_refresh',
+            timestamp: new Date().toISOString()
+          }));
           await this.refreshTokens();
         } catch (error) {
-          console.error('Proactive token refresh failed:', error);
+          console.warn(JSON.stringify({
+            type: 'TOKEN_REFRESH_FAILED',
+            context: 'proactive_refresh',
+            timestamp: new Date().toISOString(),
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }));
         }
       }
     }, 60 * 60 * 1000); // Check every hour
@@ -502,10 +664,19 @@ class AuthService {
     setTimeout(async () => {
       if (this.isAuthenticated() && this.shouldRefreshToken()) {
         try {
-          console.log('Checking token on startup - refreshing if needed');
+          console.info(JSON.stringify({
+            type: 'TOKEN_REFRESH',
+            context: 'startup_check',
+            timestamp: new Date().toISOString()
+          }));
           await this.refreshTokens();
         } catch (error) {
-          console.error('Startup token refresh failed:', error);
+          console.warn(JSON.stringify({
+            type: 'TOKEN_REFRESH_FAILED',
+            context: 'startup_check',
+            timestamp: new Date().toISOString(),
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }));
         }
       }
     }, 1000); // Check 1 second after startup
@@ -518,6 +689,10 @@ class AuthService {
     if (this.tokenRefreshTimer) {
       clearInterval(this.tokenRefreshTimer);
       this.tokenRefreshTimer = null;
+    }
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer);
+      this.idleTimer = null;
     }
   }
 
@@ -545,9 +720,18 @@ class AuthService {
             skipAuth: true,
             ...(csrfToken && { 'x-csrf-token': csrfToken }),
           },
-          withCredentials: true, // Ensure cookies are sent
+          withCredentials: true,
         }
       );
+
+      if (response.data.data?.requires2FA && response.data.data.preAuthToken) {
+        throw new Requires2FAError(response.data.data.preAuthToken, {
+          id: response.data.data.user.id,
+          email: response.data.data.user.email,
+          firstName: response.data.data.user.firstName,
+        });
+      }
+
       return response.data;
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
@@ -714,12 +898,31 @@ class AuthService {
   }
 
   /**
+   * Complete login with TOTP after password step
+   */
+  async verifyLogin2FA(preAuthToken: string, code: string): Promise<AuthResponse<LoginResponse>> {
+    try {
+      const response = await this.httpClient.post<AuthResponse<LoginResponse>>(
+        '/auth/login/verify-2fa',
+        { preAuthToken, code },
+        { headers: { skipAuth: true }, withCredentials: true }
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(error.response.data?.message || 'Two-factor verification failed');
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Request password reset
    */
-  async forgotPassword(email: string): Promise<AuthResponse<{}>> {
+  async forgotPassword(email: string, captchaToken?: string): Promise<AuthResponse<{}>> {
     try {
       const response = await this.httpClient.post<AuthResponse<{}>>('/auth/forgot-password',
-        { email },
+        { email, ...(captchaToken ? { captchaToken } : {}) },
         { headers: { skipAuth: true } }
       );
       return response.data;
@@ -734,10 +937,15 @@ class AuthService {
   /**
    * Reset password with token
    */
-  async resetPassword(token: string, password: string, confirmPassword: string): Promise<AuthResponse<{}>> {
+  async resetPassword(
+    token: string,
+    password: string,
+    confirmPassword: string,
+    captchaToken?: string
+  ): Promise<AuthResponse<{}>> {
     try {
       const response = await this.httpClient.post<AuthResponse<{}>>('/auth/reset-password',
-        { token, password, confirmPassword },
+        { token, password, confirmPassword, ...(captchaToken ? { captchaToken } : {}) },
         { headers: { skipAuth: true } }
       );
       return response.data;
@@ -770,10 +978,10 @@ class AuthService {
   /**
    * Resend email verification
    */
-  async resendVerification(email: string): Promise<AuthResponse<{}>> {
+  async resendVerification(email: string, captchaToken?: string): Promise<AuthResponse<{}>> {
     try {
       const response = await this.httpClient.post<AuthResponse<{}>>('/auth/resend-verification',
-        { email },
+        { email, ...(captchaToken ? { captchaToken } : {}) },
         { headers: { skipAuth: true } }
       );
       return response.data;

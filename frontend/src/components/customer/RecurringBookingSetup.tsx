@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Calendar, Clock, RefreshCw, DollarSign, AlertCircle, CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 import { cn, formatPrice } from '../../lib/utils';
 import { Skeleton } from '../common/Skeleton';
@@ -6,6 +6,7 @@ import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { useAuthStore } from '../../stores/authStore';
+import { api } from '../../services/api';
 
 // =============================================================================
 // NILIN Customer Dashboard - Recurring Booking Setup Component
@@ -488,31 +489,32 @@ export const RecurringBookingSetup: React.FC<RecurringBookingSetupProps> = ({
   className,
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
 
   const customerProfile = useAuthStore((state) => state.customerProfile);
 
-  // Mock existing subscriptions
-  const [subscriptions, setSubscriptions] = useState<RecurringSubscription[]>([
-    {
-      id: 'sub-1',
-      serviceId: 'svc-1',
-      providerId: 'prov-1',
-      serviceName: 'Weekly House Cleaning',
-      providerName: 'Sarah\'s Cleaning Services',
-      frequency: 'weekly',
-      interval: 1,
-      startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-      nextRun: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-      status: 'active',
-      price: 249,
-      paymentMethod: { type: 'Credit Card', last4: '4242' },
-      address: { street: '123 Main St', city: 'Dubai', state: 'Dubai', zipCode: '00000' },
-      discount: 5,
-      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-    },
-  ]);
+  // Load subscriptions from API
+  const [subscriptions, setSubscriptions] = useState<RecurringSubscription[]>([]);
+
+  useEffect(() => {
+    const loadSubscriptions = async () => {
+      setIsLoading(true);
+      try {
+        const response = await api.get('/customer/subscriptions');
+        if (response.data?.success) {
+          setSubscriptions(response.data.data?.subscriptions || []);
+        }
+      } catch (err) {
+        console.error('Failed to load subscriptions:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadSubscriptions();
+  }, []);
 
   const handleSubmit = async (data: RecurringBookingData) => {
     if (!service) return;
@@ -521,30 +523,31 @@ export const RecurringBookingSetup: React.FC<RecurringBookingSetupProps> = ({
     setError(null);
 
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      const newSubscription: RecurringSubscription = {
-        id: `sub-${Date.now()}`,
-        serviceId: serviceId || '',
-        providerId: providerId || '',
-        serviceName: service.name,
-        providerName: 'Service Provider',
+      const response = await api.post('/customer/subscriptions', {
+        serviceId,
+        providerId,
         frequency: data.frequency,
         interval: data.interval,
-        startDate: new Date(data.startDate),
-        nextRun: new Date(data.startDate),
-        status: 'active',
-        price: service.price,
-        paymentMethod: { type: 'Credit Card', last4: '4242' },
-        address: { street: '', city: 'Dubai', state: 'Dubai', zipCode: '' },
-        discount: FREQUENCY_OPTIONS.find(f => f.value === data.frequency)?.discount || 0,
-        createdAt: new Date(),
-      };
+        startDate: data.startDate,
+        preferredTime: data.preferredTime,
+        notes: data.notes,
+        addressId: data.addressId,
+        paymentMethodId: data.paymentMethodId,
+      });
 
-      setSubscriptions((prev) => [...prev, newSubscription]);
-      onSubscriptionCreated?.(newSubscription);
-      setShowSetup(false);
+      if (response.data?.success) {
+        const newSubscription: RecurringSubscription = {
+          ...response.data.data,
+          serviceName: service.name,
+          providerName: 'Service Provider',
+        };
+
+        setSubscriptions((prev) => [...prev, newSubscription]);
+        onSubscriptionCreated?.(newSubscription);
+        setShowSetup(false);
+      } else {
+        throw new Error(response.data?.message || 'Failed to create subscription');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create subscription');
     } finally {
@@ -614,7 +617,21 @@ export const RecurringBookingSetup: React.FC<RecurringBookingSetupProps> = ({
       )}
 
       {/* Subscriptions List */}
-      {subscriptions.length > 0 ? (
+      {isLoading ? (
+        <div className="space-y-4">
+          {[1, 2].map((i) => (
+            <div key={i} className="animate-pulse bg-white rounded-2xl border border-nilin-blush/30 p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-nilin-blush/30 rounded-xl" />
+                <div className="flex-1">
+                  <div className="h-5 bg-nilin-blush/30 rounded w-1/3 mb-2" />
+                  <div className="h-4 bg-nilin-blush/30 rounded w-1/4" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : subscriptions.length > 0 ? (
         <div className="grid gap-4">
           {subscriptions.map((subscription) => (
             <SubscriptionCard

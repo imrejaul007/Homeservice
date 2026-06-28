@@ -74,7 +74,7 @@ export const PrintButton: React.FC<PrintButtonProps> = ({
       window.URL.revokeObjectURL(url);
 
       toast.success('Package details downloaded!');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to download package PDF:', error);
 
       // Try to extract error message from blob response

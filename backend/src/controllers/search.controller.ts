@@ -112,6 +112,9 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
 
     // Parse and validate query parameters, then resolve slugs to canonical names
     const filters = await normalizeSearchFilters(parseSearchFilters(req.query));
+    // Radius has a Joi default, so detect whether caller explicitly requested geo radius.
+    const rawParams = new URLSearchParams(req.originalUrl.split('?')[1] || '');
+    const hasExplicitRadius = rawParams.has('radius');
 
     // Get previous query from session/header for refinement tracking
     const previousQuery = req.headers['x-previous-query'] as string | undefined;
@@ -124,9 +127,17 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     let expandedQueries: string[] | undefined;
 
     // Check if geo-search is needed
-    if (filters.lat && filters.lng && filters.radius) {
+    if (filters.lat && filters.lng && filters.radius && hasExplicitRadius) {
       // Geo search with Meilisearch
       // SECURITY: Pass tenantId for multi-tenant isolation
+      // Map SearchFilters sortBy values to SearchOptions sortBy values
+      const mappedSortBy: GeoSearchOptions['sortBy'] =
+        filters.sortBy === 'price' ? 'price_asc' :
+        filters.sortBy === 'price_desc' ? 'price_desc' :
+        filters.sortBy === 'rating' ? 'rating' :
+        filters.sortBy === 'popularity' ? 'popular' :
+        undefined;
+
       const geoOptions: GeoSearchOptions = {
         limit: filters.limit,
         offset: ((filters.page || 1) - 1) * (filters.limit || 20),
@@ -135,9 +146,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
         minPrice: filters.minPrice,
         maxPrice: filters.maxPrice,
         minRating: filters.minRating,
-        sortBy: (filters.sortBy === 'price' ? 'price_asc' :
-                filters.sortBy === 'price_desc' ? 'price_desc' :
-                filters.sortBy === 'rating' ? 'rating' : 'popular') as 'price_asc' | 'price_desc' | 'rating' | 'popular',
+        sortBy: mappedSortBy,
         latitude: filters.lat,
         longitude: filters.lng,
         radiusKm: filters.radius,
@@ -150,6 +159,14 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     } else {
       // Standard search with typo tolerance and synonyms
       // SECURITY: Pass tenantId for multi-tenant isolation
+      // Map SearchFilters sortBy values to SearchOptions sortBy values
+      const mappedSortBy: 'rating' | 'price_asc' | 'price_desc' | 'popular' | undefined =
+        filters.sortBy === 'price' ? 'price_asc' :
+        filters.sortBy === 'price_desc' ? 'price_desc' :
+        filters.sortBy === 'rating' ? 'rating' :
+        filters.sortBy === 'popularity' ? 'popular' :
+        undefined;
+
       const searchOptions = {
         limit: filters.limit,
         offset: ((filters.page || 1) - 1) * (filters.limit || 20),
@@ -158,9 +175,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
         minPrice: filters.minPrice,
         maxPrice: filters.maxPrice,
         minRating: filters.minRating,
-        sortBy: (filters.sortBy === 'price' ? 'price_asc' :
-                filters.sortBy === 'price_desc' ? 'price_desc' :
-                filters.sortBy === 'rating' ? 'rating' : 'popular') as 'price_asc' | 'price_desc' | 'rating' | 'popular',
+        sortBy: mappedSortBy,
         providerId: filters.providerId,
         tenantId: tenantContext.isAdmin ? undefined : tenantContext.tenantId,
       };
@@ -179,6 +194,15 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
 
     // Process results and add distance for geo searches
     const processedServices = await processSearchResults(services, filters);
+
+    // Ensure deterministic nearest-first sorting even when source is Meilisearch.
+    if (filters.sortBy === 'distance' && filters.lat && filters.lng) {
+      processedServices.sort((a: any, b: any) => {
+        const aDistance = typeof a.distance === 'number' ? a.distance : Number.POSITIVE_INFINITY;
+        const bDistance = typeof b.distance === 'number' ? b.distance : Number.POSITIVE_INFINITY;
+        return aDistance - bDistance;
+      });
+    }
 
     // Increment search counts for tracked services (background task)
     incrementSearchCounts(req, processedServices.slice(0, 10), getViewerKey(req));
@@ -915,8 +939,11 @@ async function processSearchResults(services: any[], filters: SearchFilters) {
   // FIX: Batch fetch provider data to avoid N+1 queries within the map
   // Collect all unique provider IDs
   const providerIds = new Set<string>();
+  const serviceIds = new Set<string>();
   services.forEach(service => {
     const result = typeof service.toJSON === 'function' ? service.toJSON() : { ...service };
+    const serviceId = result._id?.toString?.() || result.id?.toString?.();
+    if (serviceId) serviceIds.add(serviceId);
     if (result.providerId) {
       const pid = typeof result.providerId === 'object' ? result.providerId._id?.toString() : result.providerId.toString();
       if (pid) providerIds.add(pid);
@@ -934,8 +961,31 @@ async function processSearchResults(services: any[], filters: SearchFilters) {
     providerProfiles.forEach(profile => providerDataMap.set(profile.userId.toString(), { type: 'profile', data: profile }));
   }
 
+  // Meilisearch hits may not include location/fullLocation fields required for distance.
+  // Hydrate them from MongoDB once in a batch.
+  const serviceLocationMap = new Map<string, { location?: any; fullLocation?: string }>();
+  if (serviceIds.size > 0) {
+    const serviceLocationDocs = await Service.find({ _id: { $in: Array.from(serviceIds) } })
+      .select('_id location fullLocation')
+      .lean();
+    serviceLocationDocs.forEach((doc: any) => {
+      serviceLocationMap.set(doc._id.toString(), {
+        location: doc.location,
+        fullLocation: doc.fullLocation,
+      });
+    });
+  }
+
   return services.map(service => {
     const result = typeof service.toJSON === 'function' ? service.toJSON() : { ...service };
+    const sid = result._id?.toString?.() || result.id?.toString?.();
+    const locationData = sid ? serviceLocationMap.get(sid) : undefined;
+    if (!result._id && sid) {
+      result._id = sid;
+    }
+    if (!result.location && locationData?.location) {
+      result.location = locationData.location;
+    }
 
     // Transform providerId to provider object using batch-loaded data
     if (result.providerId && !result.provider) {
@@ -958,7 +1008,7 @@ async function processSearchResults(services: any[], filters: SearchFilters) {
       result.provider = result.provider || {};
       result.provider.isVerified = result.provider.isVerified || false;
     }
-    result.fullLocation = service.fullLocation;
+    result.fullLocation = service.fullLocation || locationData?.fullLocation;
 
     // Add distance if it's a geographic search
     if (filters.lat && filters.lng && result.location?.coordinates?.coordinates) {

@@ -37,6 +37,11 @@ export interface IBookingNotification extends Document {
     totalAmount?: number;
     currency?: string;
     customData?: any; // Additional context data
+    // Admin message fields
+    messageType?: string;
+    channelsSent?: string[];
+    sentBy?: string;
+    sentByAdmin?: boolean;
   };
 
   // Multi-Channel Delivery
@@ -219,44 +224,146 @@ const notificationSchema = new Schema<IBookingNotification>(
         validator: function(url: string) {
           if (!url) return true; // Optional field
 
-          // Allow absolute HTTPS/HTTP URLs
-          try {
-            const parsed = new URL(url, 'https://example.com');
-            if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
-              return true;
-            }
-          } catch {
-            // URL parsing failed
+          // CRITICAL: Block empty/whitespace-only URLs
+          if (!url.trim()) return false;
+
+          // CRITICAL: Block dangerous protocols BEFORE any parsing
+          const dangerousProtocols = [
+            /^javascript:/i,
+            /^data:(?!image\/)/i,  // Allow data:image/* but block data: execution
+            /^vbscript:/i,
+            /^file:/i,
+            /^ftp:/i,
+            /^mailto:/i,
+            /^tel:/i,
+            /^sms:/i,
+            /^sip:/i,
+            /^ws:/i,
+            /^wss:/i
+          ];
+          if (dangerousProtocols.some(p => p.test(url))) {
+            return false;
           }
 
-          // Allow hash-based paths like /#/bookings
-          if (/^\/#/.test(url)) {
+          // CRITICAL: Decode URL-encoded characters to prevent bypasses
+          // This catches %2F (encoded /), %2E (encoded .), %00 (null byte), etc.
+          let decodedUrl = url;
+          try {
+            decodedUrl = decodeURIComponent(url);
+            // Also handle double-encoding
+            if (decodedUrl !== url) {
+              decodedUrl = decodeURIComponent(decodedUrl);
+            }
+          } catch {
+            // If decoding fails, use original but check for hex patterns
+          }
+
+          // CRITICAL: Block null bytes and other control characters
+          if (/[\x00-\x1F\x7F]/.test(decodedUrl)) {
+            return false;
+          }
+
+          // CRITICAL: Block internal/private IP ranges
+          // Check for private IP patterns in the raw URL
+          const privateIpPatterns = [
+            /^10\./i,                                          // 10.0.0.0/8
+            /^172\.(1[6-9]|2\d|3[01])\./i,                     // 172.16.0.0/12
+            /^192\.168\./i,                                    // 192.168.0.0/16
+            /^169\.254\./i,                                    // Link-local (APIPA)
+            /^224\./i,                                          // Multicast
+            /^240\./i,                                         // Reserved
+            /^127\./i,                                          // Loopback
+            /^0\./i,                                           // Current network
+            /^::1$/i,                                          // IPv6 loopback
+            /^fc00:/i,                                         // IPv6 private
+            /^fe80:/i,                                         // IPv6 link-local
+            /^fec0:/i                                          // IPv6 site-local (deprecated)
+          ];
+
+          // Block localhost and internal hostnames
+          const blockedHostnames = [
+            'localhost',
+            '127.0.0.1',
+            '0.0.0.0',
+            '::1',
+            '[::1]',
+            '127.1',
+            '127.0.1',
+            '0.0.0',
+            '127.0.0.0',
+            'internal',
+            'intranet',
+            'local',
+            'private',
+            'intranet.local',
+            'home.local',
+            'workgroup'
+          ];
+
+          // Allow absolute HTTPS/HTTP URLs with proper validation
+          try {
+            const parsed = new URL(decodedUrl, 'https://example.com');
+
+            // CRITICAL: Only allow http and https protocols
+            if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+              return false;
+            }
+
+            // CRITICAL: Block internal/private hostnames
+            const hostname = parsed.hostname.toLowerCase();
+            if (blockedHostnames.includes(hostname) || blockedHostnames.some(h => hostname.endsWith('.' + h))) {
+              return false;
+            }
+
+            // CRITICAL: Check for private IP ranges in hostname
+            if (privateIpPatterns.some(p => p.test(hostname))) {
+              return false;
+            }
+
+            // CRITICAL: Block IP addresses in URLs (prevent SSRF via IP)
+            // Check if hostname is an IP address
+            const ipPattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+            if (ipPattern.test(hostname)) {
+              // Additional check: ensure it's not a public IP
+              // This is a simplified check - in production, use an IP ranges library
+              return false;
+            }
+
+            // CRITICAL: Block URLs with ports pointing to internal services
+            const blockedPorts = [22, 23, 25, 3306, 5432, 27017, 6379, 11211, 9200];
+            if (parsed.port && blockedPorts.includes(parseInt(parsed.port, 10))) {
+              return false;
+            }
+
+            // Check for encoded path traversal even after decoding
+            if (decodedUrl.includes('..') || decodedUrl.includes('%2E')) {
+              return false;
+            }
+
+            return true;
+          } catch {
+            // URL parsing failed - fall through to other checks
+          }
+
+          // Allow hash-based paths like /#/bookings (app navigation)
+          if (/^\/#/.test(decodedUrl)) {
             return true;
           }
 
           // Allow relative paths like /bookings/123 but block path traversal
-          if (url.startsWith('/')) {
-            // Normalize the path to resolve any .. sequences and check if it goes above root
-            const normalized = url.split('/').reduce((acc: string[], part: string) => {
-              if (part === '..') acc.pop();
-              else if (part && part !== '.') acc.push(part);
-              return acc;
-            }, []);
-            // If the path started with / and after normalization has content, it's safe
-            // But we need to ensure no ../ was used to escape root
-            const resolved = '/' + normalized.join('/');
-            // Check if the resolved path differs from original due to .. traversal
-            // This means they tried to escape root
-            if (url.includes('..') && !url.replace(/\.\.\//g, '').startsWith('/')) {
+          if (decodedUrl.startsWith('/')) {
+            // Block any path traversal attempts
+            if (decodedUrl.includes('..') || decodedUrl.includes('%2E')) {
               return false;
             }
-            // Check for any remaining .. that could escape
-            return !/(\/\.\.|\/\.\.\/)/.test(url);
+            // Allow standard relative paths
+            return /^\/[a-zA-Z0-9\-_/]*$/.test(decodedUrl) || /^\/$/.test(decodedUrl);
           }
 
+          // Block any remaining dangerous patterns
           return false;
         },
-        message: 'Invalid URL format'
+        message: 'Invalid or potentially dangerous URL'
       }
     },
 
@@ -424,16 +531,20 @@ const notificationSchema = new Schema<IBookingNotification>(
 // INDEXES FOR PERFORMANCE
 // ===================================
 
+// FIX 1: Add missing isDeleted compound indexes for efficient soft-delete queries
+notificationSchema.index({ isDeleted: 1, status: 1 }); // Soft deleted notifications by status
+notificationSchema.index({ isDeleted: 1, createdAt: -1 }); // Soft deleted notifications sorted by date
+notificationSchema.index({ isDeleted: 1, recipientId: 1 }); // Soft deleted by recipient
+
 // Core notification queries (bookingId already has index from field-level index: true)
-notificationSchema.index({ recipientId: 1, status: 1 });
+// FIX 4: Removed duplicate index { recipientId: 1, status: 1 } - covered by compound index below
 notificationSchema.index({ type: 1, status: 1 });
 notificationSchema.index({ priority: 1, status: 1 });
-// Note: bookingId compound index removed - bookingId already indexed at field level
 
 // Phase 1: Infrastructure indexes
 // Compound index for bookingId + createdAt (task 1)
 notificationSchema.index({ bookingId: 1, createdAt: -1 });
-// Compound index for userId (recipientId) + status + createdAt (task 1)
+// Compound index for userId (recipientId) + status + createdAt (task 1) - MORE COMPREHENSIVE than line 433
 notificationSchema.index({ recipientId: 1, status: 1, createdAt: -1 });
 // Index on status + createdAt for notification status queries (task 1)
 notificationSchema.index({ status: 1, createdAt: -1 });

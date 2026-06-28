@@ -20,6 +20,8 @@ import { socketService } from '../../services/socket';
 
 type ReviewTab = 'all' | 'approved' | 'pending';
 
+const REVIEWS_PER_PAGE = 10;
+
 const ProviderReviewsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, refreshProviderProfile } = useAuthStore();
@@ -51,6 +53,8 @@ const ProviderReviewsPage: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<Review | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isSubmittingReply, setIsSubmittingReply] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const hasLoadedRef = useRef(false);
 
   const fetchReviews = useCallback(async () => {
@@ -58,7 +62,7 @@ const ProviderReviewsPage: React.FC = () => {
     setError(null);
     try {
       const scope: ProviderReviewScope = activeTab === 'pending' ? 'pending' : activeTab === 'approved' ? 'approved' : 'all';
-      const response = await reviewsApi.getMyReviews({ scope, limit: 50 });
+      const response = await reviewsApi.getMyReviews({ scope, limit: REVIEWS_PER_PAGE, page });
 
       if (response.success && response.data) {
         setReviews(response.data.reviews ?? []);
@@ -67,6 +71,7 @@ const ProviderReviewsPage: React.FC = () => {
         setTotalReviews(response.data.totalReviews ?? response.data.total ?? 0);
         setApprovedCount(response.data.approvedCount ?? 0);
         setPendingCount(response.data.pendingCount ?? 0);
+        setTotalPages(response.data.pagination?.pages ?? 1);
         if (response.data.reviewDisplaySettings) {
           setShowPendingOnReviewsPage(response.data.reviewDisplaySettings.showPendingOnReviewsPage);
         }
@@ -91,9 +96,13 @@ const ProviderReviewsPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab]);
+  }, [activeTab, page]);
 
   fetchReviewsRef.current = fetchReviews;
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, selectedRating]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -159,30 +168,54 @@ const ProviderReviewsPage: React.FC = () => {
   const handleSubmitReply = async () => {
     if (!replyingTo || !replyText.trim()) return;
 
+    // Store previous state for rollback
+    const previousReviews = reviews;
+    const optimisticResponse = {
+      comment: replyText.trim(),
+      createdAt: new Date().toISOString()
+    };
+
     setIsSubmittingReply(true);
     setError(null);
+
+    // Optimistic update - immediately update UI
+    setReviews((prev) =>
+      prev.map((r) =>
+        r.id === replyingTo.id
+          ? { ...r, response: optimisticResponse }
+          : r
+      )
+    );
+    setReplyingTo(null);
+    setReplyText('');
 
     try {
       const response = await reviewsApi.replyToReview(replyingTo.id, replyText.trim());
       if (response.success) {
-        setReviews((prev) =>
-          prev.map((r) =>
-            r.id === replyingTo.id
-              ? { ...r, response: { comment: replyText.trim(), createdAt: new Date().toISOString() } }
-              : r
-          )
-        );
-        setReplyingTo(null);
-        setReplyText('');
         toast.success('Reply sent');
+        // Use server response if available, otherwise keep optimistic update
+        if (response.data?.reply) {
+          setReviews((prev) =>
+            prev.map((r) =>
+              r.id === replyingTo.id
+                ? { ...r, response: response.data.reply }
+                : r
+            )
+          );
+        }
       }
     } catch (err: unknown) {
+      // Rollback on failure
+      setReviews(previousReviews);
+      // Restore replying state so user can retry
+      setReplyingTo(replyingTo);
+      setReplyText(replyText.trim());
       const message =
         err && typeof err === 'object' && 'response' in err
           ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
           : undefined;
       setError(message || 'Failed to submit reply');
-      toast.error('Failed to submit reply', message);
+      toast.error('Failed to submit reply', { description: message });
     } finally {
       setIsSubmittingReply(false);
     }
@@ -243,11 +276,25 @@ const ProviderReviewsPage: React.FC = () => {
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
+      {/* Screen reader status announcer */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isLoading ? 'Loading reviews...' : ''}
+        {error ? `Error: ${error}` : ''}
+      </div>
+
       <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
         <Breadcrumb />
       </div>
 
-      <div className="flex-1">
+      <main id="main-content" className="flex-1">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex items-center justify-between gap-3 mb-8">
             <div className="flex items-center gap-3">
@@ -461,6 +508,50 @@ const ProviderReviewsPage: React.FC = () => {
             </div>
           )}
 
+          {totalPages > 1 && !isLoading && (
+            <div className="flex items-center justify-center gap-2 mt-8">
+              <button
+                type="button"
+                onClick={() => setPage(1)}
+                disabled={page === 1}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors text-sm"
+                aria-label="Go to first page"
+              >
+                First
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors text-sm"
+                aria-label="Go to previous page"
+              >
+                Previous
+              </button>
+              <span className="px-4 py-1.5 text-sm text-nilin-warmGray">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors text-sm"
+                aria-label="Go to next page"
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage(totalPages)}
+                disabled={page === totalPages}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 hover:bg-nilin-muted transition-colors text-sm"
+                aria-label="Go to last page"
+              >
+                Last
+              </button>
+            </div>
+          )}
+
           {replyingTo && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div
@@ -522,6 +613,46 @@ const ProviderReviewsPage: React.FC = () => {
             </div>
           )}
 
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-6">
+              <button
+                type="button"
+                onClick={() => setPage(1)}
+                disabled={page === 1 || isLoading}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 text-sm"
+              >
+                First
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1 || isLoading}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 text-sm"
+              >
+                Previous
+              </button>
+              <span className="px-4 py-1.5 text-sm text-nilin-warmGray">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages || isLoading}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 text-sm"
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage(totalPages)}
+                disabled={page === totalPages || isLoading}
+                className="px-3 py-1.5 rounded border border-nilin-border disabled:opacity-50 text-sm"
+              >
+                Last
+              </button>
+            </div>
+          )}
+
           <div className="mt-8 p-4 bg-nilin-muted rounded-nilin">
             <p className="text-sm text-nilin-warmGray">
               <strong>Tip:</strong> Responding to approved reviews shows customers you value their feedback.
@@ -529,7 +660,7 @@ const ProviderReviewsPage: React.FC = () => {
             </p>
           </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
     </div>

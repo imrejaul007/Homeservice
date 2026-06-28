@@ -703,16 +703,32 @@ export class MonthlyScorecardService {
    */
   private async updateRankings(period: string): Promise<void> {
     const scorecards = await MonthlyScorecardModel.find({ period })
-      .sort({ overallScore: -1 });
+      .sort({ overallScore: -1 })
+      .lean();
 
-    for (let i = 0; i < scorecards.length; i++) {
-      const scorecard = scorecards[i];
-      const percentile = Math.round(((scorecards.length - i) / scorecards.length) * 100);
+    if (scorecards.length === 0) return;
 
-      scorecard.rank = i + 1;
-      scorecard.percentile = percentile;
-      await scorecard.save();
-    }
+    // Calculate ranks and percentiles
+    const updates: Array<{ _id: any; rank: number; percentile: number }> = scorecards.map((scorecard, i) => ({
+      _id: scorecard._id,
+      rank: i + 1,
+      percentile: Math.round(((scorecards.length - i) / scorecards.length) * 100)
+    }));
+
+    // Bulk update all scorecards
+    const bulkOps = updates.map(update => ({
+      updateOne: {
+        filter: { _id: update._id },
+        update: {
+          $set: {
+            rank: update.rank,
+            percentile: update.percentile
+          }
+        }
+      }
+    }));
+
+    await MonthlyScorecardModel.bulkWrite(bulkOps);
   }
 
   // ========================================
