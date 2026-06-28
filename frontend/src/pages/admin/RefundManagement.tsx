@@ -657,7 +657,7 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
                     </label>
                   </div>
                   );
-                })}
+                })
               )}
             </div>
 

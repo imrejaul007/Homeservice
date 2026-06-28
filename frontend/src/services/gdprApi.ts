@@ -138,7 +138,6 @@ export interface GDPRApi {
    */
   cancelDataRequest: (requestId: string) => Promise<void>;
 }
-}
 
 export const gdprApi: GDPRApi = {
   requestExport: async () => {

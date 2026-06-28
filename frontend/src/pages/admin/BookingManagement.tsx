@@ -1226,6 +1226,7 @@ const BookingManagement: React.FC = () => {
             </button>
           </div>
         ) : (
+        <>
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
           <StatCard
             title="Total Bookings"
@@ -1302,6 +1303,7 @@ const BookingManagement: React.FC = () => {
             iconColor="text-nilin-coral"
           />
         </div>
+        </>
         )}
 
         {/* Filters */}

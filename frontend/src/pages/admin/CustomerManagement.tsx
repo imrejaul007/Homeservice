@@ -72,7 +72,6 @@ import {
   formatActivityType,
   Message,
 } from '../../services/customerOpsApi';
-import ErrorBoundary from '../../components/common/ErrorBoundary';
 import { useAuthStore } from '../../stores/authStore';
 import { ExportDropdown } from '../../components/admin/ExportDropdown';
 import { AdminPagination } from '../../components/admin/AdminPagination';
@@ -2054,7 +2053,6 @@ const CustomerManagement: React.FC = () => {
             />
           </>
         )}
-      </div>
 
       {/* Customer Detail Modal */}
       {selectedCustomerId && (
@@ -2064,8 +2062,7 @@ const CustomerManagement: React.FC = () => {
           onRefresh={loadCustomers}
         />
       )}
-    </div>
-    </ErrorBoundary>
+    </AdminPageShell>
   );
 };
 
