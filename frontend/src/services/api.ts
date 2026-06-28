@@ -254,6 +254,78 @@ const resolveRefreshPromise = (token: string | null): void => {
   refreshPromiseResolve = null;
 };
 
+const AUTH_PUBLIC_PATHS = [
+  '/auth/login',
+  '/auth/register',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+  '/auth/verify-email',
+  '/auth/resend-verification',
+  '/auth/refresh-token',
+];
+
+const isAuthPublicRequest = (url?: string): boolean =>
+  !!url && AUTH_PUBLIC_PATHS.some((path) => url.includes(path));
+
+const redirectToLoginIfNeeded = (): void => {
+  if (typeof window === 'undefined') return;
+  const path = window.location.pathname;
+  if (path === '/login' || path.startsWith('/login/')) return;
+  window.location.href = '/login?reason=session_expired';
+};
+
+/** Shared token refresh — single mutex for api.ts and authStore */
+export async function refreshAuthTokens(): Promise<{ accessToken: string; refreshToken: string } | null> {
+  if (refreshPromise) {
+    const token = await getRefreshPromise();
+    if (!token) return null;
+    const tokens = getAuthTokens();
+    return tokens ?? null;
+  }
+
+  getRefreshPromise();
+
+  const tokens = getAuthTokens();
+  if (!tokens?.refreshToken) {
+    resolveRefreshPromise(null);
+    return null;
+  }
+
+  try {
+    const response = await axios.post(`${API_URL}/auth/refresh-token`, {
+      refreshToken: tokens.refreshToken,
+    }, {
+      timeout: 10000,
+      withCredentials: true,
+    });
+
+    const newTokens = response.data.data.tokens as { accessToken: string; refreshToken: string };
+    updateAuthTokens(newTokens);
+    api.defaults.headers.common.Authorization = `Bearer ${newTokens.accessToken}`;
+
+    try {
+      const { useAuthStore } = await import('../stores/authStore');
+      useAuthStore.getState().setTokens(newTokens);
+    } catch {
+      // auth store may not be loaded yet
+    }
+
+    resolveRefreshPromise(newTokens.accessToken);
+    return newTokens;
+  } catch (refreshError) {
+    console.error('Token refresh failed:', refreshError);
+    clearAuth();
+    try {
+      const { useAuthStore } = await import('../stores/authStore');
+      useAuthStore.getState().clearAuth();
+    } catch {
+      // ignore
+    }
+    resolveRefreshPromise(null);
+    return null;
+  }
+}
+
 // Retry logic for failed requests
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -380,6 +452,13 @@ api.interceptors.response.use(
 
     // Handle 401 Unauthorized - Token refresh with proper Promise-based queue
     if (error.response?.status === 401 && !originalRequest._retry) {
+      const requestUrl = originalRequest?.url || '';
+
+      // Never refresh-loop on auth endpoints or when already on login
+      if (isAuthPublicRequest(requestUrl)) {
+        return Promise.reject(error);
+      }
+
       originalRequest._retry = true;
 
       // If a refresh is already in progress, wait for it
@@ -390,64 +469,23 @@ api.interceptors.response.use(
               originalRequest.headers.Authorization = `Bearer ${token}`;
               return api(originalRequest);
             }
-            // Refresh failed, redirect to login
-            if (typeof window !== 'undefined') {
-              window.location.href = '/login?reason=session_expired';
-            }
+            redirectToLoginIfNeeded();
             return Promise.reject(error);
           })
           .catch(() => {
-            if (typeof window !== 'undefined') {
-              window.location.href = '/login?reason=session_expired';
-            }
+            redirectToLoginIfNeeded();
             return Promise.reject(error);
           });
       }
 
-      // No refresh in progress, start one
-      const tokens = getAuthTokens();
-      if (!tokens?.refreshToken) {
-        // No refresh token, redirect to login
-        clearAuth();
-        if (typeof window !== 'undefined') {
-          window.location.href = '/login?reason=session_expired';
-        }
-        return Promise.reject(error);
-      }
-
-      // Create refresh promise to prevent concurrent refresh attempts
-      getRefreshPromise();
-
-      try {
-        const response = await axios.post(`${API_URL}/auth/refresh-token`, {
-          refreshToken: tokens.refreshToken,
-        }, {
-          timeout: 10000, // 10 second timeout for refresh
-        });
-
-        const newTokens = response.data.data.tokens;
-        updateAuthTokens(newTokens);
-
-        api.defaults.headers.common.Authorization = `Bearer ${newTokens.accessToken}`;
-
-        // Resolve waiting requests with the new token
-        resolveRefreshPromise(newTokens.accessToken);
-
-        // Retry the original request
+      const newTokens = await refreshAuthTokens();
+      if (newTokens?.accessToken) {
         originalRequest.headers.Authorization = `Bearer ${newTokens.accessToken}`;
         return api(originalRequest);
-      } catch (refreshError) {
-        console.error('Token refresh failed:', refreshError);
-        clearAuth();
-
-        // Reject all waiting requests
-        resolveRefreshPromise(null);
-
-        if (typeof window !== 'undefined') {
-          window.location.href = '/login?reason=session_expired';
-        }
-        return Promise.reject(error);
       }
+
+      redirectToLoginIfNeeded();
+      return Promise.reject(error);
     }
 
     // Handle 403 Forbidden

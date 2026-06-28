@@ -806,39 +806,33 @@ export const useAuthStore = create<AuthState>()(
       },
 
       refreshToken: async (): Promise<boolean> => {
-        // This method handles manual token refresh
-        // Returns true if refresh was successful, false otherwise
-        const authService = (await import('../services/AuthService')).default;
+        const { refreshAuthTokens } = await import('../services/api');
 
         try {
           const tokens = get().tokens;
           if (!tokens?.refreshToken) {
-            console.error('No refresh token available');
             return false;
           }
 
-          // Call the refresh endpoint
-          const response = await authService.post<AuthResponse<{ tokens: AuthTokens; user: AuthUser }>>('/auth/refresh-token', {
-            refreshToken: tokens.refreshToken
-          });
-
-          if (response.data?.tokens) {
-            // Update tokens in store
-            set((state) => {
-              state.tokens = response.data.tokens;
-            });
-            if (get().isAuthenticated) {
-              await socketService.reconnect().catch((err) => {
-                logger.warn('[Auth] Socket reconnect after token refresh failed', err);
-              });
-            }
-            return true;
+          const newTokens = await refreshAuthTokens();
+          if (!newTokens) {
+            get().clearAuth();
+            return false;
           }
 
-          return false;
+          set((state) => {
+            state.tokens = newTokens;
+          });
+
+          if (get().isAuthenticated) {
+            await socketService.reconnect().catch((err) => {
+              logger.warn('[Auth] Socket reconnect after token refresh failed', err);
+            });
+          }
+          return true;
         } catch (error) {
           console.error('Token refresh failed:', error);
-          // Auto-logout handled by AuthService
+          get().clearAuth();
           return false;
         }
       },
@@ -901,40 +895,15 @@ export const useAuthStore = create<AuthState>()(
               'response' in error &&
               error.response !== undefined;
 
-            // If it's a 401 and we have refresh token, try to refresh
-            if (isAxiosError && (error as { response: { status?: number } }).response?.status === 401 && tokens?.refreshToken) {
-              try {
-                const authService = (await import('../services/AuthService')).default;
-                const response = await authService.post<AuthResponse<{ tokens: AuthTokens }>>('/auth/refresh-token', {
-                  refreshToken: tokens.refreshToken
-                });
-
-                const newTokens = response.data.tokens;
-                set((state) => {
-                  state.tokens = newTokens;
-                });
-
-                // Now try to get user again with new token
-                await get().getCurrentUser();
-                set((state) => {
-                  state.isAuthenticated = true;
-                  state.isInitialized = true;
-                });
-                await connectAuthenticatedSocket();
-                return;
-              } catch (refreshError) {
-                console.error('Token refresh failed during init:', refreshError);
-              }
+            // If it's a 401 with a refresh token, one refresh attempt was already made above
+            if (isAxiosError && (error as { response: { status?: number } }).response?.status === 401) {
+              console.error('Auth init failed after token refresh attempt');
             }
 
-            // Only clear tokens if refresh also failed
+            // Clear stale tokens so login is not blocked by invalid refresh loops
+            get().clearAuth();
             set((state) => {
-              state.tokens = null;
-              state.isAuthenticated = false;
               state.isInitialized = true;
-              state.user = null;
-              state.customerProfile = null;
-              state.providerProfile = null;
             });
           }
         } else {

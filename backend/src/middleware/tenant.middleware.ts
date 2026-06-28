@@ -100,19 +100,23 @@ export const tenantMiddleware = async (
     // 2. Check custom domain (also needs validation)
     // Custom domains should be validated against a known domain list or have strict format checks
     if (!tenantId) {
+      const hostname = host.split(':')[0];
+      const isDevHost =
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '::1';
+
       // Validate custom domain format to prevent injection
       const DOMAIN_PATTERN = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
-      if (DOMAIN_PATTERN.test(host)) {
+      if (DOMAIN_PATTERN.test(hostname)) {
         const tenantByDomain = await Tenant.findOne({ domain: host, isActive: true });
         if (tenantByDomain) {
           tenantId = tenantByDomain._id.toString();
           (req as any).tenant = tenantByDomain;
         }
-      } else {
-        // Log invalid domain format (but don't expose details to potential attacker)
-        if (host.length > 0) {
-          logger.debug('Custom domain format validation failed', { hostLength: host.length });
-        }
+      } else if (!isDevHost && host.length > 0) {
+        // Log invalid domain format (skip localhost/dev hosts to reduce noise)
+        logger.debug('Custom domain format validation failed', { hostLength: host.length });
       }
     }
 

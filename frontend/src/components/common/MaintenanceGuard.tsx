@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { fetchMaintenanceStatus, type MaintenanceStatus } from '../../services/platformApi';
@@ -27,34 +27,55 @@ export const MaintenanceGuard: React.FC<{ children: React.ReactNode }> = ({ chil
   const navigate = useNavigate();
   const [status, setStatus] = useState<MaintenanceStatus | null>(null);
   const [checking, setChecking] = useState(true);
+  const pathnameRef = useRef(location.pathname);
+  const userRoleRef = useRef(user?.role);
 
-  const refresh = useCallback(async () => {
-    try {
-      const next = await fetchMaintenanceStatus();
-      setStatus(next);
+  pathnameRef.current = location.pathname;
+  userRoleRef.current = user?.role;
 
-      const isAdmin = user?.role === 'admin';
-      const onMaintenanceRoute = location.pathname === '/maintenance';
-
-      if (next.maintenanceMode && !isAdmin && !isAllowedDuringMaintenance(location.pathname)) {
-        if (!onMaintenanceRoute) {
-          navigate('/maintenance', { replace: true, state: { from: location.pathname } });
-        }
-      } else if (!next.maintenanceMode && onMaintenanceRoute) {
-        navigate('/', { replace: true });
-      }
-    } catch {
-      // Fail open — do not block users if status endpoint is down
-    } finally {
-      setChecking(false);
-    }
-  }, [location.pathname, navigate, user?.role]);
-
+  // Poll maintenance status on a stable interval (not on every route/user change)
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, POLL_MS);
-    return () => clearInterval(id);
-  }, [refresh]);
+    let cancelled = false;
+
+    const loadStatus = async () => {
+      try {
+        const next = await fetchMaintenanceStatus();
+        if (!cancelled) {
+          setStatus(next);
+        }
+      } catch {
+        // Fail open — do not block users if status endpoint is down
+      } finally {
+        if (!cancelled) {
+          setChecking(false);
+        }
+      }
+    };
+
+    loadStatus();
+    const id = setInterval(loadStatus, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Handle redirects when maintenance state or route changes
+  useEffect(() => {
+    if (!status) return;
+
+    const isAdmin = userRoleRef.current === 'admin';
+    const pathname = pathnameRef.current;
+    const onMaintenanceRoute = pathname === '/maintenance';
+
+    if (status.maintenanceMode && !isAdmin && !isAllowedDuringMaintenance(pathname)) {
+      if (!onMaintenanceRoute) {
+        navigate('/maintenance', { replace: true, state: { from: pathname } });
+      }
+    } else if (!status.maintenanceMode && onMaintenanceRoute) {
+      navigate('/', { replace: true });
+    }
+  }, [status, location.pathname, user?.role, navigate]);
 
   if (checking && !status) {
     return (
